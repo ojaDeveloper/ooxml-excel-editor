@@ -59,32 +59,42 @@ function paintPattern(
   ctx.clip()
   ctx.fillStyle = color
   ctx.strokeStyle = color
-  // 灰度类图案近似成半透明铺底
+
+  // 灰度密度类 → 半透明铺底
   const density: Record<string, number> = {
-    gray125: 0.12,
-    gray0625: 0.06,
+    gray0625: 0.0625,
+    gray125: 0.125,
     lightGray: 0.25,
     mediumGray: 0.5,
-    darkGray: 0.75,
     gray: 0.5,
+    darkGray: 0.75,
   }
   if (pattern in density) {
     ctx.globalAlpha = density[pattern]
     ctx.fillRect(x, y, w, h)
-  } else if (pattern.includes('Horizontal')) {
-    ctx.lineWidth = 1
-    for (let yy = y; yy < y + h; yy += 4) line(ctx, x, yy, x + w, yy)
-  } else if (pattern.includes('Vertical')) {
-    ctx.lineWidth = 1
-    for (let xx = x; xx < x + w; xx += 4) line(ctx, xx, y, xx, y + h)
-  } else if (pattern.includes('Grid') || pattern.includes('Trellis')) {
-    for (let yy = y; yy < y + h; yy += 4) line(ctx, x, yy, x + w, yy)
-    for (let xx = x; xx < x + w; xx += 4) line(ctx, xx, y, xx, y + h)
-  } else {
-    // 其它斜线图案
-    ctx.lineWidth = 1
-    for (let d = -h; d < w; d += 4) line(ctx, x + d, y + h, x + d + h, y)
+    ctx.restore()
+    return
   }
+
+  // 线条类: dark=密而粗, light=疏而细
+  const p = pattern.toLowerCase()
+  const dark = p.startsWith('dark')
+  const gap = dark ? 3 : 5
+  ctx.lineWidth = dark ? 1.4 : 1
+  const drawH = () => { for (let yy = y + 0.5; yy < y + h; yy += gap) line(ctx, x, yy, x + w, yy) }
+  const drawV = () => { for (let xx = x + 0.5; xx < x + w; xx += gap) line(ctx, xx, y, xx, y + h) }
+  // 斜线: down = 左上→右下;up = 左下→右上
+  const drawDown = () => { for (let d = -h; d < w; d += gap) line(ctx, x + d, y, x + d + h, y + h) }
+  const drawUp = () => { for (let d = -h; d < w; d += gap) line(ctx, x + d, y + h, x + d + h, y) }
+
+  if (p.includes('horizontal')) drawH()
+  else if (p.includes('vertical')) drawV()
+  else if (p.includes('grid')) { drawH(); drawV() }
+  else if (p.includes('trellis')) { drawDown(); drawUp() }
+  else if (p.includes('down')) drawDown()
+  else if (p.includes('up')) drawUp()
+  else drawDown() // 未知图案 → 斜线兜底
+
   ctx.restore()
 }
 

@@ -262,7 +262,8 @@ function extractStyle(cell: ExcelJS.Cell, theme: CssColor[]): CellStyle {
     vAlign: mapVAlign(align.vertical),
     wrapText: !!align.wrapText,
     shrinkToFit: !!align.shrinkToFit,
-    textRotation: typeof align.textRotation === 'number' ? align.textRotation : 0,
+    // ExcelJS: 竖排返回 'vertical' → 255(渲染器据此走竖排堆叠);其余是 -90..90
+    textRotation: align.textRotation === 'vertical' ? 255 : typeof align.textRotation === 'number' ? align.textRotation : 0,
     indent: align.indent || 0,
     numFmt: s.numFmt || 'General',
   }

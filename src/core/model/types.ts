@@ -220,6 +220,8 @@ export interface SheetModel {
   shapes: ShapeSpec[]
   /** 迷你图(单元格内嵌折线/柱/盈亏图) */
   sparklines: Sparkline[]
+  /** 手动分页符(0-based 边界索引): 在这些行上方/列左侧画分页虚线 */
+  pageBreaks?: { rows: number[]; cols: number[] }
   showGridLines: boolean
 }
 

@@ -319,7 +319,41 @@ export class CanvasRenderer {
 
     this.drawHeaders(layout.panes, view)
     this.drawFreezeLines(layout)
+    this.drawPageBreaks(view)
     this.drawSelection(view)
+  }
+
+  /** 手动分页符: 蓝色虚线(在正文区内,随内容滚动) */
+  private drawPageBreaks(view: ViewState): void {
+    const pb = this.sheet.pageBreaks
+    if (!pb || (!pb.rows.length && !pb.cols.length)) return
+    const ctx = this.ctx
+    const hw = this.metrics.rowHeaderWidth
+    const hh = this.metrics.colHeaderHeight
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(hw, hh, view.width - hw, view.height - hh)
+    ctx.clip()
+    ctx.strokeStyle = '#4472C4'
+    ctx.lineWidth = 1
+    ctx.setLineDash([4, 3])
+    for (const c of pb.cols) {
+      const sx = Math.round(hw + this.metrics.colLeft(c) - view.scrollX) + 0.5
+      if (sx <= hw) continue
+      ctx.beginPath()
+      ctx.moveTo(sx, hh)
+      ctx.lineTo(sx, view.height)
+      ctx.stroke()
+    }
+    for (const r of pb.rows) {
+      const sy = Math.round(hh + this.metrics.rowTop(r) - view.scrollY) + 0.5
+      if (sy <= hh) continue
+      ctx.beginPath()
+      ctx.moveTo(hw, sy)
+      ctx.lineTo(view.width, sy)
+      ctx.stroke()
+    }
+    ctx.restore()
   }
 
   /** 选区高亮: 半透明填充 + 蓝色边框，裁到表头以下的正文区。 */

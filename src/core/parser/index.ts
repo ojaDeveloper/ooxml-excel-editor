@@ -6,6 +6,7 @@ import { parseTheme } from './theme'
 import { buildSheets } from './exceljs-adapter'
 import { attachDrawings } from './drawing-parser'
 import { attachSparklines } from './sparkline-parser'
+import { attachPageBreaks } from './page-break-parser'
 
 export async function parseWorkbook(buffer: ArrayBuffer, onProgress?: ProgressFn): Promise<WorkbookModel> {
   // 1. 原始包(用于 theme / drawings / charts) —— 复用一份 buffer
@@ -33,6 +34,13 @@ export async function parseWorkbook(buffer: ArrayBuffer, onProgress?: ProgressFn
     attachSparklines(pkg, sheets)
   } catch (e) {
     console.warn('[ooxml-preview] sparklines 解析失败，跳过迷你图:', e)
+  }
+
+  // 5. 手动分页符
+  try {
+    attachPageBreaks(pkg, sheets)
+  } catch (e) {
+    console.warn('[ooxml-preview] 分页符解析失败，跳过:', e)
   }
 
   const date1904 = !!(wb as any).properties?.date1904
