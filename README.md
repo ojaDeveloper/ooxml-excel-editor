@@ -97,6 +97,54 @@ console.log(wb.sheets[0].cells)
 | `default` | Vue 插件(`app.use`) |
 | 类型 | `WorkbookModel` / `SheetModel` / `CellModel` / `CellStyle` / `MergeRange` / `ConditionalRule` / `ChartSpec` / `ImageAnchor` / `CssColor` / `ExcelSource` |
 
+## 扩展 API(不改源码定制)
+
+组件按"分层可扩展"设计 —— 用内置 props/events/slots/命令式 API 即可定制外观、行为、数据,并在网格上叠自己的 UI。
+
+### 外观主题 `:theme`
+```vue
+<ExcelViewer :src="file" :theme="{ gridLine: '#e8e8e8', selBorder: '#e91e63', selFill: 'rgba(233,30,99,.1)' }" />
+```
+可覆盖:`headerBg / headerText / headerLine / gridLine / selBorder / selFill`(见 `ViewerTheme` / `DEFAULT_THEME` 导出)。
+
+### 数据 / 渲染钩子
+```vue
+<ExcelViewer
+  :src="file"
+  :transform-model="(wb) => { wb.sheets[0].name = '改过的名字'; return wb }"
+  :cell-style="(cell) => typeof cell.raw === 'number' && cell.raw < 0 ? { font: { color: '#d00' } } : undefined"
+/>
+```
+- `transformModel(wb)`:解析后、渲染前改模型(返回新模型或就地改)。
+- `cellStyle(cell, {row,col})`:按条件覆盖单元格样式(`font/fill/borders` 浅合并)。
+
+### 事件
+| 事件 | 载荷 |
+|---|---|
+| `cell-click` / `cell-dblclick` | `{ row, col, text }` |
+| `selection-change` | `{ range, active }` |
+| `sheet-change` | `{ index, name }` |
+| `hyperlink-click` | `{ url, cell }`(配 `:open-links="false"` 接管跳转) |
+| `rendered` / `error` / `progress` | 见上 |
+
+### 命令式 API(模板 ref)
+`load(src)` / `getWorkbook()` / `getActiveSheet()` / `setActiveSheet(i)` / `getSelection()` / `setSelection(range)` / `rectOf(row,col)` / `rectOfRange(range)` / `redraw()`。
+
+### 分层 UI(slots)
+具名 slot:`toolbar` / `statusbar` / `loading` / `error` / `empty`(缺省用内置)。
+**作用域 `overlay` slot** —— 在格子上叠自己的 Vue 组件,随滚动/缩放跟随:
+```vue
+<ExcelViewer :src="file">
+  <template #overlay="{ rectOf, tick }">
+    <!-- tick 变化触发重算;rectOf(row,col) 给当前屏幕矩形 -->
+    <button v-if="rectOf(2,1)" :style="posStyle(rectOf(2,1), tick)" @click="...">★</button>
+  </template>
+</ExcelViewer>
+```
+覆盖层容器 `pointer-events:none`(滚动穿透),子元素自动 `pointer-events:auto`(可点)。
+
+> 正式的 `definePlugin({ setup(api) })` 插件注册系统将作为以上扩展点的薄层封装在后续版本加入。
+
 ## 浏览器支持
 
 现代浏览器(Chrome/Edge 80+、Safari 15+、Firefox 114+,需支持 Canvas / ResizeObserver)。

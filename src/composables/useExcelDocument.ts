@@ -1,5 +1,5 @@
 import { ref, shallowRef } from 'vue'
-import type { WorkbookModel } from '@/core/model/types'
+import type { TransformModelFn, WorkbookModel } from '@/core/model/types'
 import type { ParseProgress } from '@/core/progress'
 import { loadArrayBuffer, type ExcelSource } from '@/core/loader'
 import { detectFormat, finalizeImages, friendlyError, revokeImages } from '@/core/finalize'
@@ -11,7 +11,7 @@ export function useExcelDocument() {
   const workbook = shallowRef<WorkbookModel | null>(null)
   const progress = ref<ParseProgress | null>(null)
 
-  async function load(src: ExcelSource) {
+  async function load(src: ExcelSource, transform?: TransformModelFn) {
     loading.value = true
     error.value = null
     if (workbook.value) revokeImages(workbook.value) // 释放上一份图片 blob
@@ -28,9 +28,10 @@ export function useExcelDocument() {
       if (fmt === 'not-zip') throw new Error('文件不是有效的 .xlsx(非 ZIP 包)。')
       if (fmt === 'empty') throw new Error('文件为空。')
 
-      const model = await parseInWorker(buffer, (p) => {
+      let model = await parseInWorker(buffer, (p) => {
         progress.value = p
       })
+      if (transform) model = transform(model) ?? model // 数据钩子: 改模型再渲染
       finalizeImages(model)
       workbook.value = model
     } catch (e: any) {

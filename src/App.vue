@@ -27,6 +27,21 @@ async function loadSample() {
   src.value = import.meta.env.BASE_URL + 'sample.xlsx'
   fileName.value = 'sample.xlsx'
 }
+
+// ---- 扩展 API 演示 ----
+const lastEvent = ref('')
+type Rect = { x: number; y: number; w: number; h: number } | null
+// overlay slot: 在 B3(row2,col1)叠一个徽标,随滚动跟随;tick 变化触发重算
+function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
+  const r = rectOf(2, 1)
+  if (!r) return { display: 'none' }
+  return {
+    position: 'absolute' as const,
+    left: r.x + r.w - 20 + 'px',
+    top: r.y + 1 + 'px',
+    display: r.x + r.w < 0 || r.y < 0 ? 'none' : 'block',
+  }
+}
 </script>
 
 <template>
@@ -49,7 +64,25 @@ async function loadSample() {
     </header>
 
     <main class="app-body">
-      <ExcelViewer :src="src" :file-name="fileName" />
+      <ExcelViewer
+        :src="src"
+        :file-name="fileName"
+        @cell-click="(c) => (lastEvent = `点击 R${c.row + 1}C${c.col + 1}: ${c.text}`)"
+        @selection-change="(s) => (lastEvent = `选区 ${s.range.top + 1},${s.range.left + 1} → ${s.range.bottom + 1},${s.range.right + 1}`)"
+      >
+        <!-- 分层 UI 演示: B3 上叠一个可点徽标,随滚动跟随 -->
+        <template #overlay="{ rectOf, tick }">
+          <div
+            class="demo-badge"
+            :style="badgeStyle(rectOf, tick)"
+            title="overlay slot 演示(锚在 B3)"
+            @click="lastEvent = '点了叠加层徽标'"
+          >
+            ★
+          </div>
+        </template>
+      </ExcelViewer>
+      <div v-if="lastEvent" class="event-toast">{{ lastEvent }}</div>
       <div v-if="dragOver" class="drop-hint">松开以加载文件</div>
     </main>
   </div>
@@ -63,6 +96,30 @@ async function loadSample() {
   width: 100vw;
 }
 .app.dragging { outline: 3px dashed #21a366; outline-offset: -6px; }
+.demo-badge {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #ff6b35;
+  color: #fff;
+  font-size: 12px;
+  line-height: 18px;
+  text-align: center;
+  cursor: pointer;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.3);
+}
+.event-toast {
+  position: absolute;
+  left: 12px;
+  bottom: 12px;
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: 5px;
+  pointer-events: none;
+  z-index: 10;
+}
 .app-bar {
   display: flex;
   align-items: center;

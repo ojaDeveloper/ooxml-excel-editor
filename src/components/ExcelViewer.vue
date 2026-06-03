@@ -2,8 +2,17 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import type * as EChartsNS from 'echarts'
 import type { ExcelSource } from '@/core/loader'
-import type { ChartSpec, ImageAnchor, MergeRange, SheetModel, WorkbookModel } from '@/core/model/types'
+import type {
+  CellStyleFn,
+  ChartSpec,
+  ImageAnchor,
+  MergeRange,
+  SheetModel,
+  TransformModelFn,
+  WorkbookModel,
+} from '@/core/model/types'
 import type { ParseProgress } from '@/core/progress'
+import type { ViewerTheme } from '@/core/render/theme'
 import { useExcelDocument } from '@/composables/useExcelDocument'
 import { CanvasRenderer, type ViewState } from '@/core/render/canvas-renderer'
 import { colIndexToLetters } from '@/core/layout/grid-metrics'
@@ -13,10 +22,21 @@ import { revokeImages } from '@/core/finalize'
 import ViewerToolbar from './ViewerToolbar.vue'
 import SheetTabs from './SheetTabs.vue'
 
-const props = defineProps<{
-  src?: ExcelSource
-  fileName?: string
-}>()
+const props = withDefaults(
+  defineProps<{
+    src?: ExcelSource
+    fileName?: string
+    /** 外观主题(覆盖默认配色) */
+    theme?: Partial<ViewerTheme>
+    /** 数据钩子: 解析后改模型再渲染 */
+    transformModel?: TransformModelFn
+    /** 渲染钩子: 按单元格覆盖样式 */
+    cellStyle?: CellStyleFn
+    /** 单击超链接是否默认在新标签打开(false 时只派发 hyperlink-click 事件) */
+    openLinks?: boolean
+  }>(),
+  { openLinks: true },
+)
 
 const emit = defineEmits<{
   /** 工作簿解析并首次渲染完成 */
@@ -25,6 +45,16 @@ const emit = defineEmits<{
   (e: 'error', message: string): void
   /** 解析进度(分阶段) */
   (e: 'progress', progress: ParseProgress): void
+  /** 单击单元格 */
+  (e: 'cell-click', payload: { row: number; col: number; text: string }): void
+  /** 双击单元格 */
+  (e: 'cell-dblclick', payload: { row: number; col: number; text: string }): void
+  /** 选区变化 */
+  (e: 'selection-change', payload: { range: MergeRange; active: { row: number; col: number } }): void
+  /** 切换工作表 */
+  (e: 'sheet-change', payload: { index: number; name: string }): void
+  /** 单击超链接(openLinks=false 时由你处理跳转) */
+  (e: 'hyperlink-click', payload: { url: string; cell: { row: number; col: number } }): void
 }>()
 
 const { loading, error, workbook, load, progress } = useExcelDocument()
@@ -290,6 +320,8 @@ function placeInQuad(
 }
 
 // ---------------- 渲染 ----------------
+// overlay slot 用: 每次重绘 +1 → 作用域插槽重算 rectOf 位置(随滚动/缩放/切表跟随)
+const renderTick = ref(0)
 let rafId = 0
 /** 把重绘合并到下一帧(滚动/拖选高频触发时,每帧最多画一次) */
 function scheduleRender() {
@@ -310,6 +342,7 @@ function doRender() {
   r.setSelection(selection.value)
   r.render(view.value)
   positionOverlays()
+  renderTick.value++ // 通知 overlay slot 重算位置
 }
 
 function rebuildRenderer() {
@@ -317,7 +350,10 @@ function rebuildRenderer() {
   const wb = workbook.value
   const canvas = canvasEl.value
   if (!s || !wb || !canvas) return
-  renderer.value = new CanvasRenderer(canvas, s, wb, zoom.value)
+  renderer.value = new CanvasRenderer(canvas, s, wb, zoom.value, {
+    theme: props.theme,
+    cellStyle: props.cellStyle,
+  })
   contentSize.value = { w: renderer.value.contentWidth, h: renderer.value.contentHeight }
   clearSelection() // 切表清空选区
   tooltip.value = null
@@ -352,7 +388,7 @@ function onScroll() {
 let resizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
-  if (props.src) load(props.src)
+  if (props.src) load(props.src, props.transformModel)
   resizeObserver = new ResizeObserver(() => {
     measure()
     doRender()
@@ -368,8 +404,17 @@ onBeforeUnmount(() => {
 })
 
 watch(() => props.src, (s) => {
-  if (s) load(s)
+  if (s) load(s, props.transformModel)
 })
+
+// 主题 / cellStyle 变化 → 重建渲染器(它们在构造时注入)
+watch(
+  () => [props.theme, props.cellStyle],
+  () => {
+    if (renderer.value) rebuildRenderer()
+  },
+  { deep: true },
+)
 
 watch(workbook, async (wb) => {
   if (!wb) return
@@ -377,6 +422,12 @@ watch(workbook, async (wb) => {
   await nextTick()
   rebuildRenderer()
   emit('rendered', wb)
+})
+
+// 切表派发 sheet-change
+watch(activeSheet, (idx) => {
+  const wb = workbook.value
+  if (wb?.sheets[idx]) emit('sheet-change', { index: idx, name: wb.sheets[idx].name })
 })
 
 watch(error, (msg) => {
@@ -633,9 +684,14 @@ function onMouseMove(e: MouseEvent) {
 function onMouseUp(e: MouseEvent) {
   if (dragMode === 'cell' && !dragMoved) {
     const hit = hitRegion(e)
-    if (hit.region === 'cell') {
-      const link = renderer.value?.cellHyperlink(hit.row, hit.col)
-      if (link) window.open(link, '_blank', 'noopener')
+    const r = renderer.value
+    if (hit.region === 'cell' && r) {
+      emit('cell-click', { row: hit.row, col: hit.col, text: r.cellText(hit.row, hit.col) })
+      const link = r.cellHyperlink(hit.row, hit.col)
+      if (link) {
+        emit('hyperlink-click', { url: link, cell: { row: hit.row, col: hit.col } })
+        if (props.openLinks) window.open(link, '_blank', 'noopener')
+      }
     }
   }
   dragMode = 'none'
@@ -706,12 +762,16 @@ function onDblClick(e: MouseEvent) {
   const p = localXY(e)
   if (!r || !p) return
   const colHit = nearColBorder(p.x, p.y)
+  const rowHit = colHit ? null : nearRowBorder(p.x, p.y)
   if (colHit) {
     r.autoFitColumn(colHit.col)
-  } else {
-    const rowHit = nearRowBorder(p.x, p.y)
-    if (!rowHit) return
+  } else if (rowHit) {
     r.autoFitRow(rowHit.row)
+  } else {
+    // 非边界 → 双击单元格事件
+    const cell = r.cellAtScreen(view.value, p.x, p.y)
+    if (cell) emit('cell-dblclick', { row: cell.row, col: cell.col, text: r.cellText(cell.row, cell.col) })
+    return
   }
   contentSize.value = { w: r.contentWidth, h: r.contentHeight }
   doRender()
@@ -878,18 +938,68 @@ async function copySelection() {
   }
 }
 
-defineExpose({ load })
+// ---------------- 选区变化事件 + overlay 定位 API ----------------
+// selection/selActive 在上方已定义,这里安全引用
+watch(selection, (sel) => {
+  if (sel && selActive.value) emit('selection-change', { range: sel, active: selActive.value })
+})
+
+/** 单元格当前屏幕矩形(render-area 相对坐标);供 overlay slot / 命令式定位 */
+function rectOf(row: number, col: number): { x: number; y: number; w: number; h: number } | null {
+  const r = renderer.value
+  if (!r) return null
+  return r.screenRectOfCell(view.value, row, col)
+}
+/** 区域当前屏幕矩形(左上到右下的并集) */
+function rectOfRange(range: MergeRange): { x: number; y: number; w: number; h: number } | null {
+  const r = renderer.value
+  if (!r) return null
+  const tl = r.screenRectOfCell(view.value, range.top, range.left)
+  const br = r.screenRectOfCell(view.value, range.bottom, range.right)
+  return { x: tl.x, y: tl.y, w: br.x + br.w - tl.x, h: br.y + br.h - tl.y }
+}
+
+// ---------------- 命令式 API ----------------
+function programmaticSetSelection(range: MergeRange) {
+  selMode.value = 'range'
+  selAnchor.value = { row: range.top, col: range.left }
+  selActive.value = { row: range.bottom, col: range.right }
+  doRender()
+}
+
+defineExpose({
+  /** 重新加载数据源 */
+  load: (src: ExcelSource) => load(src, props.transformModel),
+  /** 取当前工作簿模型 */
+  getWorkbook: () => workbook.value,
+  /** 当前激活的工作表索引 */
+  getActiveSheet: () => activeSheet.value,
+  /** 切换工作表 */
+  setActiveSheet: (i: number) => {
+    if (workbook.value?.sheets[i]) activeSheet.value = i
+  },
+  /** 取当前选区(范围) */
+  getSelection: () => selection.value,
+  /** 设置选区 */
+  setSelection: programmaticSetSelection,
+  /** 单元格/区域当前屏幕矩形 */
+  rectOf,
+  rectOfRange,
+  /** 主动重绘 */
+  redraw: () => doRender(),
+})
 </script>
 
 <template>
   <div class="excel-viewer" ref="rootEl">
-    <ViewerToolbar
-      v-if="workbook"
-      :file-name="fileName"
-      :sheet-count="workbook.sheets.filter((s) => s.state === 'visible').length"
-      :zoom="zoom"
-      @update:zoom="zoom = $event"
-    />
+    <slot v-if="workbook" name="toolbar" :workbook="workbook" :zoom="zoom" :set-zoom="(z: number) => (zoom = z)">
+      <ViewerToolbar
+        :file-name="fileName"
+        :sheet-count="workbook.sheets.filter((s) => s.state === 'visible').length"
+        :zoom="zoom"
+        @update:zoom="zoom = $event"
+      />
+    </slot>
 
     <div v-if="workbook" class="formula-bar">
       <span class="addr">{{ activeCellAddr || '—' }}</span>
@@ -919,6 +1029,11 @@ defineExpose({ load })
         <div class="spacer" :style="{ width: contentSize.w + 'px', height: contentSize.h + 'px' }" />
       </div>
 
+      <!-- 分层 UI: 消费方在格子上叠自己的组件,用 rectOf 定位、tick 触发跟随 -->
+      <div class="ov-slot">
+        <slot name="overlay" :rect-of="rectOf" :rect-of-range="rectOfRange" :tick="renderTick" />
+      </div>
+
       <div
         v-if="tooltip"
         class="cell-tooltip"
@@ -929,35 +1044,43 @@ defineExpose({ load })
       </div>
 
       <div v-if="loading" class="state">
-        <div class="loader">
-          <div class="loader-label">
-            {{ progressLabel }}<span v-if="progressPct != null"> {{ progressPct }}%</span>
+        <slot name="loading" :progress="progress" :label="progressLabel" :pct="progressPct">
+          <div class="loader">
+            <div class="loader-label">
+              {{ progressLabel }}<span v-if="progressPct != null"> {{ progressPct }}%</span>
+            </div>
+            <div class="loader-track">
+              <div
+                v-if="progressPct != null"
+                class="loader-fill"
+                :style="{ width: progressPct + '%' }"
+              />
+              <div v-else class="loader-fill indeterminate" />
+            </div>
           </div>
-          <div class="loader-track">
-            <div
-              v-if="progressPct != null"
-              class="loader-fill"
-              :style="{ width: progressPct + '%' }"
-            />
-            <div v-else class="loader-fill indeterminate" />
-          </div>
-        </div>
+        </slot>
       </div>
-      <div v-else-if="error" class="state error">解析失败：{{ error }}</div>
-      <div v-else-if="!workbook" class="state hint">拖入或选择一个 .xlsx 文件</div>
+      <div v-else-if="error" class="state error">
+        <slot name="error" :error="error">解析失败：{{ error }}</slot>
+      </div>
+      <div v-else-if="!workbook" class="state hint">
+        <slot name="empty">拖入或选择一个 .xlsx 文件</slot>
+      </div>
     </div>
 
     <div v-if="workbook" class="status-bar">
-      <span class="sel">{{ selRangeLabel || activeCellAddr }}</span>
-      <div class="grow" />
-      <template v-if="stats && stats.numCount > 0">
-        <span>计数 {{ stats.count }}</span>
-        <span>求和 {{ fmtNum(stats.sum) }}</span>
-        <span>平均 {{ fmtNum(stats.avg) }}</span>
-        <span>最大 {{ fmtNum(stats.max) }}</span>
-        <span>最小 {{ fmtNum(stats.min) }}</span>
-      </template>
-      <span v-else-if="stats && stats.count > 0">计数 {{ stats.count }}</span>
+      <slot name="statusbar" :stats="stats" :range="selRangeLabel || activeCellAddr">
+        <span class="sel">{{ selRangeLabel || activeCellAddr }}</span>
+        <div class="grow" />
+        <template v-if="stats && stats.numCount > 0">
+          <span>计数 {{ stats.count }}</span>
+          <span>求和 {{ fmtNum(stats.sum) }}</span>
+          <span>平均 {{ fmtNum(stats.avg) }}</span>
+          <span>最大 {{ fmtNum(stats.max) }}</span>
+          <span>最小 {{ fmtNum(stats.min) }}</span>
+        </template>
+        <span v-else-if="stats && stats.count > 0">计数 {{ stats.count }}</span>
+      </slot>
     </div>
 
     <SheetTabs
@@ -995,6 +1118,17 @@ defineExpose({ load })
   z-index: 2;
   overflow: hidden;
   pointer-events: none;
+}
+/* 分层 UI slot: 叠在最上(滚动层之上),容器不吃事件,子元素可 pointer-events:auto 接收交互 */
+.ov-slot {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  overflow: hidden;
+  pointer-events: none;
+}
+.ov-slot :deep(*) {
+  pointer-events: auto;
 }
 /* 滚动条层: 透明、置顶、提供原生滚动条 + 接收鼠标交互 */
 .scroller {

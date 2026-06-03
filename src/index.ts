@@ -26,8 +26,16 @@ export type {
   ConditionalRule,
   ChartSpec,
   ImageAnchor,
+  ShapeSpec,
+  Sparkline,
   CssColor,
+  TransformModelFn,
+  CellStyleFn,
 } from './core/model/types'
+
+// 扩展: 主题
+export type { ViewerTheme } from './core/render/theme'
+export { DEFAULT_THEME, mergeTheme } from './core/render/theme'
 
 // 作为 Vue 插件全局注册
 const plugin: Plugin = {

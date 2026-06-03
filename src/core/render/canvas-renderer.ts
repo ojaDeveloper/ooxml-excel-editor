@@ -3,8 +3,9 @@
  * 渲染顺序(每个 pane 内): 网格线 → 填充/条件背景 → 数据条 → 边框 → 文本/图标 → 筛选按钮。
  * 表头(行号/列字母)最后绘制，覆盖在最上层。
  */
-import type { CellModel, CellStyle, MergeRange, SheetModel, Sparkline, WorkbookModel } from '../model/types'
+import type { CellModel, CellStyle, CellStyleFn, MergeRange, SheetModel, Sparkline, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
+import { type ViewerTheme, mergeTheme } from './theme'
 import { GridMetrics, colIndexToLetters } from '../layout/grid-metrics'
 import { MergeIndex } from '../layout/merges'
 import { computeFreeze, type FreezeGeometry } from '../layout/freeze'
@@ -20,13 +21,9 @@ import {
 import { autoFitRowHeights } from '../layout/autofit'
 import { drawFilterButton, isFilterHeader } from './autofilter'
 
-const C = {
-  headerBg: '#F5F6F7',
-  headerActiveBg: '#E1E6EB',
-  headerText: '#4B4B4B',
-  headerLine: '#C6CCD2',
-  gridLine: '#E0E2E5',
-  selBorder: '#1A73E8',
+export interface RendererOptions {
+  theme?: Partial<ViewerTheme>
+  cellStyle?: CellStyleFn
 }
 
 export interface ViewState {
@@ -45,13 +42,18 @@ export class CanvasRenderer {
   private ctx: CanvasRenderingContext2D
   private dpr = 1
   private sparklineIndex = new Map<string, Sparkline>()
+  private theme: ViewerTheme
+  private cellStyleHook?: CellStyleFn
 
   constructor(
     private canvas: HTMLCanvasElement,
     private sheet: SheetModel,
     private workbook: WorkbookModel,
     zoom = 1,
+    opts?: RendererOptions,
   ) {
+    this.theme = mergeTheme(opts?.theme)
+    this.cellStyleHook = opts?.cellStyle
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('无法获取 canvas 2d context')
     this.ctx = ctx
@@ -377,10 +379,10 @@ export class CanvasRenderer {
     // 单格选区不填充(像 Excel 的活动单元格),多格才铺淡蓝
     const single = sel.top === sel.bottom && sel.left === sel.right
     if (!single) {
-      ctx.fillStyle = 'rgba(26,115,232,0.10)'
+      ctx.fillStyle = this.theme.selFill
       ctx.fillRect(x, y, w, h)
     }
-    ctx.strokeStyle = C.selBorder
+    ctx.strokeStyle = this.theme.selBorder
     ctx.lineWidth = 2
     ctx.strokeRect(Math.round(x) + 1, Math.round(y) + 1, Math.round(w) - 2, Math.round(h) - 2)
     ctx.restore()
@@ -409,7 +411,7 @@ export class CanvasRenderer {
 
     // 1. 网格线
     if (this.sheet.showGridLines) {
-      ctx.strokeStyle = C.gridLine
+      ctx.strokeStyle = this.theme.gridLine
       ctx.lineWidth = 1
       ctx.beginPath()
       for (let c = Math.max(0, gridC0); c <= gridC1; c++) {
@@ -863,9 +865,9 @@ export class CanvasRenderer {
     }
 
     // 左上角
-    ctx.fillStyle = C.headerBg
+    ctx.fillStyle = this.theme.headerBg
     ctx.fillRect(0, 0, hw, hh)
-    ctx.strokeStyle = C.headerLine
+    ctx.strokeStyle = this.theme.headerLine
     ctx.lineWidth = 1
     ctx.strokeRect(0.5, 0.5, hw, hh)
   }
@@ -879,9 +881,9 @@ export class CanvasRenderer {
       const x = hw + this.metrics.colLeft(c) - scrollX
       const w = this.metrics.colWidth(c)
       if (w <= 0) continue
-      ctx.fillStyle = C.headerBg
+      ctx.fillStyle = this.theme.headerBg
       ctx.fillRect(x, 0, w, hh)
-      ctx.strokeStyle = C.headerLine
+      ctx.strokeStyle = this.theme.headerLine
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(Math.round(x) + 0.5, 0)
@@ -889,7 +891,7 @@ export class CanvasRenderer {
       ctx.moveTo(x, hh - 0.5)
       ctx.lineTo(x + w, hh - 0.5)
       ctx.stroke()
-      ctx.fillStyle = C.headerText
+      ctx.fillStyle = this.theme.headerText
       ctx.fillText(colIndexToLetters(c), x + w / 2, hh / 2 + 1)
     }
   }
@@ -903,9 +905,9 @@ export class CanvasRenderer {
       const y = hh + this.metrics.rowTop(r) - scrollY
       const h = this.metrics.rowHeight(r)
       if (h <= 0) continue
-      ctx.fillStyle = C.headerBg
+      ctx.fillStyle = this.theme.headerBg
       ctx.fillRect(0, y, hw, h)
-      ctx.strokeStyle = C.headerLine
+      ctx.strokeStyle = this.theme.headerLine
       ctx.lineWidth = 1
       ctx.beginPath()
       ctx.moveTo(0, Math.round(y) + 0.5)
@@ -913,7 +915,7 @@ export class CanvasRenderer {
       ctx.moveTo(hw - 0.5, y)
       ctx.lineTo(hw - 0.5, y + h)
       ctx.stroke()
-      ctx.fillStyle = C.headerText
+      ctx.fillStyle = this.theme.headerText
       ctx.fillText(String(r + 1), hw / 2, y + h / 2 + 1)
     }
   }
@@ -942,7 +944,21 @@ export class CanvasRenderer {
   }
 
   private styleOf(cell: CellModel): CellStyle {
-    return this.sheet.styles[cell.styleId]
+    const base = this.sheet.styles[cell.styleId]
+    if (!this.cellStyleHook) return base
+    const over = this.cellStyleHook(cell, { row: cell.row, col: cell.col })
+    return over ? applyStyleOverride(base, over) : base
+  }
+}
+
+/** 合并 cellStyle 钩子返回的部分样式: font/fill/borders 浅合并,其余覆盖 */
+function applyStyleOverride(base: CellStyle, over: Partial<CellStyle>): CellStyle {
+  return {
+    ...base,
+    ...over,
+    font: over.font ? { ...base.font, ...over.font } : base.font,
+    fill: over.fill ? { ...base.fill, ...over.fill } : base.fill,
+    borders: over.borders ? { ...base.borders, ...over.borders } : base.borders,
   }
 }
 

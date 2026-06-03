@@ -259,3 +259,8 @@ export interface WorkbookModel {
 }
 
 export const cellKey = (row: number, col: number) => `${row}:${col}`
+
+/** 数据钩子: 解析后、渲染前改模型(返回新模型或就地改) */
+export type TransformModelFn = (workbook: WorkbookModel) => WorkbookModel | void
+/** 渲染钩子: 按单元格覆盖样式(返回部分样式,与解析样式合并) */
+export type CellStyleFn = (cell: CellModel, pos: { row: number; col: number }) => Partial<CellStyle> | void
