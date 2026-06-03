@@ -11,6 +11,7 @@ const emit = defineEmits<{
   (e: 'export-image'): void
   (e: 'export-pdf'): void
   (e: 'print'): void
+  (e: 'open-settings'): void
 }>()
 
 const STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2]
@@ -24,11 +25,12 @@ const menuOpen = ref(false)
 function toggleMenu() {
   menuOpen.value = !menuOpen.value
 }
-function pick(action: 'export-image' | 'export-pdf' | 'print') {
+function pick(action: 'export-image' | 'export-pdf' | 'print' | 'open-settings') {
   menuOpen.value = false
   if (action === 'export-image') emit('export-image')
   else if (action === 'export-pdf') emit('export-pdf')
-  else emit('print')
+  else if (action === 'print') emit('print')
+  else emit('open-settings')
 }
 function onDocClick(e: MouseEvent) {
   if (!(e.target as HTMLElement)?.closest('.export-wrap')) menuOpen.value = false
@@ -53,6 +55,8 @@ onBeforeUnmount(() => {
         <button @click="pick('export-image')">导出为图片 (PNG)</button>
         <button @click="pick('export-pdf')">导出为 PDF</button>
         <button @click="pick('print')">打印…</button>
+        <div class="sep" />
+        <button @click="pick('open-settings')">导出设置…</button>
       </div>
     </div>
 
@@ -132,6 +136,7 @@ onBeforeUnmount(() => {
   white-space: nowrap;
 }
 .menu button:hover { background: #f0f4ff; }
+.menu .sep { height: 1px; background: #eef0f2; margin: 4px 2px; }
 
 .zoom { display: flex; align-items: center; gap: 4px; }
 .zoom button {

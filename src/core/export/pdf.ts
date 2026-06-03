@@ -15,6 +15,10 @@ export interface ExportSheetImage {
   bodyWcss: number
   bodyHcss: number
   sheetName: string
+  /** 打印标题: 每页顶部重复的标题行条(同 scale,等宽于 canvas) */
+  repeatTop?: { canvas: HTMLCanvasElement; heightCss: number }
+  /** 非 fitToWidth 时的打印缩放(pageSetup.scale/100) */
+  zoom?: number
 }
 
 async function loadJsPdf(): Promise<any> {
@@ -41,7 +45,13 @@ export async function exportToPdf(sheets: ExportSheetImage[], opts: PdfExportOpt
   // 先把每个表切片,算总页数(给钩子用)
   const perSheet = sheets.map((sh) => ({
     sheet: sh,
-    pages: sliceToPages(sh.canvas, sh.bodyWcss, sh.bodyHcss, { contentWmm, contentHmm, fitToWidth }),
+    pages: sliceToPages(sh.canvas, sh.bodyWcss, sh.bodyHcss, {
+      contentWmm,
+      contentHmm,
+      fitToWidth,
+      zoom: sh.zoom,
+      repeatTop: sh.repeatTop,
+    }),
   }))
   const pageCount = perSheet.reduce((n, s) => n + Math.max(s.pages.length, 0), 0) || 1
 

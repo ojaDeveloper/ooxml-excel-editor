@@ -37,6 +37,8 @@ import {
 } from '@/core/export'
 import ViewerToolbar from './ViewerToolbar.vue'
 import SheetTabs from './SheetTabs.vue'
+import ExportDialog from './ExportDialog.vue'
+import type { ExportConfig } from './export-types'
 
 const props = withDefaults(
   defineProps<{
@@ -1065,8 +1067,16 @@ async function collectDecorations(s: SheetModel, metrics: GridMetrics): Promise<
   return { images, charts, shapes: s.shapes }
 }
 
-/** 为一个工作表生成合成底图(格子 + 图片/图表/形状) */
-async function buildSheetImage(sheetIdx: number, opts: PdfExportOptions): Promise<ExportSheetImage | null> {
+/**
+ * 为一个工作表生成合成底图(格子 + 图片/图表/形状)。
+ * withTitles(PDF/打印): 应用 pageSetup 打印标题行(抽出标题条 + 正文剔除标题行)与缩放。
+ * 范围优先级: opts.range > pageSetup.printArea > 整表。
+ */
+async function buildSheetImage(
+  sheetIdx: number,
+  opts: PdfExportOptions,
+  withTitles = false,
+): Promise<ExportSheetImage | null> {
   const wb = workbook.value
   const s = wb?.sheets[sheetIdx]
   if (!wb || !s) return null
@@ -1078,8 +1088,24 @@ async function buildSheetImage(sheetIdx: number, opts: PdfExportOptions): Promis
           theme: effectiveTheme.value,
           cellStyle: hasCellStyleHook.value ? combinedCellStyle : undefined,
         })
+
+  const ps = s.pageSetup
+  const dim = s.dimension
+  const full: MergeRange = { top: 0, left: 0, bottom: Math.max(0, dim.rows - 1), right: Math.max(0, dim.cols - 1) }
+  let range = opts.range ?? ps?.printArea ?? full
+
+  // 打印标题行: 标题在正文上方时,抽出标题条并把正文起点下移(避免重复)
+  let titleRange: MergeRange | null = null
+  if (withTitles && ps?.printTitleRows) {
+    const [tr0, tr1] = ps.printTitleRows
+    if (tr1 >= tr0 && tr0 <= range.top && tr1 < range.bottom) {
+      titleRange = { top: tr0, bottom: tr1, left: range.left, right: range.right }
+      range = { ...range, top: Math.max(range.top, tr1 + 1) }
+    }
+  }
+
   const base = r.exportToCanvas({
-    range: opts.range,
+    range,
     scale: opts.scale,
     includeHeaders: opts.includeHeaders,
     gridlines: opts.gridlines,
@@ -1087,7 +1113,37 @@ async function buildSheetImage(sheetIdx: number, opts: PdfExportOptions): Promis
   })
   const deco = await collectDecorations(s, base.metrics)
   compositeOverlays(base, deco)
-  return { canvas: base.canvas, bodyWcss: base.bodyW, bodyHcss: base.bodyH, sheetName: s.name }
+
+  // 标题条用与正文相同的 scale/列范围渲染 → 等宽,可逐页堆叠
+  let repeatTop: ExportSheetImage['repeatTop']
+  if (titleRange) {
+    const strip = r.exportToCanvas({
+      range: titleRange,
+      scale: base.scale,
+      includeHeaders: opts.includeHeaders,
+      gridlines: opts.gridlines,
+      background: opts.background,
+    })
+    repeatTop = { canvas: strip.canvas, heightCss: strip.bodyH }
+  }
+
+  // 打印缩放: 非 fitToWidth 时套用 pageSetup.scale
+  const zoom = withTitles && opts.fitToWidth === false && ps?.scale ? ps.scale / 100 : undefined
+
+  return { canvas: base.canvas, bodyWcss: base.bodyW, bodyHcss: base.bodyH, sheetName: s.name, repeatTop, zoom }
+}
+
+/** 从工作表原生 pageSetup 推导导出默认值(纸张/方向/边距/是否适应页宽) */
+function pageSetupDefaults(sheetIdx: number): Partial<PdfExportOptions> {
+  const ps = workbook.value?.sheets[sheetIdx]?.pageSetup
+  if (!ps) return {}
+  const d: Partial<PdfExportOptions> = {}
+  if (ps.paperFormat) d.format = ps.paperFormat
+  if (ps.orientation) d.orientation = ps.orientation
+  if (ps.margins) d.margin = { top: ps.margins.top, right: ps.margins.right, bottom: ps.margins.bottom, left: ps.margins.left }
+  // fitToPage → 适应页宽;否则按自然尺寸×scale(下面 buildSheetImage 用 zoom 处理)
+  d.fitToWidth = ps.fitToPage ? true : false
+  return d
 }
 
 function baseName(): string {
@@ -1108,24 +1164,26 @@ async function downloadImage(opts: ImageExportOptions = {}): Promise<void> {
   downloadBlob(blob, opts.fileName ?? `${baseName()}.${ext}`)
 }
 
-/** 导出为 PDF Blob(每个目标表分页;需可选依赖 jspdf) */
+/** 导出为 PDF Blob(每个目标表分页;需可选依赖 jspdf)。未显式指定的页面参数取自工作表 pageSetup。 */
 async function exportPdf(opts: PdfExportOptions = {}): Promise<Blob> {
   const targets = resolveTargets(opts.target)
   if (!targets.length) throw new Error('无可导出的工作表')
-  const images = (await Promise.all(targets.map((i) => buildSheetImage(i, opts)))).filter(Boolean) as ExportSheetImage[]
-  return exportToPdf(images, opts)
+  const eff: PdfExportOptions = { ...pageSetupDefaults(targets[0]), ...opts }
+  const images = (await Promise.all(targets.map((i) => buildSheetImage(i, eff, true)))).filter(Boolean) as ExportSheetImage[]
+  return exportToPdf(images, eff)
 }
 async function downloadPdf(opts: PdfExportOptions = {}): Promise<void> {
   const blob = await exportPdf(opts)
   downloadBlob(blob, opts.fileName ?? `${baseName()}.pdf`)
 }
 
-/** 打开系统打印(可在对话框另存为 PDF) */
+/** 打开系统打印(可在对话框另存为 PDF)。页面参数同样默认取自 pageSetup。 */
 async function print(opts: PrintOptions = {}): Promise<void> {
   const targets = resolveTargets(opts.target)
   if (!targets.length) return
-  const images = (await Promise.all(targets.map((i) => buildSheetImage(i, opts)))).filter(Boolean) as ExportSheetImage[]
-  printSheets(images, { ...opts, title: opts.title ?? baseName() })
+  const eff: PrintOptions = { ...pageSetupDefaults(targets[0]), ...opts }
+  const images = (await Promise.all(targets.map((i) => buildSheetImage(i, eff, true)))).filter(Boolean) as ExportSheetImage[]
+  printSheets(images, { ...eff, title: eff.title ?? baseName() })
 }
 
 /** 工具栏触发 PDF: 捕获 jspdf 缺失等错误,给用户可读提示而非静默失败 */
@@ -1133,9 +1191,41 @@ async function onExportPdf() {
   try {
     await downloadPdf()
   } catch (e) {
-    const msg = (e as Error)?.message || String(e)
-    emit('error', msg)
-    if (typeof window !== 'undefined' && window.alert) window.alert(msg)
+    reportExportError(e)
+  }
+}
+function reportExportError(e: unknown) {
+  const msg = (e as Error)?.message || String(e)
+  emit('error', msg)
+  if (typeof window !== 'undefined' && window.alert) window.alert(msg)
+}
+
+// ---- 导出设置对话框 ----
+const exportDialogOpen = ref(false)
+/** 把对话框配置映射成各导出方法的入参并执行 */
+async function onDialogExport(cfg: ExportConfig) {
+  exportDialogOpen.value = false
+  const target = cfg.scope === 'all' ? 'all' : 'active'
+  const range = cfg.scope === 'selection' ? selection.value ?? undefined : undefined
+  const common = {
+    target: target as 'all' | 'active',
+    range,
+    scale: cfg.scale,
+    includeHeaders: cfg.includeHeaders,
+    gridlines: cfg.gridlines,
+  }
+  // 'auto' 表示沿用工作表 pageSetup,故不传(让 pageSetupDefaults 生效)
+  const page = {
+    ...(cfg.format !== 'auto' ? { format: cfg.format } : {}),
+    ...(cfg.orientation !== 'auto' ? { orientation: cfg.orientation } : {}),
+    fitToWidth: cfg.fitToWidth,
+  }
+  try {
+    if (cfg.action === 'png') await downloadImage(common)
+    else if (cfg.action === 'pdf') await downloadPdf({ ...common, ...page })
+    else await print({ ...common, ...page })
+  } catch (e) {
+    reportExportError(e)
   }
 }
 
@@ -1232,6 +1322,7 @@ const PluginOverlays = defineComponent({
         @export-image="downloadImage()"
         @export-pdf="onExportPdf"
         @print="print()"
+        @open-settings="exportDialogOpen = true"
       />
     </slot>
 
@@ -1323,6 +1414,14 @@ const PluginOverlays = defineComponent({
       :workbook="workbook as WorkbookModel"
       :active="activeSheet"
       @select="activeSheet = $event"
+    />
+
+    <ExportDialog
+      v-if="exportDialogOpen && workbook"
+      :selection="selection"
+      :sheet-count="workbook.sheets.filter((s) => s.state === 'visible').length"
+      @close="exportDialogOpen = false"
+      @export="onDialogExport"
     />
   </div>
 </template>

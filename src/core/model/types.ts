@@ -222,7 +222,30 @@ export interface SheetModel {
   sparklines: Sparkline[]
   /** 手动分页符(0-based 边界索引): 在这些行上方/列左侧画分页虚线 */
   pageBreaks?: { rows: number[]; cols: number[] }
+  /** 原生页面设置(打印/导出默认值来源);缺省走 export 模块默认 */
+  pageSetup?: PageSetupModel
   showGridLines: boolean
+}
+
+/** OOXML 原生页面设置(pageSetup + pageMargins + 打印区域/标题),用作导出默认值 */
+export interface PageSetupModel {
+  orientation?: 'portrait' | 'landscape'
+  /** 纸张: 由 paperSize 代码映射;无法识别时省略(走默认 a4) */
+  paperFormat?: 'a4' | 'a3' | 'letter' | [number, number]
+  /** 缩放百分比(如 80 = 80%);fitToPage 时无意义 */
+  scale?: number
+  /** 适应页面(fitToPage): 优先于 scale */
+  fitToPage?: boolean
+  fitToWidth?: number
+  fitToHeight?: number
+  /** 页边距 mm(从 inch 换算) */
+  margins?: { top: number; right: number; bottom: number; left: number; header: number; footer: number }
+  /** 打印区域(0-based 闭区间;多区域取第一段) */
+  printArea?: MergeRange
+  /** 打印标题行 [r0,r1] 0-based(每页顶部重复) */
+  printTitleRows?: [number, number]
+  /** 打印标题列 [c0,c1] 0-based(横向分页时左侧重复;当前竖向分页管线不应用) */
+  printTitleCols?: [number, number]
 }
 
 /** 形状 / 文本框: 用锚点定位,带填充/边框/文字 */

@@ -19,7 +19,13 @@ export function printSheets(sheets: ExportSheetImage[], opts: PrintOptions = {})
 
   const pagesHtml: string[] = []
   for (const sh of sheets) {
-    const slices = sliceToPages(sh.canvas, sh.bodyWcss, sh.bodyHcss, { contentWmm, contentHmm, fitToWidth })
+    const slices = sliceToPages(sh.canvas, sh.bodyWcss, sh.bodyHcss, {
+      contentWmm,
+      contentHmm,
+      fitToWidth,
+      zoom: sh.zoom,
+      repeatTop: sh.repeatTop,
+    })
     for (const pg of slices) {
       pagesHtml.push(
         `<div class="page">` +

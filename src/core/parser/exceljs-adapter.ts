@@ -11,6 +11,7 @@ import type {
   Fill,
   Font,
   MergeRange,
+  PageSetupModel,
   RichTextRun,
   SheetModel,
   CssColor,
@@ -130,6 +131,9 @@ function buildSheet(ws: ExcelJS.Worksheet, index: number, theme: CssColor[], onR
   // 数据验证(只取 list 型，用于画下拉)
   const dataValidations = parseDataValidations(ws)
 
+  // 原生页面设置(导出/打印默认值)
+  const pageSetup = parsePageSetup(ws)
+
   const state = (ws as any).state === 'hidden'
     ? 'hidden'
     : (ws as any).state === 'veryHidden'
@@ -156,8 +160,88 @@ function buildSheet(ws: ExcelJS.Worksheet, index: number, theme: CssColor[], onR
     charts: [],
     shapes: [],
     sparklines: [],
+    pageSetup,
     showGridLines,
   }
+}
+
+/** paperSize 代码 → PageFormat(只映射常见几种,其余省略走默认 a4) */
+const PAPER_SIZE_MAP: Record<number, PageSetupModel['paperFormat']> = {
+  1: 'letter', // Letter 8.5x11
+  8: 'a3', // A3 297x420
+  9: 'a4', // A4 210x297
+  70: 'a4', // ISO A4 (部分写法)
+}
+const IN_TO_MM = 25.4
+
+/** 从 ExcelJS worksheet.pageSetup 抽出原生页面设置;失败返回 undefined。(导出供单测) */
+export function parsePageSetup(ws: ExcelJS.Worksheet): PageSetupModel | undefined {
+  const ps: any = (ws as any).pageSetup
+  if (!ps) return undefined
+  const out: PageSetupModel = {}
+
+  if (ps.orientation === 'portrait' || ps.orientation === 'landscape') out.orientation = ps.orientation
+  if (typeof ps.paperSize === 'number' && PAPER_SIZE_MAP[ps.paperSize]) out.paperFormat = PAPER_SIZE_MAP[ps.paperSize]
+  if (typeof ps.scale === 'number' && ps.scale > 0) out.scale = ps.scale
+  if (ps.fitToPage) out.fitToPage = true
+  if (typeof ps.fitToWidth === 'number') out.fitToWidth = ps.fitToWidth
+  if (typeof ps.fitToHeight === 'number') out.fitToHeight = ps.fitToHeight
+
+  const m = ps.margins
+  if (m && typeof m === 'object') {
+    out.margins = {
+      top: (m.top ?? 0.75) * IN_TO_MM,
+      bottom: (m.bottom ?? 0.75) * IN_TO_MM,
+      left: (m.left ?? 0.7) * IN_TO_MM,
+      right: (m.right ?? 0.7) * IN_TO_MM,
+      header: (m.header ?? 0.3) * IN_TO_MM,
+      footer: (m.footer ?? 0.3) * IN_TO_MM,
+    }
+  }
+
+  // 打印区域(可能多段,取第一段)
+  if (typeof ps.printArea === 'string' && ps.printArea.trim()) {
+    const first = ps.printArea.split(',')[0]
+    const rg = parseA1Range(stripSheetRef(first))
+    if (rg) out.printArea = rg
+  }
+
+  // 打印标题行/列: ExcelJS 给 "1:3" / "A:B"(可能带 Sheet! 前缀)
+  const rows = parseRowSpan(ps.printTitlesRow)
+  if (rows) out.printTitleRows = rows
+  const cols = parseColSpan(ps.printTitlesColumn)
+  if (cols) out.printTitleCols = cols
+
+  return Object.keys(out).length ? out : undefined
+}
+
+/** 去掉 "Sheet1!$A$1:$B$2" 里的 "Sheet1!" 前缀 */
+function stripSheetRef(ref: string): string {
+  const i = ref.lastIndexOf('!')
+  return (i >= 0 ? ref.slice(i + 1) : ref).trim()
+}
+
+/** "1:3" / "$1:$3" / "Sheet!$1:$3" → [0,2] 0-based 行区间 */
+function parseRowSpan(spec: any): [number, number] | undefined {
+  if (typeof spec !== 'string' || !spec.trim()) return undefined
+  const s = stripSheetRef(spec).replace(/\$/g, '')
+  const m = /^(\d+):(\d+)$/.exec(s)
+  if (!m) return undefined
+  const a = parseInt(m[1], 10) - 1
+  const b = parseInt(m[2], 10) - 1
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return undefined
+  return [Math.min(a, b), Math.max(a, b)]
+}
+
+/** "A:B" / "$A:$B" / "Sheet!$A:$B" → [0,1] 0-based 列区间 */
+function parseColSpan(spec: any): [number, number] | undefined {
+  if (typeof spec !== 'string' || !spec.trim()) return undefined
+  const s = stripSheetRef(spec).replace(/\$/g, '')
+  const m = /^([A-Z]+):([A-Z]+)$/i.exec(s)
+  if (!m) return undefined
+  const a = colLettersToIndex(m[1].toUpperCase())
+  const b = colLettersToIndex(m[2].toUpperCase())
+  return [Math.min(a, b), Math.max(a, b)]
 }
 
 function parseDataValidations(ws: ExcelJS.Worksheet): MergeRange[] {

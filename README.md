@@ -14,7 +14,7 @@
 - 🖼 **图片 + 图表**(DrawingML → ECharts 近似还原)、**形状/文本框**、**迷你图**(sparklines)、**批注**、**数据验证**下拉、**自动筛选**样式
 - 📝 **文本溢出**到相邻空格、**自动行高**
 - 🖱 **交互**:单元格选区(合并感知)、拖选、公式栏、状态栏(计数/求和/均值/最值)、超链接可点、裁切文本悬停看全文、Ctrl+C 复制为 TSV
-- 🖨 **导出 / 打印**:整表或选区导出 **PNG/JPEG**、**PDF**(分页,可选 jspdf)、**系统打印**(可另存 PDF),多表批量;`beforeRenderPage` 钩子注入页眉/页脚/水印/页码
+- 🖨 **导出 / 打印**:整表/选区/多表导出 **PNG/JPEG**、**PDF**(分页,可选 jspdf)、**系统打印**(可另存 PDF);默认还原原生 `pageSetup`(纸张/方向/页边距/缩放/打印区域/**打印标题行每页重复**);`beforeRenderPage` 钩子注入页眉/页脚/水印/页码;内置「导出设置」对话框
 - ⚡ **按需加载**(无图表文件不下载 echarts、不导出 PDF 不下载 jspdf)、**友好错误兜底**(损坏/加密/旧 .xls)、解析失败自动给出可读提示
 
 > 预览不需要公式引擎 —— .xlsx 缓存了公式结果,直接显示。详见 [EXCEL还原难点.md](./EXCEL还原难点.md)。
@@ -134,7 +134,7 @@ console.log(wb.sheets[0].cells)
 `load(src)` / `getWorkbook()` / `getActiveSheet()` / `setActiveSheet(i)` / `getSelection()` / `setSelection(range)` / `rectOf(row,col)` / `rectOfRange(range)` / `redraw()`,以及下面的导出方法。
 
 ### 导出 / 打印
-内置工具栏右侧有「导出 ▾」菜单(PNG / PDF / 打印)。也可命令式调用(模板 ref / 插件 `viewer`):
+内置工具栏右侧有「导出 ▾」菜单(PNG / PDF / 打印 / **导出设置…**)。「导出设置…」打开对话框,可选**范围**(当前选区 / 当前表 / 全部表)、清晰度、是否含行列号/网格线、纸张方向。也可命令式调用(模板 ref / 插件 `viewer`):
 
 | 方法 | 说明 |
 |---|---|
@@ -145,6 +145,8 @@ console.log(wb.sheets[0].cells)
 | `print(opts?)` | 打开系统打印对话框(可另存为 PDF,零依赖) |
 
 公共选项:`target`(`'active'`(默认)/`'all'`/索引/索引数组)、`range`(限定单元格区域)、`scale`(清晰度,默认 2)、`includeHeaders`、`gridlines`、`background`;PDF/打印另有 `format`(a4/a3/letter/`[宽,高]mm`)、`orientation`、`margin`(mm)、`fitToWidth`。
+
+**默认还原 OOXML 原生页面设置** —— PDF/打印时,未显式指定的 `format`/`orientation`/`margin`/`fitToWidth` 自动取自工作表的 `pageSetup`(纸张、方向、页边距、适应页面/缩放),并应用**打印区域**(默认导出范围)与**打印标题行**(每页顶部重复)。显式传入的选项始终覆盖之。
 
 **`beforeRenderPage` 扩展钩子** —— 每页贴图后调用,拿到 `jsPDF` 实例画页眉/页脚/水印/页码:
 ```ts
