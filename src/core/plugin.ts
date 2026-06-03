@@ -14,6 +14,7 @@ import type { VNodeChild } from 'vue'
 import type { CellStyleFn, MergeRange, TransformModelFn, WorkbookModel } from './model/types'
 import type { ViewerTheme } from './render/theme'
 import type { ExcelSource } from './loader'
+import type { ImageExportOptions, PdfExportOptions, PrintOptions } from './export/types'
 
 export interface Rect {
   x: number
@@ -40,6 +41,16 @@ export interface ViewerApi {
   rectOf(row: number, col: number): Rect | null
   rectOfRange(range: MergeRange): Rect | null
   redraw(): void
+  /** 导出当前/指定表为图片 Blob(默认 png) */
+  exportImage(opts?: ImageExportOptions): Promise<Blob>
+  /** 导出为图片并触发下载 */
+  downloadImage(opts?: ImageExportOptions): Promise<void>
+  /** 导出为 PDF Blob(需可选依赖 jspdf);beforeRenderPage 可画页眉/页脚/水印 */
+  exportPdf(opts?: PdfExportOptions): Promise<Blob>
+  /** 导出 PDF 并触发下载 */
+  downloadPdf(opts?: PdfExportOptions): Promise<void>
+  /** 打开系统打印(可在对话框另存为 PDF) */
+  print(opts?: PrintOptions): Promise<void>
 }
 
 /** overlay 渲染上下文(随滚动/缩放,tick 变即重渲) */

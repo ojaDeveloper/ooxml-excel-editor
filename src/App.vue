@@ -2,6 +2,8 @@
 import { ref } from 'vue'
 import ExcelViewer from './components/ExcelViewer.vue'
 import { definePlugin } from './core/plugin'
+import type { ViewerApi } from './core/plugin'
+import type { PdfPageContext } from './core/export/types'
 
 const src = ref<File | string | undefined>(undefined)
 const fileName = ref<string>('')
@@ -31,6 +33,33 @@ async function loadSample() {
 
 // ---- 扩展 API 演示 ----
 const lastEvent = ref('')
+const viewerRef = ref<ViewerApi | null>(null)
+
+// 演示 beforeRenderPage 扩展钩子: 每页右下角页码 + 居中淡水印
+async function exportPdfWithWatermark() {
+  const viewer = viewerRef.value
+  if (!viewer) return
+  try {
+    await viewer.downloadPdf({
+      target: 'all',
+      beforeRenderPage: (ctx: PdfPageContext) => {
+        const { doc, pageIndex, pageCount, pageWidth, pageHeight, margin, sheetName } = ctx
+        // 页脚: 表名 + 页码
+        doc.setFontSize(9)
+        doc.setTextColor(120)
+        doc.text(`${sheetName}`, margin.left, pageHeight - 5)
+        doc.text(`第 ${pageIndex + 1} / ${pageCount} 页`, pageWidth - margin.right, pageHeight - 5, { align: 'right' })
+        // 水印: 居中旋转大字
+        doc.setFontSize(56)
+        doc.setTextColor(230)
+        doc.text('PREVIEW', pageWidth / 2, pageHeight / 2, { align: 'center', angle: 30 })
+      },
+    })
+    lastEvent.value = '已导出 PDF(全部表 + 页码 + 水印)'
+  } catch (e) {
+    lastEvent.value = '导出失败: ' + (e as Error).message
+  }
+}
 
 // 示例插件: 负数标红 + 单击单元格写到 toast(definePlugin 把 cellStyle+events 打包)
 const negativesPlugin = definePlugin({
@@ -73,10 +102,14 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         <input type="file" accept=".xlsx,.xlsm" @change="onInput" hidden />
       </label>
       <button class="sample-btn" @click="loadSample">加载示例</button>
+      <button v-if="src" class="sample-btn" @click="exportPdfWithWatermark" title="演示 beforeRenderPage 钩子">
+        PDF(页码+水印)
+      </button>
     </header>
 
     <main class="app-body">
       <ExcelViewer
+        ref="viewerRef"
         :src="src"
         :file-name="fileName"
         :plugins="plugins"

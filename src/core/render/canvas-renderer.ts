@@ -26,6 +26,42 @@ export interface RendererOptions {
   cellStyle?: CellStyleFn
 }
 
+/** 导出为离屏 canvas 的选项 */
+export interface ExportToCanvasOptions {
+  /** 0-based 闭区间;缺省 = 整个已用范围 */
+  range?: MergeRange
+  /** 设备像素缩放(越大越清晰),默认 2;受 maxPixels 限制可能被下调 */
+  scale?: number
+  /** 是否含行号/列字母表头,默认 false(同 Excel 打印默认) */
+  includeHeaders?: boolean
+  /** 覆盖网格线显隐(缺省跟随 sheet.showGridLines) */
+  gridlines?: boolean
+  /** 背景色,默认白 */
+  background?: string
+  /** 单维度设备像素安全上限,默认 16384(超大表自动降 scale) */
+  maxPixels?: number
+}
+
+/** exportToCanvas 的产物 + 合成叠加层(图片/图表/形状)所需的坐标信息 */
+export interface ExportToCanvasResult {
+  canvas: HTMLCanvasElement
+  /** 实际用的设备像素缩放(可能被 maxPixels 下调) */
+  scale: number
+  /** 解析出的导出范围 */
+  range: MergeRange
+  /** 正文宽高(css px,不含表头,zoom=1) */
+  bodyW: number
+  bodyH: number
+  /** 导出空间几何(zoom=1),供合成叠加层定位 */
+  metrics: GridMetrics
+  /** 画布内"范围左上角格子"所在的 css 像素偏移(含表头时为表头宽高,否则 0) */
+  originX: number
+  originY: number
+  /** 范围左上角在网格坐标系的像素(zoom=1);合成时: deviceX = (originX + gridLeft - gridOriginX) * scale */
+  gridOriginX: number
+  gridOriginY: number
+}
+
 export interface ViewState {
   scrollX: number
   scrollY: number
@@ -298,9 +334,21 @@ export class CanvasRenderer {
   }
 
   render(view: ViewState): void {
-    const { width, height, zoom } = view
     this.dpr = window.devicePixelRatio || 1
-    // 调整 canvas 像素尺寸(高清)
+    this.paint(view, { headers: true, pageBreaks: true, selection: true })
+  }
+
+  /**
+   * 绘制核心: 被实时 render() 与导出 exportToCanvas() 共用。
+   * 用 this.{canvas,ctx,metrics,freeze,selection,dpr} 当前值,flags 控制 UI 装饰是否绘制。
+   */
+  private paint(
+    view: ViewState,
+    flags: { headers: boolean; pageBreaks: boolean; selection: boolean },
+    background = '#FFFFFF',
+  ): void {
+    const { width, height, zoom } = view
+    // 调整 canvas 像素尺寸(高清/导出 scale)
     const pw = Math.round(width * this.dpr)
     const ph = Math.round(height * this.dpr)
     if (this.canvas.width !== pw || this.canvas.height !== ph) {
@@ -310,7 +358,7 @@ export class CanvasRenderer {
     const ctx = this.ctx
     ctx.setTransform(this.dpr, 0, 0, this.dpr, 0, 0)
     ctx.clearRect(0, 0, width, height)
-    ctx.fillStyle = '#FFFFFF'
+    ctx.fillStyle = background
     ctx.fillRect(0, 0, width, height)
 
     const layout = computeViewport(this.metrics, this.freeze, view.scrollX, view.scrollY, width, height)
@@ -319,10 +367,93 @@ export class CanvasRenderer {
       this.drawPane(pane, zoom)
     }
 
-    this.drawHeaders(layout.panes, view)
-    this.drawFreezeLines(layout)
-    this.drawPageBreaks(view)
-    this.drawSelection(view)
+    if (flags.headers) this.drawHeaders(layout.panes, view)
+    this.drawFreezeLines(layout) // 导出时 freeze=0 → 直接返回
+    if (flags.pageBreaks) this.drawPageBreaks(view)
+    if (flags.selection) this.drawSelection(view)
+  }
+
+  /**
+   * 把整表(或指定区域)渲染到一张离屏 canvas: 无选区高亮/分页线/冻结分区,scale 可控。
+   * 复用全部单元格绘制逻辑(填充/边框/条件格式/迷你图/文本)。图片/图表/形状是 DOM 叠加层,
+   * 不在此绘制 —— 由调用方拿到 result.metrics/scale/origin 后合成到底图上。
+   */
+  exportToCanvas(opts: ExportToCanvasOptions = {}): ExportToCanvasResult {
+    const dim = this.sheet.dimension
+    const range = opts.range ?? {
+      top: 0,
+      left: 0,
+      bottom: Math.max(0, dim.rows - 1),
+      right: Math.max(0, dim.cols - 1),
+    }
+    const includeHeaders = opts.includeHeaders ?? false
+    const background = opts.background ?? '#FFFFFF'
+
+    // 导出几何固定 zoom=1(自然尺寸,与屏幕缩放无关);清晰度靠 scale
+    const m = new GridMetrics(this.sheet, 1)
+    const hw = m.rowHeaderWidth
+    const hh = m.colHeaderHeight
+    const gridOriginX = m.colLeft(range.left)
+    const gridOriginY = m.rowTop(range.top)
+    const bodyW = m.colLeft(range.right + 1) - gridOriginX
+    const bodyH = m.rowTop(range.bottom + 1) - gridOriginY
+
+    // 画布(含表头带)css 尺寸 → 据此 + scale 定设备像素;裁掉表头时事后 crop
+    const cssW = hw + bodyW
+    const cssH = hh + bodyH
+    const cap = opts.maxPixels ?? 16384
+    let scale = opts.scale ?? 2
+    scale = Math.min(scale, cap / Math.max(1, cssW), cap / Math.max(1, cssH))
+    if (!(scale > 0)) scale = 1
+
+    const tmp = document.createElement('canvas')
+
+    // 临时换实例字段,复用 paint();完事还原
+    const saved = {
+      canvas: this.canvas,
+      ctx: this.ctx,
+      metrics: this.metrics,
+      freeze: this.freeze,
+      selection: this.selection,
+      dpr: this.dpr,
+      showGridLines: this.sheet.showGridLines,
+    }
+    this.canvas = tmp
+    this.ctx = tmp.getContext('2d')!
+    this.metrics = m
+    this.freeze = { frozenRows: 0, frozenCols: 0, frozenWidth: 0, frozenHeight: 0 }
+    this.selection = null
+    this.dpr = scale
+    if (opts.gridlines !== undefined) this.sheet.showGridLines = opts.gridlines
+
+    try {
+      this.paint(
+        { scrollX: gridOriginX, scrollY: gridOriginY, width: cssW, height: cssH, zoom: 1 },
+        { headers: includeHeaders, pageBreaks: false, selection: false },
+        background,
+      )
+    } finally {
+      this.canvas = saved.canvas
+      this.ctx = saved.ctx
+      this.metrics = saved.metrics
+      this.freeze = saved.freeze
+      this.selection = saved.selection
+      this.dpr = saved.dpr
+      this.sheet.showGridLines = saved.showGridLines
+    }
+
+    if (includeHeaders) {
+      return { canvas: tmp, scale, range, bodyW, bodyH, metrics: m, originX: hw, originY: hh, gridOriginX, gridOriginY }
+    }
+    // 无表头: 裁掉左上的表头带
+    const out = document.createElement('canvas')
+    out.width = Math.max(1, Math.round(bodyW * scale))
+    out.height = Math.max(1, Math.round(bodyH * scale))
+    const octx = out.getContext('2d')!
+    octx.fillStyle = background
+    octx.fillRect(0, 0, out.width, out.height)
+    octx.drawImage(tmp, Math.round(hw * scale), Math.round(hh * scale), out.width, out.height, 0, 0, out.width, out.height)
+    return { canvas: out, scale, range, bodyW, bodyH, metrics: m, originX: 0, originY: 0, gridOriginX, gridOriginY }
   }
 
   /** 手动分页符: 蓝色虚线(在正文区内,随内容滚动) */

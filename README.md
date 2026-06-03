@@ -14,7 +14,8 @@
 - 🖼 **图片 + 图表**(DrawingML → ECharts 近似还原)、**形状/文本框**、**迷你图**(sparklines)、**批注**、**数据验证**下拉、**自动筛选**样式
 - 📝 **文本溢出**到相邻空格、**自动行高**
 - 🖱 **交互**:单元格选区(合并感知)、拖选、公式栏、状态栏(计数/求和/均值/最值)、超链接可点、裁切文本悬停看全文、Ctrl+C 复制为 TSV
-- ⚡ **按需加载**(无图表文件不下载 echarts)、**友好错误兜底**(损坏/加密/旧 .xls)、解析失败自动给出可读提示
+- 🖨 **导出 / 打印**:整表或选区导出 **PNG/JPEG**、**PDF**(分页,可选 jspdf)、**系统打印**(可另存 PDF),多表批量;`beforeRenderPage` 钩子注入页眉/页脚/水印/页码
+- ⚡ **按需加载**(无图表文件不下载 echarts、不导出 PDF 不下载 jspdf)、**友好错误兜底**(损坏/加密/旧 .xls)、解析失败自动给出可读提示
 
 > 预览不需要公式引擎 —— .xlsx 缓存了公式结果,直接显示。详见 [EXCEL还原难点.md](./EXCEL还原难点.md)。
 
@@ -24,9 +25,11 @@
 npm i ooxml-excel-preview vue exceljs
 # echarts 可选:仅当要渲染图表时才需要
 npm i echarts
+# jspdf 可选:仅当要导出 PDF 时才需要(打印/图片导出不需要)
+npm i jspdf
 ```
 
-`vue` / `exceljs` / `echarts` 是 **peerDependencies**(由宿主项目提供,组件本身不重复打包)。`echarts` 为可选 —— 未安装时,含图表的文件会显示占位提示,其余正常。
+`vue` / `exceljs` 是必需 **peerDependencies**;`echarts` / `jspdf` 为**可选** peer —— 未安装时分别只影响"图表渲染""PDF 导出",其余功能正常,且不会被打包进你的产物(运行时才动态加载)。
 
 ## 使用
 
@@ -128,7 +131,37 @@ console.log(wb.sheets[0].cells)
 | `rendered` / `error` / `progress` | 见上 |
 
 ### 命令式 API(模板 ref)
-`load(src)` / `getWorkbook()` / `getActiveSheet()` / `setActiveSheet(i)` / `getSelection()` / `setSelection(range)` / `rectOf(row,col)` / `rectOfRange(range)` / `redraw()`。
+`load(src)` / `getWorkbook()` / `getActiveSheet()` / `setActiveSheet(i)` / `getSelection()` / `setSelection(range)` / `rectOf(row,col)` / `rectOfRange(range)` / `redraw()`,以及下面的导出方法。
+
+### 导出 / 打印
+内置工具栏右侧有「导出 ▾」菜单(PNG / PDF / 打印)。也可命令式调用(模板 ref / 插件 `viewer`):
+
+| 方法 | 说明 |
+|---|---|
+| `exportImage(opts?)` | → `Promise<Blob>`,当前/指定表渲染为图片(png/jpeg/webp) |
+| `downloadImage(opts?)` | 导出图片并触发下载 |
+| `exportPdf(opts?)` | → `Promise<Blob>`,分页 PDF(需可选依赖 `jspdf`) |
+| `downloadPdf(opts?)` | 导出 PDF 并触发下载 |
+| `print(opts?)` | 打开系统打印对话框(可另存为 PDF,零依赖) |
+
+公共选项:`target`(`'active'`(默认)/`'all'`/索引/索引数组)、`range`(限定单元格区域)、`scale`(清晰度,默认 2)、`includeHeaders`、`gridlines`、`background`;PDF/打印另有 `format`(a4/a3/letter/`[宽,高]mm`)、`orientation`、`margin`(mm)、`fitToWidth`。
+
+**`beforeRenderPage` 扩展钩子** —— 每页贴图后调用,拿到 `jsPDF` 实例画页眉/页脚/水印/页码:
+```ts
+const viewer = ref()  // <ExcelViewer ref="viewer" />
+await viewer.value.downloadPdf({
+  target: 'all',
+  beforeRenderPage: ({ doc, pageIndex, pageCount, pageWidth, pageHeight, margin, sheetName }) => {
+    doc.setFontSize(9); doc.setTextColor(120)
+    doc.text(sheetName, margin.left, pageHeight - 5)
+    doc.text(`第 ${pageIndex + 1} / ${pageCount} 页`, pageWidth - margin.right, pageHeight - 5, { align: 'right' })
+    doc.setFontSize(56); doc.setTextColor(230)
+    doc.text('PREVIEW', pageWidth / 2, pageHeight / 2, { align: 'center', angle: 30 })  // 水印
+  },
+})
+```
+打印另有 `title` / `headerHtml` / `footerHtml`(每页 HTML 片段)。
+> 图片/图表/形状是 DOM 叠加层,导出时会自动合成到底图;"导出全部表"中非当前表的图表需 `echarts` 可用才能离屏渲染。
 
 ### 分层 UI(slots)
 具名 slot:`toolbar` / `statusbar` / `loading` / `error` / `empty`(缺省用内置)。
@@ -182,6 +215,7 @@ const highlightNegatives = definePlugin({
 - SmartArt;形状仅支持 rect/roundRect/ellipse + 文本(复杂自定义几何按矩形近似)
 - `.xls`(旧 BIFF 二进制)/ 加密文件(给出友好提示)
 - 图表为 ECharts 近似,非像素级一致
+- 导出为**位图**(PNG/PDF 内嵌图片),非矢量;PDF 按页宽缩放后竖向分页
 
 ## 开发
 

@@ -49,6 +49,24 @@ export type {
   Rect,
 } from './core/plugin'
 
+// 扩展: 导出 / 打印(选项类型 + beforeRenderPage 钩子)。
+// 命令式方法(exportImage/downloadImage/exportPdf/downloadPdf/print)在组件 ref(ViewerApi)上。
+export type {
+  ExportTarget,
+  RenderExportOptions,
+  ImageExportOptions,
+  PdfExportOptions,
+  PrintOptions,
+  PageSetup,
+  PageFormat,
+  Orientation,
+  Margins,
+  PdfPageContext,
+  BeforeRenderPage,
+} from './core/export/types'
+// 低层导出工具(自定义编排/独立使用时可选)
+export { canvasToBlob, canvasToDataURL, downloadBlob } from './core/export/raster'
+
 // 作为 Vue 插件全局注册
 const plugin: Plugin = {
   install(app: App) {

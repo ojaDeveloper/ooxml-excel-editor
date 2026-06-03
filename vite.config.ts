@@ -74,7 +74,8 @@ export default defineConfig(({ mode, command }) => {
             fileName: 'ooxml-excel-preview',
           },
           rollupOptions: {
-            external: ['vue', 'exceljs', 'echarts'],
+            // jspdf 同 echarts: 可选 peer,运行时动态 import,不打进库
+            external: ['vue', 'exceljs', 'echarts', 'jspdf'],
             output: {
               // 把唯一的 css 产物固定命名为 style.css，方便宿主 import '.../style.css'
               assetFileNames: (info) =>

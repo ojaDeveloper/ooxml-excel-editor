@@ -17,10 +17,24 @@ import type { ParseProgress } from '@/core/progress'
 import type { ViewerTheme } from '@/core/render/theme'
 import { useExcelDocument } from '@/composables/useExcelDocument'
 import { CanvasRenderer, type ViewState } from '@/core/render/canvas-renderer'
-import { colIndexToLetters } from '@/core/layout/grid-metrics'
+import { GridMetrics, colIndexToLetters } from '@/core/layout/grid-metrics'
 import { anchorRect } from '@/core/overlay/anchor'
 import { chartToOption } from '@/core/overlay/chart-mapper'
 import { revokeImages } from '@/core/finalize'
+import {
+  canvasToBlob,
+  compositeOverlays,
+  downloadBlob,
+  exportToPdf,
+  loadImage,
+  printSheets,
+  type ExportDecorations,
+  type ExportSheetImage,
+  type ExportTarget,
+  type ImageExportOptions,
+  type PdfExportOptions,
+  type PrintOptions,
+} from '@/core/export'
 import ViewerToolbar from './ViewerToolbar.vue'
 import SheetTabs from './SheetTabs.vue'
 
@@ -992,6 +1006,139 @@ function rectOfRange(range: MergeRange): { x: number; y: number; w: number; h: n
   return { x: tl.x, y: tl.y, w: br.x + br.w - tl.x, h: br.y + br.h - tl.y }
 }
 
+// ---------------- 导出 / 打印 ----------------
+/** target → 工作表索引列表 */
+function resolveTargets(target: ExportTarget = 'active'): number[] {
+  const wb = workbook.value
+  if (!wb) return []
+  if (target === 'all') return wb.sheets.map((_, i) => i).filter((i) => wb.sheets[i].state === 'visible')
+  if (target === 'active') return [activeSheet.value]
+  if (typeof target === 'number') return [target]
+  return target.filter((i) => wb.sheets[i])
+}
+
+/** 离屏渲染一个图表为 dataURL(供非当前表 / 统一合成);echarts 不可用返回 null */
+async function chartDataUrl(spec: ChartSpec, metrics: GridMetrics): Promise<string | null> {
+  let echarts: typeof EChartsNS
+  try {
+    echarts = await loadECharts()
+  } catch {
+    return null
+  }
+  const rect = anchorRect(metrics, spec.anchor)
+  const div = document.createElement('div')
+  div.style.cssText = `position:fixed;left:-10000px;top:0;width:${Math.max(80, Math.round(rect.width))}px;height:${Math.max(60, Math.round(rect.height))}px`
+  document.body.appendChild(div)
+  const inst = echarts.init(div)
+  try {
+    inst.setOption(chartToOption(spec))
+    return inst.getDataURL({ pixelRatio: 2, backgroundColor: '#fff' })
+  } catch {
+    return null
+  } finally {
+    inst.dispose()
+    div.remove()
+  }
+}
+
+/** 收集一个工作表的叠加层装饰(图片/图表/形状),供合成到导出底图 */
+async function collectDecorations(s: SheetModel, metrics: GridMetrics): Promise<ExportDecorations> {
+  const images: { source: CanvasImageSource; anchor: ImageAnchor }[] = []
+  for (const anchor of s.images) {
+    if (!anchor.src) continue
+    try {
+      images.push({ source: await loadImage(anchor.src), anchor })
+    } catch {
+      /* 单张图加载失败跳过 */
+    }
+  }
+  const charts: { source: CanvasImageSource; anchor: ImageAnchor }[] = []
+  for (const chart of s.charts) {
+    const url = await chartDataUrl(chart, metrics)
+    if (!url) continue
+    try {
+      charts.push({ source: await loadImage(url), anchor: chart.anchor })
+    } catch {
+      /* 跳过 */
+    }
+  }
+  return { images, charts, shapes: s.shapes }
+}
+
+/** 为一个工作表生成合成底图(格子 + 图片/图表/形状) */
+async function buildSheetImage(sheetIdx: number, opts: PdfExportOptions): Promise<ExportSheetImage | null> {
+  const wb = workbook.value
+  const s = wb?.sheets[sheetIdx]
+  if (!wb || !s) return null
+  // 当前表复用 live renderer;其它表临时建一个(在离屏 canvas 上)
+  const r =
+    sheetIdx === activeSheet.value && renderer.value
+      ? renderer.value
+      : new CanvasRenderer(document.createElement('canvas'), s, wb, 1, {
+          theme: effectiveTheme.value,
+          cellStyle: hasCellStyleHook.value ? combinedCellStyle : undefined,
+        })
+  const base = r.exportToCanvas({
+    range: opts.range,
+    scale: opts.scale,
+    includeHeaders: opts.includeHeaders,
+    gridlines: opts.gridlines,
+    background: opts.background,
+  })
+  const deco = await collectDecorations(s, base.metrics)
+  compositeOverlays(base, deco)
+  return { canvas: base.canvas, bodyWcss: base.bodyW, bodyHcss: base.bodyH, sheetName: s.name }
+}
+
+function baseName(): string {
+  return (props.fileName || workbook.value?.sheets[activeSheet.value]?.name || 'workbook').replace(/\.[^.]+$/, '')
+}
+
+/** 导出当前/指定表为图片 Blob(图片为单表;多表请用 PDF) */
+async function exportImage(opts: ImageExportOptions = {}): Promise<Blob> {
+  const targets = resolveTargets(opts.target)
+  if (!targets.length) throw new Error('无可导出的工作表')
+  const img = await buildSheetImage(targets[0], opts)
+  if (!img) throw new Error('导出失败: 无法生成底图')
+  return canvasToBlob(img.canvas, opts.type ?? 'png', opts.quality ?? 0.92)
+}
+async function downloadImage(opts: ImageExportOptions = {}): Promise<void> {
+  const blob = await exportImage(opts)
+  const ext = opts.type === 'jpeg' ? 'jpg' : opts.type === 'webp' ? 'webp' : 'png'
+  downloadBlob(blob, opts.fileName ?? `${baseName()}.${ext}`)
+}
+
+/** 导出为 PDF Blob(每个目标表分页;需可选依赖 jspdf) */
+async function exportPdf(opts: PdfExportOptions = {}): Promise<Blob> {
+  const targets = resolveTargets(opts.target)
+  if (!targets.length) throw new Error('无可导出的工作表')
+  const images = (await Promise.all(targets.map((i) => buildSheetImage(i, opts)))).filter(Boolean) as ExportSheetImage[]
+  return exportToPdf(images, opts)
+}
+async function downloadPdf(opts: PdfExportOptions = {}): Promise<void> {
+  const blob = await exportPdf(opts)
+  downloadBlob(blob, opts.fileName ?? `${baseName()}.pdf`)
+}
+
+/** 打开系统打印(可在对话框另存为 PDF) */
+async function print(opts: PrintOptions = {}): Promise<void> {
+  const targets = resolveTargets(opts.target)
+  if (!targets.length) return
+  const images = (await Promise.all(targets.map((i) => buildSheetImage(i, opts)))).filter(Boolean) as ExportSheetImage[]
+  printSheets(images, { ...opts, title: opts.title ?? baseName() })
+}
+
+/** 工具栏触发 PDF: 捕获 jspdf 缺失等错误,给用户可读提示而非静默失败 */
+async function onExportPdf() {
+  try {
+    await downloadPdf()
+  } catch (e) {
+    const msg = (e as Error)?.message || String(e)
+    emit('error', msg)
+    if (typeof window !== 'undefined' && window.alert) window.alert(msg)
+  }
+}
+
 // ---------------- 命令式 API ----------------
 function programmaticSetSelection(range: MergeRange) {
   selMode.value = 'range'
@@ -1012,6 +1159,11 @@ const viewerApi: ViewerApi = {
   rectOf,
   rectOfRange,
   redraw: () => doRender(),
+  exportImage,
+  downloadImage,
+  exportPdf,
+  downloadPdf,
+  print,
 }
 defineExpose(viewerApi)
 
@@ -1062,12 +1214,24 @@ const PluginOverlays = defineComponent({
 
 <template>
   <div class="excel-viewer" ref="rootEl">
-    <slot v-if="workbook" name="toolbar" :workbook="workbook" :zoom="zoom" :set-zoom="(z: number) => (zoom = z)">
+    <slot
+      v-if="workbook"
+      name="toolbar"
+      :workbook="workbook"
+      :zoom="zoom"
+      :set-zoom="(z: number) => (zoom = z)"
+      :download-image="downloadImage"
+      :download-pdf="downloadPdf"
+      :print="print"
+    >
       <ViewerToolbar
         :file-name="fileName"
         :sheet-count="workbook.sheets.filter((s) => s.state === 'visible').length"
         :zoom="zoom"
         @update:zoom="zoom = $event"
+        @export-image="downloadImage()"
+        @export-pdf="onExportPdf"
+        @print="print()"
       />
     </slot>
 
