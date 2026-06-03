@@ -376,7 +376,10 @@ const selAnchor = ref<Cell | null>(null) // 固定角(扩选时不动)
 const selActive = ref<Cell | null>(null) // 活动角(移动/扩选时变)
 const selMode = ref<'range' | 'rows' | 'cols'>('range')
 const tooltip = ref<{ text: string; x: number; y: number; kind: 'overflow' | 'comment' } | null>(null)
-let dragMode: 'none' | 'cell' | 'row' | 'col' = 'none'
+let dragMode: 'none' | 'cell' | 'row' | 'col' | 'resize-col' | 'resize-row' = 'none'
+let resizeTarget = -1 // 正在拖拽改宽高的列/行索引
+let resizeStartPos = 0 // 起始鼠标坐标(px)
+let resizeStartSize = 0 // 起始宽/高(px)
 let dragMoved = false
 
 function cellRange(c: Cell): MergeRange {
@@ -502,7 +505,30 @@ function selectAll() {
 function onMouseDown(e: MouseEvent) {
   if (e.button !== 0) return
   scrollerEl.value?.focus()
-  // 列边界双向拖拽不在此处理(交给 dblclick 自适应);普通选择走下面
+  const r = renderer.value
+  const p = localXY(e)
+  // 表头边界拖拽改宽高(优先于选择)
+  if (r && p) {
+    if (p.y < r.metrics.colHeaderHeight) {
+      const b = nearColBorder(p.x, p.y)
+      if (b) {
+        dragMode = 'resize-col'
+        resizeTarget = b.col
+        resizeStartPos = p.x
+        resizeStartSize = r.metrics.colWidth(b.col)
+        return
+      }
+    } else if (p.x < r.metrics.rowHeaderWidth) {
+      const b = nearRowBorder(p.x, p.y)
+      if (b) {
+        dragMode = 'resize-row'
+        resizeTarget = b.row
+        resizeStartPos = p.y
+        resizeStartSize = r.metrics.rowHeight(b.row)
+        return
+      }
+    }
+  }
   const hit = hitRegion(e)
   dragMoved = false
   if (hit.region === 'corner') {
@@ -528,6 +554,18 @@ function onMouseMove(e: MouseEvent) {
     const p = localXY(e)
     if (!r || !p) return
     dragMoved = true
+    if (dragMode === 'resize-col') {
+      r.setColWidthPx(resizeTarget, resizeStartSize + (p.x - resizeStartPos))
+      contentSize.value = { w: r.contentWidth, h: r.contentHeight }
+      scheduleRender()
+      return
+    }
+    if (dragMode === 'resize-row') {
+      r.setRowHeightPx(resizeTarget, resizeStartSize + (p.y - resizeStartPos))
+      contentSize.value = { w: r.contentWidth, h: r.contentHeight }
+      scheduleRender()
+      return
+    }
     if (dragMode === 'cell') {
       const cell = r.cellAtScreen(view.value, p.x, p.y)
       if (cell) {
@@ -569,9 +607,14 @@ function updateHover(e: MouseEvent) {
     tooltip.value = null
     return
   }
-  // 列标边界 → 列宽自适应光标
+  // 表头边界 → 改宽高光标
   if (p.y < r.metrics.colHeaderHeight && nearColBorder(p.x, p.y)) {
     sc.style.cursor = 'col-resize'
+    tooltip.value = null
+    return
+  }
+  if (p.x < r.metrics.rowHeaderWidth && nearRowBorder(p.x, p.y)) {
+    sc.style.cursor = 'row-resize'
     tooltip.value = null
     return
   }
@@ -596,7 +639,7 @@ function onMouseLeave() {
   tooltip.value = null
 }
 
-// ---- 列宽自适应(双击列边界) ----
+// ---- 宽高自适应(双击边界) / 边界命中 ----
 function nearColBorder(x: number, y: number): { col: number } | null {
   const r = renderer.value
   if (!r || y >= r.metrics.colHeaderHeight) return null
@@ -607,13 +650,28 @@ function nearColBorder(x: number, y: number): { col: number } | null {
   if (Math.abs(x - rect.x) <= 4 && col > 0) return { col: col - 1 }
   return null
 }
+function nearRowBorder(x: number, y: number): { row: number } | null {
+  const r = renderer.value
+  if (!r || x >= r.metrics.rowHeaderWidth) return null
+  const row = r.rowAtScreen(view.value, y)
+  if (row < 0) return null
+  const rect = r.screenRectOfCell(view.value, row, 0)
+  if (Math.abs(y - (rect.y + rect.h)) <= 4) return { row }
+  if (Math.abs(y - rect.y) <= 4 && row > 0) return { row: row - 1 }
+  return null
+}
 function onDblClick(e: MouseEvent) {
   const r = renderer.value
   const p = localXY(e)
   if (!r || !p) return
-  const hit = nearColBorder(p.x, p.y)
-  if (!hit) return
-  r.autoFitColumn(hit.col)
+  const colHit = nearColBorder(p.x, p.y)
+  if (colHit) {
+    r.autoFitColumn(colHit.col)
+  } else {
+    const rowHit = nearRowBorder(p.x, p.y)
+    if (!rowHit) return
+    r.autoFitRow(rowHit.row)
+  }
   contentSize.value = { w: r.contentWidth, h: r.contentHeight }
   doRender()
 }
@@ -640,14 +698,15 @@ function onKeyDown(e: KeyboardEvent) {
   if (!r || !selActive.value) return
   const maxRow = r.metrics.rows - 1
   const maxCol = r.metrics.cols - 1
+  const ctrl = e.ctrlKey || e.metaKey
   let { row, col } = selActive.value
   let handled = true
   switch (e.key) {
-    case 'ArrowUp': row = Math.max(0, row - 1); break
-    case 'ArrowDown': row = Math.min(maxRow, row + 1); break
-    case 'ArrowLeft': col = Math.max(0, col - 1); break
-    case 'ArrowRight': col = Math.min(maxCol, col + 1); break
-    case 'Home': col = 0; if (e.ctrlKey) row = 0; break
+    case 'ArrowUp': if (ctrl) { const j = jumpEdge(r, row, col, -1, 0); row = j.row; col = j.col } else row = Math.max(0, row - 1); break
+    case 'ArrowDown': if (ctrl) { const j = jumpEdge(r, row, col, 1, 0); row = j.row; col = j.col } else row = Math.min(maxRow, row + 1); break
+    case 'ArrowLeft': if (ctrl) { const j = jumpEdge(r, row, col, 0, -1); row = j.row; col = j.col } else col = Math.max(0, col - 1); break
+    case 'ArrowRight': if (ctrl) { const j = jumpEdge(r, row, col, 0, 1); row = j.row; col = j.col } else col = Math.min(maxCol, col + 1); break
+    case 'Home': col = 0; if (ctrl) row = 0; break
     case 'End': col = maxCol; if (e.ctrlKey) row = maxRow; break
     case 'PageUp': row = Math.max(0, row - pageRows()); break
     case 'PageDown': row = Math.min(maxRow, row + pageRows()); break
@@ -702,6 +761,41 @@ function scrollActiveIntoView() {
     view.value.scrollY = sy
   }
 }
+/** Ctrl+方向: 跳到数据块边界(Excel 行为) */
+function jumpEdge(
+  r: CanvasRenderer,
+  row: number,
+  col: number,
+  dr: number,
+  dc: number,
+): { row: number; col: number } {
+  const maxRow = r.metrics.rows - 1
+  const maxCol = r.metrics.cols - 1
+  const inB = (rr: number, cc: number) => rr >= 0 && rr <= maxRow && cc >= 0 && cc <= maxCol
+  const filled = (rr: number, cc: number) => r.cellText(rr, cc) !== ''
+  let nr = row + dr
+  let nc = col + dc
+  if (!inB(nr, nc)) return { row, col }
+  if (filled(row, col) && filled(nr, nc)) {
+    // 沿填充块走到块尾
+    while (inB(nr + dr, nc + dc) && filled(nr + dr, nc + dc)) {
+      nr += dr
+      nc += dc
+    }
+  } else {
+    // 跳过空白到下一个填充(或边界)
+    while (inB(nr, nc) && !filled(nr, nc)) {
+      if (!inB(nr + dr, nc + dc)) break
+      nr += dr
+      nc += dc
+    }
+  }
+  return { row: nr, col: nc }
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
 async function copySelection() {
   const r = renderer.value
   const s = selection.value
@@ -710,13 +804,34 @@ async function copySelection() {
   const rowEnd = Math.min(s.bottom, s.top + 4999)
   const colEnd = Math.min(s.right, s.left + 255)
   const lines: string[] = []
+  const htmlRows: string[] = []
   for (let row = s.top; row <= rowEnd; row++) {
-    const cols: string[] = []
-    for (let col = s.left; col <= colEnd; col++) cols.push(r.cellText(row, col))
-    lines.push(cols.join('\t'))
+    const cells: string[] = []
+    const htmlCells: string[] = []
+    for (let col = s.left; col <= colEnd; col++) {
+      const text = r.cellText(row, col)
+      cells.push(text)
+      const css = r.cellInlineStyle(row, col)
+      htmlCells.push(`<td${css ? ` style="${css}"` : ''}>${escapeHtml(text)}</td>`)
+    }
+    lines.push(cells.join('\t'))
+    htmlRows.push(`<tr>${htmlCells.join('')}</tr>`)
   }
+  const tsv = lines.join('\n')
+  const html = `<table border="1" style="border-collapse:collapse">${htmlRows.join('')}</table>`
   try {
-    await navigator.clipboard.writeText(lines.join('\n'))
+    // 优先写 text/plain + text/html(粘到 Word/Excel 保留表格与格式)
+    const ClipItem = (window as any).ClipboardItem
+    if (ClipItem && navigator.clipboard?.write) {
+      await navigator.clipboard.write([
+        new ClipItem({
+          'text/plain': new Blob([tsv], { type: 'text/plain' }),
+          'text/html': new Blob([html], { type: 'text/html' }),
+        }),
+      ])
+    } else {
+      await navigator.clipboard.writeText(tsv)
+    }
   } catch {
     /* 某些环境无剪贴板权限，静默忽略 */
   }

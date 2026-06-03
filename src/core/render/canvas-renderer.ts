@@ -156,7 +156,62 @@ export class CanvasRenderer {
     this.rebuildMetrics()
   }
 
-  /** 列宽变化后重建几何(供 autoFitColumn 用) */
+  /** 双击行边界: 行高自适应到该行内容最高处 */
+  autoFitRow(row: number): void {
+    const ctx = this.ctx
+    let maxH = this.sheet.defaultRowHeight
+    for (const cell of this.sheet.cells.values()) {
+      if (cell.row !== row || cell.type === 'empty') continue
+      if (this.merges.rangeOf(row, cell.col)) continue
+      const style = this.styleOf(cell)
+      const text = this.cellText(row, cell.col)
+      if (!text) continue
+      const lineHpx = style.font.size * (96 / 72) * LINE_HEIGHT_FACTOR
+      let lines = 1
+      if (style.wrapText) {
+        const z = this.metrics.zoom
+        const availW = this.metrics.colWidth(cell.col) / z - CELL_PADDING * 2
+        ctx.font = fontToCss(style.font, 1)
+        lines = wrapLines(ctx, text, fontToCss(style.font, 1), availW).length
+      } else {
+        lines = text.split('\n').length
+      }
+      const h = lines * lineHpx + CELL_PADDING * 2
+      if (h > maxH) maxH = h
+    }
+    const info = this.sheet.rows.get(row)
+    this.sheet.rows.set(row, { height: Math.ceil(maxH), hidden: info?.hidden ?? false })
+    this.rebuildMetrics()
+  }
+
+  /** 拖拽改列宽(传入屏幕像素,内部换算为非缩放存储) */
+  setColWidthPx(col: number, px: number): void {
+    const info = this.sheet.columns.get(col)
+    this.sheet.columns.set(col, { width: Math.max(8, px / this.metrics.zoom), hidden: info?.hidden ?? false })
+    this.rebuildMetrics()
+  }
+  /** 拖拽改行高 */
+  setRowHeightPx(row: number, px: number): void {
+    const info = this.sheet.rows.get(row)
+    this.sheet.rows.set(row, { height: Math.max(6, px / this.metrics.zoom), hidden: info?.hidden ?? false })
+    this.rebuildMetrics()
+  }
+
+  /** 复制带格式用: 单元格的内联 CSS(粗体/斜体/色/底色/对齐) */
+  cellInlineStyle(row: number, col: number): string {
+    const cell = this.sheet.cells.get(cellKey(row, col))
+    if (!cell) return ''
+    const s = this.styleOf(cell)
+    const css: string[] = []
+    if (s.font.bold) css.push('font-weight:bold')
+    if (s.font.italic) css.push('font-style:italic')
+    if (s.font.color && s.font.color !== '#000000') css.push('color:' + s.font.color)
+    if (s.fill.type === 'solid' && s.fill.fgColor) css.push('background:' + s.fill.fgColor)
+    if (s.hAlign === 'center' || s.hAlign === 'right') css.push('text-align:' + s.hAlign)
+    return css.join(';')
+  }
+
+  /** 列宽/行高变化后重建几何 */
   rebuildMetrics(): void {
     this.metrics = new GridMetrics(this.sheet, this.metrics.zoom)
     this.freeze = computeFreeze(this.sheet, this.metrics)
