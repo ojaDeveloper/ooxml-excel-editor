@@ -1,0 +1,956 @@
+<script setup lang="ts">
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import type * as EChartsNS from 'echarts'
+import type { ExcelSource } from '@/core/loader'
+import type { ChartSpec, ImageAnchor, MergeRange, SheetModel, WorkbookModel } from '@/core/model/types'
+import type { ParseProgress } from '@/core/progress'
+import { useExcelDocument } from '@/composables/useExcelDocument'
+import { CanvasRenderer, type ViewState } from '@/core/render/canvas-renderer'
+import { colIndexToLetters } from '@/core/layout/grid-metrics'
+import { anchorRect } from '@/core/overlay/anchor'
+import { chartToOption } from '@/core/overlay/chart-mapper'
+import { revokeImages } from '@/core/finalize'
+import ViewerToolbar from './ViewerToolbar.vue'
+import SheetTabs from './SheetTabs.vue'
+
+const props = defineProps<{
+  src?: ExcelSource
+  fileName?: string
+}>()
+
+const emit = defineEmits<{
+  /** 工作簿解析并首次渲染完成 */
+  (e: 'rendered', workbook: WorkbookModel): void
+  /** 解析失败(友好错误文案) */
+  (e: 'error', message: string): void
+  /** 解析进度(分阶段) */
+  (e: 'progress', progress: ParseProgress): void
+}>()
+
+const { loading, error, workbook, load, progress } = useExcelDocument()
+
+const progressLabel = computed(() => {
+  const p = progress.value
+  if (!p) return ''
+  return p.stage === 'read' ? '读取文件…' : p.stage === 'parse' ? '解析中…' : '构建表格…'
+})
+const progressPct = computed(() => {
+  const p = progress.value
+  return p && p.ratio != null ? Math.round(p.ratio * 100) : null
+})
+
+const activeSheet = ref(0)
+const zoom = ref(1)
+
+const rootEl = ref<HTMLElement | null>(null)
+const renderAreaEl = ref<HTMLElement | null>(null)
+const canvasEl = ref<HTMLCanvasElement | null>(null)
+const scrollerEl = ref<HTMLElement | null>(null)
+// 叠加层四象限容器(冻结窗格): 主区 / 冻结行 / 冻结列 / 冻结角
+const ovMain = ref<HTMLElement | null>(null)
+const ovFRow = ref<HTMLElement | null>(null)
+const ovFCol = ref<HTMLElement | null>(null)
+const ovCorner = ref<HTMLElement | null>(null)
+
+const renderer = shallowRef<CanvasRenderer | null>(null)
+const view = ref<ViewState>({ scrollX: 0, scrollY: 0, width: 0, height: 0, zoom: 1 })
+
+const sheet = computed<SheetModel | null>(() => {
+  const wb = workbook.value
+  if (!wb) return null
+  return wb.sheets[activeSheet.value] ?? wb.sheets[0] ?? null
+})
+
+const contentSize = ref({ w: 0, h: 0 })
+
+// ---------------- 图表实例管理 ----------------
+// echarts 按需加载: 只有 sheet 含图表时才动态 import，省掉无图表文件的 ~1MB 首包
+let echartsMod: typeof EChartsNS | null = null
+async function loadECharts(): Promise<typeof EChartsNS> {
+  if (!echartsMod) echartsMod = await import('echarts')
+  return echartsMod
+}
+
+type Quad = 'main' | 'frow' | 'fcol' | 'corner'
+interface ChartInstance {
+  el: HTMLDivElement
+  inst: EChartsNS.ECharts
+  spec: ChartSpec
+  quad: Quad
+}
+let chartInstances: ChartInstance[] = []
+interface ImageEl {
+  el: HTMLImageElement
+  anchorIdx: number
+  quad: Quad
+}
+let imageEls: ImageEl[] = []
+// echarts 缺失时的占位框(仍按图表锚点定位，给出友好提示)
+interface ChartPlaceholder {
+  el: HTMLDivElement
+  spec: ChartSpec
+  quad: Quad
+}
+let chartPlaceholders: ChartPlaceholder[] = []
+
+/** 锚点落在哪个象限(冻结行/列内的钉住,其余随滚动) */
+function quadrantOf(anchor: ImageAnchor): Quad {
+  const fz = renderer.value!.freezeGeometry
+  const top = anchor.from.row < fz.frozenRows
+  const left = anchor.from.col < fz.frozenCols
+  if (top && left) return 'corner'
+  if (top) return 'frow'
+  if (left) return 'fcol'
+  return 'main'
+}
+function ovContainer(q: Quad): HTMLElement | null {
+  return q === 'main' ? ovMain.value : q === 'frow' ? ovFRow.value : q === 'fcol' ? ovFCol.value : ovCorner.value
+}
+
+function disposeOverlays() {
+  for (const c of chartInstances) {
+    c.inst.dispose()
+    c.el.remove()
+  }
+  chartInstances = []
+  for (const p of chartPlaceholders) p.el.remove()
+  chartPlaceholders = []
+  for (const im of imageEls) im.el.remove()
+  imageEls = []
+}
+
+async function buildOverlays() {
+  disposeOverlays()
+  const s = sheet.value
+  if (!s || !ovMain.value) return
+
+  for (let i = 0; i < s.images.length; i++) {
+    const img = s.images[i]
+    const quad = quadrantOf(img)
+    const el = document.createElement('img')
+    el.src = img.src
+    el.draggable = false
+    el.style.position = 'absolute'
+    el.style.objectFit = 'fill'
+    el.style.pointerEvents = 'none'
+    ovContainer(quad)?.appendChild(el)
+    imageEls.push({ el, anchorIdx: i, quad })
+  }
+
+  if (s.charts.length) {
+    let echarts: typeof EChartsNS | null = null
+    try {
+      echarts = await loadECharts()
+    } catch (e) {
+      // echarts 是可选 peer 依赖，宿主未安装时会走到这里
+      console.warn('[ooxml-preview] 未能加载 echarts，图表降级为占位提示。请安装依赖: npm i echarts', e)
+    }
+    // 异步加载期间可能已切表，确认当前仍是该 sheet 才挂
+    if (sheet.value !== s) return
+
+    for (const chart of s.charts) {
+      const quad = quadrantOf(chart.anchor)
+      if (echarts) {
+        const el = document.createElement('div')
+        el.style.cssText = chartBoxCss
+        ovContainer(quad)?.appendChild(el)
+        const inst = echarts.init(el)
+        try {
+          inst.setOption(chartToOption(chart))
+        } catch (e) {
+          console.warn('[ooxml-preview] 图表渲染失败:', e)
+        }
+        chartInstances.push({ el, inst, spec: chart, quad })
+      } else {
+        // 降级: 在图表位置画一个友好占位框
+        const el = document.createElement('div')
+        el.style.cssText = chartBoxCss + placeholderCss
+        el.innerHTML =
+          '<div style="font-size:22px;line-height:1">📊</div>' +
+          '<div style="margin-top:6px;font-weight:600">图表</div>' +
+          '<div style="margin-top:2px;font-size:11px;color:#9aa4ae">渲染需安装 echarts 依赖</div>'
+        ovContainer(quad)?.appendChild(el)
+        chartPlaceholders.push({ el, spec: chart, quad })
+      }
+    }
+  }
+  positionOverlays()
+}
+
+const chartBoxCss =
+  'position:absolute;background:rgba(255,255,255,0.96);border:1px solid #e2e4e7;box-shadow:0 1px 4px rgba(0,0,0,0.08);'
+const placeholderCss =
+  'display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#6b7785;border-style:dashed;box-sizing:border-box;padding:8px;overflow:hidden;'
+
+function positionOverlays() {
+  const r = renderer.value
+  const s = sheet.value
+  if (!r || !s) return
+  const hw = r.metrics.rowHeaderWidth
+  const hh = r.metrics.colHeaderHeight
+  const fz = r.freezeGeometry
+  const fw = fz.frozenWidth
+  const fh = fz.frozenHeight
+  const bodyW = Math.max(0, view.value.width - hw - fw)
+  const bodyH = Math.max(0, view.value.height - hh - fh)
+
+  // 四象限容器各自裁到对应区域(冻结角/行/列/主区)
+  setQuad(ovCorner.value, hw, hh, fw, fh)
+  setQuad(ovFRow.value, hw + fw, hh, bodyW, fh)
+  setQuad(ovFCol.value, hw, hh + fh, fw, bodyH)
+  setQuad(ovMain.value, hw + fw, hh + fh, bodyW, bodyH)
+
+  for (const im of imageEls) {
+    placeInQuad(im.el, anchorRect(r.metrics, s.images[im.anchorIdx]), im.quad, fw, fh)
+  }
+  for (const c of chartInstances) {
+    placeInQuad(c.el, anchorRect(r.metrics, c.spec.anchor), c.quad, fw, fh)
+    c.inst.resize()
+  }
+  for (const p of chartPlaceholders) {
+    placeInQuad(p.el, anchorRect(r.metrics, p.spec.anchor), p.quad, fw, fh)
+  }
+}
+
+function setQuad(el: HTMLElement | null, left: number, top: number, w: number, h: number) {
+  if (!el) return
+  el.style.left = left + 'px'
+  el.style.top = top + 'px'
+  el.style.width = Math.max(0, w) + 'px'
+  el.style.height = Math.max(0, h) + 'px'
+}
+
+/** 把元素定位到所在象限容器内的相对坐标(冻结方向不减滚动量) */
+function placeInQuad(
+  el: HTMLElement,
+  rect: { left: number; top: number; width: number; height: number },
+  quad: Quad,
+  fw: number,
+  fh: number,
+) {
+  const sx = view.value.scrollX
+  const sy = view.value.scrollY
+  // 主区/冻结行的横向随滚动(容器从 fw 处起,故减 fw);冻结列/角横向固定
+  const x = quad === 'main' || quad === 'frow' ? rect.left - fw - sx : rect.left
+  // 主区/冻结列的纵向随滚动(容器从 fh 处起,故减 fh);冻结行/角纵向固定
+  const y = quad === 'main' || quad === 'fcol' ? rect.top - fh - sy : rect.top
+  el.style.left = x + 'px'
+  el.style.top = y + 'px'
+  el.style.width = rect.width + 'px'
+  el.style.height = rect.height + 'px'
+}
+
+// ---------------- 渲染 ----------------
+function doRender() {
+  const r = renderer.value
+  if (!r) return
+  view.value.zoom = zoom.value
+  r.setSelection(selection.value)
+  r.render(view.value)
+  positionOverlays()
+}
+
+function rebuildRenderer() {
+  const s = sheet.value
+  const wb = workbook.value
+  const canvas = canvasEl.value
+  if (!s || !wb || !canvas) return
+  renderer.value = new CanvasRenderer(canvas, s, wb, zoom.value)
+  contentSize.value = { w: renderer.value.contentWidth, h: renderer.value.contentHeight }
+  clearSelection() // 切表清空选区
+  tooltip.value = null
+  // 重置滚动
+  if (scrollerEl.value) {
+    scrollerEl.value.scrollLeft = 0
+    scrollerEl.value.scrollTop = 0
+  }
+  view.value.scrollX = 0
+  view.value.scrollY = 0
+  measure()
+  buildOverlays()
+  doRender()
+}
+
+function measure() {
+  const area = renderAreaEl.value
+  if (!area) return
+  view.value.width = area.clientWidth
+  view.value.height = area.clientHeight
+}
+
+function onScroll() {
+  const sc = scrollerEl.value
+  if (!sc) return
+  view.value.scrollX = sc.scrollLeft
+  view.value.scrollY = sc.scrollTop
+  tooltip.value = null
+  doRender()
+}
+
+let resizeObserver: ResizeObserver | null = null
+
+onMounted(() => {
+  if (props.src) load(props.src)
+  resizeObserver = new ResizeObserver(() => {
+    measure()
+    doRender()
+  })
+  if (renderAreaEl.value) resizeObserver.observe(renderAreaEl.value)
+})
+
+onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
+  disposeOverlays()
+  if (workbook.value) revokeImages(workbook.value)
+})
+
+watch(() => props.src, (s) => {
+  if (s) load(s)
+})
+
+watch(workbook, async (wb) => {
+  if (!wb) return
+  activeSheet.value = wb.activeSheet
+  await nextTick()
+  rebuildRenderer()
+  emit('rendered', wb)
+})
+
+watch(error, (msg) => {
+  if (msg) emit('error', msg)
+})
+
+watch(progress, (p) => {
+  if (p) emit('progress', p)
+})
+
+watch(activeSheet, async () => {
+  await nextTick()
+  rebuildRenderer()
+})
+
+watch(zoom, async (z) => {
+  const r = renderer.value
+  const sc = scrollerEl.value
+  if (!r) return
+  // 缩放前记录视口中心相对内容的比例，缩放后还原中心，避免"跳到左上角"
+  const ratioX = sc && contentSize.value.w ? (sc.scrollLeft + sc.clientWidth / 2) / contentSize.value.w : 0
+  const ratioY = sc && contentSize.value.h ? (sc.scrollTop + sc.clientHeight / 2) / contentSize.value.h : 0
+  r.setZoom(z)
+  contentSize.value = { w: r.contentWidth, h: r.contentHeight }
+  await nextTick()
+  if (sc) {
+    sc.scrollLeft = Math.max(0, ratioX * contentSize.value.w - sc.clientWidth / 2)
+    sc.scrollTop = Math.max(0, ratioY * contentSize.value.h - sc.clientHeight / 2)
+    view.value.scrollX = sc.scrollLeft
+    view.value.scrollY = sc.scrollTop
+  }
+  doRender()
+})
+
+// ---------------- 交互: 选区 / 超链接 / 悬停 / 复制 ----------------
+type Cell = { row: number; col: number }
+const selAnchor = ref<Cell | null>(null) // 固定角(扩选时不动)
+const selActive = ref<Cell | null>(null) // 活动角(移动/扩选时变)
+const selMode = ref<'range' | 'rows' | 'cols'>('range')
+const tooltip = ref<{ text: string; x: number; y: number; kind: 'overflow' | 'comment' } | null>(null)
+let dragMode: 'none' | 'cell' | 'row' | 'col' = 'none'
+let dragMoved = false
+
+function cellRange(c: Cell): MergeRange {
+  return { top: c.row, left: c.col, bottom: c.row, right: c.col }
+}
+
+const selection = computed<MergeRange | null>(() => {
+  const r = renderer.value
+  const a = selAnchor.value
+  const b = selActive.value
+  if (!r || !a || !b) return null
+  if (selMode.value === 'rows') {
+    return { top: Math.min(a.row, b.row), bottom: Math.max(a.row, b.row), left: 0, right: r.metrics.cols - 1 }
+  }
+  if (selMode.value === 'cols') {
+    return { left: Math.min(a.col, b.col), right: Math.max(a.col, b.col), top: 0, bottom: r.metrics.rows - 1 }
+  }
+  const ra = r.mergeAt(a.row, a.col) ?? cellRange(a)
+  const rb = r.mergeAt(b.row, b.col) ?? cellRange(b)
+  return {
+    top: Math.min(ra.top, rb.top),
+    left: Math.min(ra.left, rb.left),
+    bottom: Math.max(ra.bottom, rb.bottom),
+    right: Math.max(ra.right, rb.right),
+  }
+})
+
+const activeCellAddr = computed(() => {
+  const c = selActive.value
+  return c ? colIndexToLetters(c.col) + (c.row + 1) : ''
+})
+const selRangeLabel = computed(() => {
+  const s = selection.value
+  if (!s || (s.top === s.bottom && s.left === s.right)) return ''
+  return `${colIndexToLetters(s.left)}${s.top + 1}:${colIndexToLetters(s.right)}${s.bottom + 1}`
+})
+const formulaBarText = computed(() => {
+  const r = renderer.value
+  const c = selActive.value
+  if (!r || !c) return ''
+  return r.cellFormula(c.row, c.col) ?? r.cellText(c.row, c.col)
+})
+const stats = computed(() => {
+  const r = renderer.value
+  const s = selection.value
+  return r && s ? r.selectionStats(s) : null
+})
+
+function fmtNum(n: number): string {
+  if (!isFinite(n)) return '—'
+  return n.toLocaleString('en-US', { maximumFractionDigits: 2 })
+}
+
+function clearSelection() {
+  selAnchor.value = null
+  selActive.value = null
+  selMode.value = 'range'
+}
+
+// ---- 命中区域 ----
+type Hit =
+  | { region: 'cell'; row: number; col: number }
+  | { region: 'row'; row: number }
+  | { region: 'col'; col: number }
+  | { region: 'corner' }
+  | { region: 'none' }
+
+function localXY(e: MouseEvent): { x: number; y: number } | null {
+  const area = renderAreaEl.value
+  if (!area) return null
+  const rect = area.getBoundingClientRect()
+  return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+}
+function hitRegion(e: MouseEvent): Hit {
+  const r = renderer.value
+  const p = localXY(e)
+  if (!r || !p) return { region: 'none' }
+  const hw = r.metrics.rowHeaderWidth
+  const hh = r.metrics.colHeaderHeight
+  if (p.x < hw && p.y < hh) return { region: 'corner' }
+  if (p.x < hw) return { region: 'row', row: r.rowAtScreen(view.value, p.y) }
+  if (p.y < hh) return { region: 'col', col: r.colAtScreen(view.value, p.x) }
+  const cell = r.cellAtScreen(view.value, p.x, p.y)
+  return cell ? { region: 'cell', row: cell.row, col: cell.col } : { region: 'none' }
+}
+
+// ---- 选区设置 ----
+function setCell(cell: Cell, extend: boolean) {
+  selMode.value = 'range'
+  if (extend && selAnchor.value) selActive.value = cell
+  else {
+    selAnchor.value = cell
+    selActive.value = cell
+  }
+}
+function setRows(row: number, extend: boolean) {
+  selMode.value = 'rows'
+  const c: Cell = { row, col: 0 }
+  if (extend && selAnchor.value) selActive.value = c
+  else {
+    selAnchor.value = c
+    selActive.value = c
+  }
+}
+function setCols(col: number, extend: boolean) {
+  selMode.value = 'cols'
+  const c: Cell = { row: 0, col }
+  if (extend && selAnchor.value) selActive.value = c
+  else {
+    selAnchor.value = c
+    selActive.value = c
+  }
+}
+function selectAll() {
+  const r = renderer.value
+  if (!r) return
+  selMode.value = 'range'
+  selAnchor.value = { row: 0, col: 0 }
+  selActive.value = { row: r.metrics.rows - 1, col: r.metrics.cols - 1 }
+}
+
+// ---- 鼠标 ----
+function onMouseDown(e: MouseEvent) {
+  if (e.button !== 0) return
+  scrollerEl.value?.focus()
+  // 列边界双向拖拽不在此处理(交给 dblclick 自适应);普通选择走下面
+  const hit = hitRegion(e)
+  dragMoved = false
+  if (hit.region === 'corner') {
+    selectAll()
+    dragMode = 'none'
+  } else if (hit.region === 'row') {
+    dragMode = 'row'
+    setRows(hit.row, e.shiftKey)
+  } else if (hit.region === 'col') {
+    dragMode = 'col'
+    setCols(hit.col, e.shiftKey)
+  } else if (hit.region === 'cell') {
+    dragMode = 'cell'
+    setCell({ row: hit.row, col: hit.col }, e.shiftKey)
+  } else {
+    dragMode = 'none'
+  }
+  doRender()
+}
+function onMouseMove(e: MouseEvent) {
+  if (dragMode !== 'none') {
+    const r = renderer.value
+    const p = localXY(e)
+    if (!r || !p) return
+    dragMoved = true
+    if (dragMode === 'cell') {
+      const cell = r.cellAtScreen(view.value, p.x, p.y)
+      if (cell) {
+        selActive.value = cell
+        doRender()
+      }
+    } else if (dragMode === 'row') {
+      const row = r.rowAtScreen(view.value, p.y)
+      if (row >= 0) {
+        selActive.value = { row, col: 0 }
+        doRender()
+      }
+    } else {
+      const col = r.colAtScreen(view.value, p.x)
+      if (col >= 0) {
+        selActive.value = { row: 0, col }
+        doRender()
+      }
+    }
+    return
+  }
+  updateHover(e)
+}
+function onMouseUp(e: MouseEvent) {
+  if (dragMode === 'cell' && !dragMoved) {
+    const hit = hitRegion(e)
+    if (hit.region === 'cell') {
+      const link = renderer.value?.cellHyperlink(hit.row, hit.col)
+      if (link) window.open(link, '_blank', 'noopener')
+    }
+  }
+  dragMode = 'none'
+}
+function updateHover(e: MouseEvent) {
+  const r = renderer.value
+  const sc = scrollerEl.value
+  const p = localXY(e)
+  if (!r || !sc || !p) {
+    tooltip.value = null
+    return
+  }
+  // 列标边界 → 列宽自适应光标
+  if (p.y < r.metrics.colHeaderHeight && nearColBorder(p.x, p.y)) {
+    sc.style.cursor = 'col-resize'
+    tooltip.value = null
+    return
+  }
+  const cell = r.cellAtScreen(view.value, p.x, p.y)
+  if (!cell) {
+    tooltip.value = null
+    sc.style.cursor = ''
+    return
+  }
+  sc.style.cursor = r.cellHyperlink(cell.row, cell.col) ? 'pointer' : 'cell'
+  const tx = p.x + 14
+  const ty = p.y + 18
+  const comment = r.commentAt(cell.row, cell.col)
+  if (comment) {
+    tooltip.value = { text: comment, x: tx, y: ty, kind: 'comment' }
+    return
+  }
+  const full = r.overflowTextAt(cell.row, cell.col)
+  tooltip.value = full ? { text: full, x: tx, y: ty, kind: 'overflow' } : null
+}
+function onMouseLeave() {
+  tooltip.value = null
+}
+
+// ---- 列宽自适应(双击列边界) ----
+function nearColBorder(x: number, y: number): { col: number } | null {
+  const r = renderer.value
+  if (!r || y >= r.metrics.colHeaderHeight) return null
+  const col = r.colAtScreen(view.value, x)
+  if (col < 0) return null
+  const rect = r.screenRectOfCell(view.value, 0, col)
+  if (Math.abs(x - (rect.x + rect.w)) <= 4) return { col }
+  if (Math.abs(x - rect.x) <= 4 && col > 0) return { col: col - 1 }
+  return null
+}
+function onDblClick(e: MouseEvent) {
+  const r = renderer.value
+  const p = localXY(e)
+  if (!r || !p) return
+  const hit = nearColBorder(p.x, p.y)
+  if (!hit) return
+  r.autoFitColumn(hit.col)
+  contentSize.value = { w: r.contentWidth, h: r.contentHeight }
+  doRender()
+}
+
+// ---- 键盘 ----
+function pageRows(): number {
+  const r = renderer.value
+  if (!r) return 10
+  return Math.max(1, Math.floor((view.value.height - r.metrics.colHeaderHeight) / r.defaultRowPx) - 1)
+}
+function onKeyDown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+    copySelection()
+    e.preventDefault()
+    return
+  }
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+    selectAll()
+    doRender()
+    e.preventDefault()
+    return
+  }
+  const r = renderer.value
+  if (!r || !selActive.value) return
+  const maxRow = r.metrics.rows - 1
+  const maxCol = r.metrics.cols - 1
+  let { row, col } = selActive.value
+  let handled = true
+  switch (e.key) {
+    case 'ArrowUp': row = Math.max(0, row - 1); break
+    case 'ArrowDown': row = Math.min(maxRow, row + 1); break
+    case 'ArrowLeft': col = Math.max(0, col - 1); break
+    case 'ArrowRight': col = Math.min(maxCol, col + 1); break
+    case 'Home': col = 0; if (e.ctrlKey) row = 0; break
+    case 'End': col = maxCol; if (e.ctrlKey) row = maxRow; break
+    case 'PageUp': row = Math.max(0, row - pageRows()); break
+    case 'PageDown': row = Math.min(maxRow, row + pageRows()); break
+    case 'Enter': row = Math.min(maxRow, row + 1); break
+    case 'Tab': col = e.shiftKey ? Math.max(0, col - 1) : Math.min(maxCol, col + 1); break
+    default: handled = false
+  }
+  if (!handled) return
+  e.preventDefault()
+  const m = r.mergeAt(row, col)
+  if (m) {
+    row = m.top
+    col = m.left
+  }
+  selMode.value = 'range'
+  selActive.value = { row, col }
+  const extend = e.shiftKey && e.key !== 'Tab'
+  if (!extend) selAnchor.value = { row, col }
+  scrollActiveIntoView()
+  doRender()
+}
+function scrollActiveIntoView() {
+  const r = renderer.value
+  const sc = scrollerEl.value
+  const c = selActive.value
+  if (!r || !sc || !c) return
+  const hw = r.metrics.rowHeaderWidth
+  const hh = r.metrics.colHeaderHeight
+  const fz = r.freezeGeometry
+  let sx = sc.scrollLeft
+  let sy = sc.scrollTop
+  if (c.col >= fz.frozenCols) {
+    const cl = r.metrics.colLeft(c.col)
+    const cr = cl + r.metrics.colWidth(c.col)
+    const viewW = view.value.width - hw
+    if (cr > sx + viewW) sx = cr - viewW
+    if (cl < sx + fz.frozenWidth) sx = cl - fz.frozenWidth
+  }
+  if (c.row >= fz.frozenRows) {
+    const ct = r.metrics.rowTop(c.row)
+    const cb = ct + r.metrics.rowHeight(c.row)
+    const viewH = view.value.height - hh
+    if (cb > sy + viewH) sy = cb - viewH
+    if (ct < sy + fz.frozenHeight) sy = ct - fz.frozenHeight
+  }
+  sx = Math.max(0, sx)
+  sy = Math.max(0, sy)
+  if (sx !== sc.scrollLeft || sy !== sc.scrollTop) {
+    sc.scrollLeft = sx
+    sc.scrollTop = sy
+    view.value.scrollX = sx
+    view.value.scrollY = sy
+  }
+}
+async function copySelection() {
+  const r = renderer.value
+  const s = selection.value
+  if (!r || !s) return
+  // 防超大选区卡死: 复制范围软上限
+  const rowEnd = Math.min(s.bottom, s.top + 4999)
+  const colEnd = Math.min(s.right, s.left + 255)
+  const lines: string[] = []
+  for (let row = s.top; row <= rowEnd; row++) {
+    const cols: string[] = []
+    for (let col = s.left; col <= colEnd; col++) cols.push(r.cellText(row, col))
+    lines.push(cols.join('\t'))
+  }
+  try {
+    await navigator.clipboard.writeText(lines.join('\n'))
+  } catch {
+    /* 某些环境无剪贴板权限，静默忽略 */
+  }
+}
+
+defineExpose({ load })
+</script>
+
+<template>
+  <div class="excel-viewer" ref="rootEl">
+    <ViewerToolbar
+      v-if="workbook"
+      :file-name="fileName"
+      :sheet-count="workbook.sheets.filter((s) => s.state === 'visible').length"
+      :zoom="zoom"
+      @update:zoom="zoom = $event"
+    />
+
+    <div v-if="workbook" class="formula-bar">
+      <span class="addr">{{ activeCellAddr || '—' }}</span>
+      <span class="fx">fx</span>
+      <span class="content" :title="formulaBarText">{{ formulaBarText }}</span>
+    </div>
+
+    <div class="render-area" ref="renderAreaEl">
+      <canvas ref="canvasEl" class="grid-canvas" />
+      <!-- 叠加层四象限(DOM 顺序=层级: 主区在下、冻结角在上) -->
+      <div class="ov" ref="ovMain" />
+      <div class="ov" ref="ovFCol" />
+      <div class="ov" ref="ovFRow" />
+      <div class="ov" ref="ovCorner" />
+      <div
+        class="scroller"
+        ref="scrollerEl"
+        tabindex="0"
+        @scroll="onScroll"
+        @mousedown="onMouseDown"
+        @mousemove="onMouseMove"
+        @mouseup="onMouseUp"
+        @mouseleave="onMouseLeave"
+        @dblclick="onDblClick"
+        @keydown="onKeyDown"
+      >
+        <div class="spacer" :style="{ width: contentSize.w + 'px', height: contentSize.h + 'px' }" />
+      </div>
+
+      <div
+        v-if="tooltip"
+        class="cell-tooltip"
+        :class="tooltip.kind"
+        :style="{ left: tooltip.x + 'px', top: tooltip.y + 'px' }"
+      >
+        {{ tooltip.text }}
+      </div>
+
+      <div v-if="loading" class="state">
+        <div class="loader">
+          <div class="loader-label">
+            {{ progressLabel }}<span v-if="progressPct != null"> {{ progressPct }}%</span>
+          </div>
+          <div class="loader-track">
+            <div
+              v-if="progressPct != null"
+              class="loader-fill"
+              :style="{ width: progressPct + '%' }"
+            />
+            <div v-else class="loader-fill indeterminate" />
+          </div>
+        </div>
+      </div>
+      <div v-else-if="error" class="state error">解析失败：{{ error }}</div>
+      <div v-else-if="!workbook" class="state hint">拖入或选择一个 .xlsx 文件</div>
+    </div>
+
+    <div v-if="workbook" class="status-bar">
+      <span class="sel">{{ selRangeLabel || activeCellAddr }}</span>
+      <div class="grow" />
+      <template v-if="stats && stats.numCount > 0">
+        <span>计数 {{ stats.count }}</span>
+        <span>求和 {{ fmtNum(stats.sum) }}</span>
+        <span>平均 {{ fmtNum(stats.avg) }}</span>
+        <span>最大 {{ fmtNum(stats.max) }}</span>
+        <span>最小 {{ fmtNum(stats.min) }}</span>
+      </template>
+      <span v-else-if="stats && stats.count > 0">计数 {{ stats.count }}</span>
+    </div>
+
+    <SheetTabs
+      v-if="workbook"
+      :workbook="workbook as WorkbookModel"
+      :active="activeSheet"
+      @select="activeSheet = $event"
+    />
+  </div>
+</template>
+
+<style scoped>
+.excel-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background: #fff;
+  overflow: hidden;
+}
+.render-area {
+  position: relative;
+  flex: 1 1 auto;
+  overflow: hidden;
+  min-height: 0;
+}
+.grid-canvas {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
+/* 叠加层四象限: 各自裁剪,层级靠 DOM 顺序(主区先=底,冻结角后=顶) */
+.ov {
+  position: absolute;
+  z-index: 2;
+  overflow: hidden;
+  pointer-events: none;
+}
+/* 滚动条层: 透明、置顶、提供原生滚动条 + 接收鼠标交互 */
+.scroller {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  overflow: auto;
+  cursor: cell;
+  outline: none;
+}
+.spacer {
+  pointer-events: none;
+}
+/* 公式栏 */
+.formula-bar {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid #e2e4e7;
+  background: #fff;
+  font-size: 13px;
+}
+.formula-bar .addr {
+  width: 72px;
+  text-align: center;
+  border-right: 1px solid #e2e4e7;
+  color: #444;
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+.formula-bar .fx {
+  width: 34px;
+  text-align: center;
+  color: #999;
+  font-style: italic;
+  flex: 0 0 auto;
+}
+.formula-bar .content {
+  flex: 1;
+  padding: 0 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #222;
+  font-family: Consolas, 'Courier New', monospace;
+}
+/* 状态栏 */
+.status-bar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 24px;
+  flex: 0 0 auto;
+  padding: 0 12px;
+  border-top: 1px solid #e2e4e7;
+  background: #fbfbfb;
+  font-size: 12px;
+  color: #555;
+}
+.status-bar .grow {
+  flex: 1;
+}
+.status-bar .sel {
+  color: #888;
+}
+/* 裁切文本悬停提示 */
+.cell-tooltip {
+  position: absolute;
+  z-index: 6;
+  max-width: 380px;
+  padding: 5px 9px;
+  background: #2b2f33;
+  color: #fff;
+  font-size: 12px;
+  line-height: 1.4;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.25);
+  pointer-events: none;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+/* 批注样式: 仿 Excel 便签(浅黄底、深色字) */
+.cell-tooltip.comment {
+  background: #fdfcdc;
+  color: #333;
+  border: 1px solid #d9d27e;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  max-width: 300px;
+}
+.state {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 5;
+  background: #fff;
+  color: #888;
+  font-size: 14px;
+}
+.state.error { color: #c0392b; }
+.state.hint { color: #aaa; }
+/* 分阶段加载进度 */
+.loader {
+  width: 260px;
+  max-width: 60%;
+}
+.loader-label {
+  font-size: 13px;
+  color: #555;
+  margin-bottom: 8px;
+  text-align: center;
+}
+.loader-track {
+  height: 6px;
+  border-radius: 3px;
+  background: #eceef0;
+  overflow: hidden;
+}
+.loader-fill {
+  height: 100%;
+  background: #21a366;
+  border-radius: 3px;
+  transition: width 0.15s ease;
+}
+/* exceljs 黑盒阶段: 不确定态脉冲(诚实地表示"在动但拿不到 %") */
+.loader-fill.indeterminate {
+  width: 40%;
+  transition: none;
+  animation: loader-pulse 1.1s ease-in-out infinite;
+}
+@keyframes loader-pulse {
+  0% { margin-left: -40%; }
+  100% { margin-left: 100%; }
+}
+</style>

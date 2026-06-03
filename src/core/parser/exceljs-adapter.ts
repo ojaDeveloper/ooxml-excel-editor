@@ -1,0 +1,449 @@
+/**
+ * ExcelJS Workbook → 中间模型(SheetModel[])。
+ * 负责: 单元格值/类型、样式(去重成 styles 数组)、合并、列宽行高、冻结、
+ * 条件格式、自动筛选。图片/图表由 drawing-parser/chart-parser 另外补齐。
+ */
+import type ExcelJS from 'exceljs'
+import type {
+  CellModel,
+  CellStyle,
+  ConditionalRule,
+  Fill,
+  Font,
+  MergeRange,
+  RichTextRun,
+  SheetModel,
+  CssColor,
+} from '../model/types'
+import { cellKey } from '../model/types'
+import type { ProgressFn } from '../progress'
+import { resolveColor } from '../format/color'
+import { colWidthToPx, rowHeightToPx, DEFAULT_COL_WIDTH_CHARS, DEFAULT_ROW_HEIGHT_PT } from '../layout/units'
+
+const DEFAULT_FONT: Font = {
+  name: 'Calibri',
+  size: 11,
+  bold: false,
+  italic: false,
+  underline: false,
+  strike: false,
+  color: '#000000',
+}
+
+export function buildSheets(wb: ExcelJS.Workbook, themeColors: CssColor[], onProgress?: ProgressFn): SheetModel[] {
+  const totalRows = wb.worksheets.reduce((s, ws) => s + (ws.rowCount || 0), 0) || 1
+  let doneRows = 0
+  const onRow = onProgress
+    ? () => {
+        doneRows++
+        if (doneRows % 1000 === 0) onProgress({ stage: 'build', ratio: Math.min(1, doneRows / totalRows) })
+      }
+    : undefined
+
+  const sheets: SheetModel[] = []
+  wb.worksheets.forEach((ws, idx) => {
+    sheets.push(buildSheet(ws, idx, themeColors, onRow))
+  })
+  onProgress?.({ stage: 'build', ratio: 1 })
+  return sheets
+}
+
+function buildSheet(ws: ExcelJS.Worksheet, index: number, theme: CssColor[], onRow?: () => void): SheetModel {
+  const styles: CellStyle[] = []
+  const styleIndex = new Map<string, number>()
+  const cells = new Map<string, CellModel>()
+
+  const internStyle = (style: CellStyle): number => {
+    const key = JSON.stringify(style)
+    const existing = styleIndex.get(key)
+    if (existing !== undefined) return existing
+    const id = styles.length
+    styles.push(style)
+    styleIndex.set(key, id)
+    return id
+  }
+
+  let maxRow = 0
+  let maxCol = 0
+
+  ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
+    row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+      const r = rowNumber - 1
+      const c = colNumber - 1
+      const model = toCellModel(cell, r, c, theme, internStyle)
+      if (model) {
+        cells.set(cellKey(r, c), model)
+        if (r > maxRow) maxRow = r
+        if (c > maxCol) maxCol = c
+      }
+    })
+    onRow?.()
+  })
+
+  // 合并
+  const merges = parseMerges(ws)
+  for (const m of merges) {
+    maxRow = Math.max(maxRow, m.bottom)
+    maxCol = Math.max(maxCol, m.right)
+  }
+
+  // 列宽 / 行高
+  const columns = new Map<number, { width: number; hidden: boolean }>()
+  const props: any = (ws as any).properties || {}
+  const defaultColWidth = colWidthToPx(props.defaultColWidth ?? DEFAULT_COL_WIDTH_CHARS)
+  const defaultRowHeight = rowHeightToPx(props.defaultRowHeight ?? DEFAULT_ROW_HEIGHT_PT)
+
+  for (let i = 1; i <= ws.columnCount; i++) {
+    const col = ws.getColumn(i)
+    if (col && (col.width != null || col.hidden)) {
+      columns.set(i - 1, {
+        width: col.width != null ? colWidthToPx(col.width) : defaultColWidth,
+        hidden: !!col.hidden,
+      })
+    }
+  }
+
+  const rows = new Map<number, { height: number; hidden: boolean }>()
+  ws.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+    if (row.height != null || row.hidden) {
+      rows.set(rowNumber - 1, {
+        height: row.height != null ? rowHeightToPx(row.height) : defaultRowHeight,
+        hidden: !!row.hidden,
+      })
+    }
+  })
+
+  // 冻结
+  const view = (ws.views && ws.views[0]) as any
+  const freeze = {
+    frozenRows: view?.state === 'frozen' ? view.ySplit ?? 0 : 0,
+    frozenCols: view?.state === 'frozen' ? view.xSplit ?? 0 : 0,
+  }
+  const showGridLines = view?.showGridLines !== false
+
+  // 条件格式
+  const conditional = parseConditional(ws, theme)
+
+  // 自动筛选
+  const autoFilterRange = parseAutoFilter(ws)
+
+  // 数据验证(只取 list 型，用于画下拉)
+  const dataValidations = parseDataValidations(ws)
+
+  const state = (ws as any).state === 'hidden'
+    ? 'hidden'
+    : (ws as any).state === 'veryHidden'
+      ? 'veryHidden'
+      : 'visible'
+
+  return {
+    name: ws.name,
+    index,
+    state,
+    dimension: { rows: maxRow + 1, cols: maxCol + 1 },
+    cells,
+    styles,
+    merges,
+    columns,
+    rows,
+    defaultColWidth,
+    defaultRowHeight,
+    freeze,
+    conditional,
+    autoFilterRange,
+    dataValidations,
+    images: [],
+    charts: [],
+    sparklines: [],
+    showGridLines,
+  }
+}
+
+function parseDataValidations(ws: ExcelJS.Worksheet): MergeRange[] {
+  const model: any = (ws as any).dataValidations?.model
+  if (!model) return []
+  const out: MergeRange[] = []
+  for (const [addr, rule] of Object.entries(model)) {
+    if ((rule as any)?.type !== 'list') continue
+    for (const part of addr.split(/\s+/)) {
+      const rg = parseA1Range(part)
+      if (rg) out.push(rg)
+    }
+  }
+  return out
+}
+
+function toCellModel(
+  cell: ExcelJS.Cell,
+  row: number,
+  col: number,
+  theme: CssColor[],
+  internStyle: (s: CellStyle) => number,
+): CellModel | null {
+  const value = cell.value
+  if (value === null || value === undefined) {
+    // 仍可能有样式(空单元格带边框/填充)
+    const style = extractStyle(cell, theme)
+    return { row, col, type: 'empty', raw: null, styleId: internStyle(style) }
+  }
+
+  let type: CellModel['type'] = 'string'
+  let raw: CellModel['raw'] = null
+  let rich: RichTextRun[] | undefined
+  let formula: string | undefined
+  let hyperlink: string | undefined
+
+  if (typeof value === 'number') {
+    type = 'number'
+    raw = value
+  } else if (typeof value === 'boolean') {
+    type = 'boolean'
+    raw = value
+  } else if (value instanceof Date) {
+    type = 'date'
+    raw = value
+  } else if (typeof value === 'string') {
+    type = 'string'
+    raw = value
+  } else if (typeof value === 'object') {
+    const v: any = value
+    if (v.richText) {
+      type = 'richtext'
+      rich = (v.richText as any[]).map((r) => ({
+        text: r.text ?? '',
+        font: r.font ? toFont(r.font, theme) : undefined,
+      }))
+      raw = rich.map((r) => r.text).join('')
+    } else if (v.formula !== undefined || v.sharedFormula !== undefined) {
+      type = 'formula'
+      formula = v.formula ?? v.sharedFormula
+      const res = v.result
+      if (res instanceof Date) raw = res
+      else if (res && typeof res === 'object' && 'error' in res) raw = res.error
+      else raw = res ?? null
+    } else if (v.hyperlink !== undefined) {
+      type = 'hyperlink'
+      hyperlink = v.hyperlink
+      raw = v.text ?? v.hyperlink
+    } else if (v.error !== undefined) {
+      type = 'error'
+      raw = v.error
+    } else {
+      raw = String(v)
+    }
+  }
+
+  const style = extractStyle(cell, theme)
+  const comment = extractComment((cell as any).note)
+  return { row, col, type, raw, rich, formula, hyperlink, comment, styleId: internStyle(style) }
+}
+
+/** ExcelJS note 可能是字符串或 { texts: [{text}] } 富文本，统一成纯文本 */
+function extractComment(note: any): string | undefined {
+  if (!note) return undefined
+  if (typeof note === 'string') return note
+  if (Array.isArray(note.texts)) {
+    const s = note.texts.map((t: any) => t?.text ?? '').join('')
+    return s || undefined
+  }
+  if (typeof note.text === 'string') return note.text
+  return undefined
+}
+
+function extractStyle(cell: ExcelJS.Cell, theme: CssColor[]): CellStyle {
+  const s: any = cell.style || {}
+  const align = s.alignment || {}
+  return {
+    font: toFont(s.font, theme),
+    fill: toFill(s.fill, theme),
+    borders: toBorders(s.border, theme),
+    hAlign: (align.horizontal as any) || 'general',
+    vAlign: mapVAlign(align.vertical),
+    wrapText: !!align.wrapText,
+    shrinkToFit: !!align.shrinkToFit,
+    textRotation: typeof align.textRotation === 'number' ? align.textRotation : 0,
+    indent: align.indent || 0,
+    numFmt: s.numFmt || 'General',
+  }
+}
+
+function toFont(f: any, theme: CssColor[]): Font {
+  if (!f) return { ...DEFAULT_FONT }
+  return {
+    name: f.name || DEFAULT_FONT.name,
+    size: f.size || DEFAULT_FONT.size,
+    bold: !!f.bold,
+    italic: !!f.italic,
+    underline: !!f.underline,
+    strike: !!f.strike,
+    color: resolveColor(f.color, theme) || '#000000',
+  }
+}
+
+function toFill(fill: any, theme: CssColor[]): Fill {
+  if (!fill || fill.type === 'none') return { type: 'none' }
+  if (fill.type === 'pattern') {
+    const pattern = fill.pattern
+    if (pattern === 'none') return { type: 'none' }
+    if (pattern === 'solid') {
+      return {
+        type: 'solid',
+        fgColor: resolveColor(fill.fgColor, theme) || resolveColor(fill.bgColor, theme),
+      }
+    }
+    return {
+      type: 'pattern',
+      pattern,
+      fgColor: resolveColor(fill.fgColor, theme),
+      bgColor: resolveColor(fill.bgColor, theme),
+    }
+  }
+  if (fill.type === 'gradient') {
+    const stops = (fill.stops || []).map((st: any) => ({
+      position: st.position ?? 0,
+      color: resolveColor(st.color, theme) || '#FFFFFF',
+    }))
+    return { type: 'gradient', gradientStops: stops, fgColor: stops[0]?.color }
+  }
+  return { type: 'none' }
+}
+
+function toBorders(b: any, theme: CssColor[]) {
+  if (!b) return {}
+  const edge = (e: any) =>
+    e && e.style
+      ? { style: e.style, color: resolveColor(e.color, theme) || '#000000' }
+      : undefined
+  return {
+    top: edge(b.top),
+    bottom: edge(b.bottom),
+    left: edge(b.left),
+    right: edge(b.right),
+  }
+}
+
+function mapVAlign(v: any): CellStyle['vAlign'] {
+  if (v === 'top') return 'top'
+  if (v === 'middle') return 'middle'
+  return 'bottom' // Excel 默认垂直靠下
+}
+
+function parseMerges(ws: ExcelJS.Worksheet): MergeRange[] {
+  const model: any = (ws as any).model
+  const raw: string[] = model?.merges || []
+  const out: MergeRange[] = []
+  for (const range of raw) {
+    const m = parseA1Range(range)
+    if (m) out.push(m)
+  }
+  return out
+}
+
+function parseConditional(ws: ExcelJS.Worksheet, theme: CssColor[]): ConditionalRule[] {
+  const cfs: any[] = (ws as any).conditionalFormattings || []
+  const out: ConditionalRule[] = []
+  for (const cf of cfs) {
+    const ranges = parseRefRanges(cf.ref)
+    for (const rule of cf.rules || []) {
+      const base: ConditionalRule = {
+        ranges,
+        priority: rule.priority ?? 0,
+        type: 'unsupported',
+      }
+      switch (rule.type) {
+        case 'cellIs':
+          base.type = 'cellIs'
+          base.operator = rule.operator
+          base.formulae = rule.formulae
+          base.style = rule.style ? cfStyle(rule.style, theme) : undefined
+          break
+        case 'expression':
+          base.type = 'expression'
+          base.formulae = rule.formulae
+          base.style = rule.style ? cfStyle(rule.style, theme) : undefined
+          break
+        case 'colorScale': {
+          base.type = 'colorScale'
+          const colors = (rule.color || []).map((c: any) => resolveColor(c, theme) || '#FFFFFF')
+          if (colors.length === 3) base.colorScale = { min: colors[0], mid: colors[1], max: colors[2] }
+          else if (colors.length === 2) base.colorScale = { min: colors[0], max: colors[1] }
+          break
+        }
+        case 'dataBar':
+          base.type = 'dataBar'
+          base.dataBar = {
+            color: resolveColor(rule.color, theme) || '#638EC6',
+            gradient: rule.gradient !== false,
+          }
+          break
+        case 'iconSet':
+          base.type = 'iconSet'
+          base.iconSet = { name: rule.iconSet || '3TrafficLights1' }
+          break
+        case 'top10':
+          base.type = 'top10'
+          base.style = rule.style ? cfStyle(rule.style, theme) : undefined
+          break
+      }
+      out.push(base)
+    }
+  }
+  return out.sort((a, b) => a.priority - b.priority)
+}
+
+function cfStyle(s: any, theme: CssColor[]): Partial<CellStyle> {
+  const out: Partial<CellStyle> = {}
+  if (s.font) out.font = toFont(s.font, theme)
+  if (s.fill) out.fill = toFill(s.fill, theme)
+  if (s.border) out.borders = toBorders(s.border, theme)
+  return out
+}
+
+function parseAutoFilter(ws: ExcelJS.Worksheet): MergeRange | undefined {
+  const af: any = (ws as any).autoFilter
+  if (!af) return undefined
+  if (typeof af === 'string') return parseA1Range(af) || undefined
+  if (af.from && af.to) {
+    const from = typeof af.from === 'string' ? cellRef(af.from) : { row: af.from.row - 1, col: af.from.column - 1 }
+    const to = typeof af.to === 'string' ? cellRef(af.to) : { row: af.to.row - 1, col: af.to.column - 1 }
+    if (from && to) return { top: from.row, left: from.col, bottom: to.row, right: to.col }
+  }
+  return undefined
+}
+
+// ---- A1 解析 ----
+export function colLettersToIndex(letters: string): number {
+  let n = 0
+  for (let i = 0; i < letters.length; i++) {
+    n = n * 26 + (letters.charCodeAt(i) - 64)
+  }
+  return n - 1 // 0-based
+}
+
+function cellRef(a1: string): { row: number; col: number } | null {
+  const m = /^\$?([A-Z]+)\$?(\d+)$/.exec(a1.trim())
+  if (!m) return null
+  return { col: colLettersToIndex(m[1]), row: parseInt(m[2], 10) - 1 }
+}
+
+export function parseA1Range(range: string): MergeRange | null {
+  const parts = range.split(':')
+  const a = cellRef(parts[0])
+  const b = parts[1] ? cellRef(parts[1]) : a
+  if (!a || !b) return null
+  return {
+    top: Math.min(a.row, b.row),
+    left: Math.min(a.col, b.col),
+    bottom: Math.max(a.row, b.row),
+    right: Math.max(a.col, b.col),
+  }
+}
+
+/** ref 可能是 "A1:B2 C3:D4" 多段(空格分隔) */
+function parseRefRanges(ref: string | undefined): MergeRange[] {
+  if (!ref) return []
+  return ref
+    .split(/\s+/)
+    .map((r) => parseA1Range(r))
+    .filter((x): x is MergeRange => !!x)
+}

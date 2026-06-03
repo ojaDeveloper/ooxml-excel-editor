@@ -1,0 +1,83 @@
+{
+  "name": "ooxml-excel-preview",
+  "version": "0.1.0",
+  "description": "Vue3 high-fidelity OOXML (.xlsx) preview component — canvas renderer, read-only",
+  "type": "module",
+  "license": "MIT",
+  "author": "",
+  "keywords": [
+    "vue",
+    "vue3",
+    "excel",
+    "xlsx",
+    "ooxml",
+    "spreadsheet",
+    "preview",
+    "viewer",
+    "canvas",
+    "exceljs"
+  ],
+  "homepage": "https://github.com/your-org/ooxml-excel-preview#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/your-org/ooxml-excel-preview.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-org/ooxml-excel-preview/issues"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "dist"
+  ],
+  "main": "./dist/ooxml-excel-preview.js",
+  "module": "./dist/ooxml-excel-preview.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/ooxml-excel-preview.js"
+    },
+    "./style.css": "./dist/style.css"
+  },
+  "sideEffects": [
+    "**/*.css"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc --noEmit && vite build",
+    "build:demo": "vite build --mode demo",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "vue-tsc --noEmit",
+    "prepublishOnly": "npm run build"
+  },
+  "peerDependencies": {
+    "echarts": "^5.5.0",
+    "exceljs": "^4.4.0",
+    "vue": "^3.4.0"
+  },
+  "peerDependenciesMeta": {
+    "echarts": {
+      "optional": true
+    }
+  },
+  "dependencies": {
+    "fast-xml-parser": "^4.5.0",
+    "fflate": "^0.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.19",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "echarts": "^5.5.1",
+    "exceljs": "^4.4.0",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.5",
+    "vite-plugin-dts": "^4.5.4",
+    "vitest": "^2.1.8",
+    "vue": "^3.5.13",
+    "vue-tsc": "^2.2.0"
+  }
+}

@@ -1,0 +1,10 @@
+# 统一文本文件用 LF(避免跨平台 / CI(Linux) 的换行符churn)
+* text=auto eol=lf
+
+# 二进制文件不做换行转换
+*.xlsx binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary

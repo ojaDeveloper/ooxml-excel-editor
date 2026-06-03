@@ -1,0 +1,13 @@
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  font-family: -apple-system, 'Segoe UI', 'Microsoft YaHei', Roboto, sans-serif;
+}
+body {
+  overflow: hidden;
+}
