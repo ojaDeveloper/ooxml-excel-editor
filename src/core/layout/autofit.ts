@@ -71,18 +71,23 @@ function extraHeightOf(
   colW: number,
   wb: WorkbookModel,
 ): number {
+  // 快速跳过: 非换行单元格只有"含 \n 的字符串/富文本"才可能多行;
+  // 数字/日期/布尔不可能多行 → 连 formatValue 都不用调(大表性能关键)
+  if (!style.wrapText && cell.type !== 'string' && cell.type !== 'richtext') return 0
+
   const text =
     cell.type === 'richtext' && cell.rich
       ? cell.rich.map((r) => r.text).join('')
       : formatValue(cell.raw, style.numFmt, wb.date1904).text
   if (!text) return 0
 
-  const fontCss = fontToCss(style.font, 1)
   let lineCount: number
   if (style.wrapText) {
+    const fontCss = fontToCss(style.font, 1)
     const availW = colW - CELL_PADDING * 2
     lineCount = wrapLines(ctx, text, fontCss, availW).length
   } else {
+    if (!text.includes('\n')) return 0
     lineCount = text.split('\n').length
   }
   if (lineCount < 2) return 0

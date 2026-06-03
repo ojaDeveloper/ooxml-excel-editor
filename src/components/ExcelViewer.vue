@@ -77,6 +77,8 @@ interface ChartInstance {
   inst: EChartsNS.ECharts
   spec: ChartSpec
   quad: Quad
+  lastW: number // 上次尺寸,只有变化才 resize(避免滚动时每帧 resize)
+  lastH: number
 }
 let chartInstances: ChartInstance[] = []
 interface ImageEl {
@@ -160,7 +162,7 @@ async function buildOverlays() {
         } catch (e) {
           console.warn('[ooxml-preview] 图表渲染失败:', e)
         }
-        chartInstances.push({ el, inst, spec: chart, quad })
+        chartInstances.push({ el, inst, spec: chart, quad, lastW: 0, lastH: 0 })
       } else {
         // 降级: 在图表位置画一个友好占位框
         const el = document.createElement('div')
@@ -204,8 +206,14 @@ function positionOverlays() {
     placeInQuad(im.el, anchorRect(r.metrics, s.images[im.anchorIdx]), im.quad, fw, fh)
   }
   for (const c of chartInstances) {
-    placeInQuad(c.el, anchorRect(r.metrics, c.spec.anchor), c.quad, fw, fh)
-    c.inst.resize()
+    const rect = anchorRect(r.metrics, c.spec.anchor)
+    placeInQuad(c.el, rect, c.quad, fw, fh)
+    // 只有尺寸真变(缩放)才 resize;滚动只改位置,不必 resize(很费)
+    if (c.lastW !== rect.width || c.lastH !== rect.height) {
+      c.inst.resize()
+      c.lastW = rect.width
+      c.lastH = rect.height
+    }
   }
   for (const p of chartPlaceholders) {
     placeInQuad(p.el, anchorRect(r.metrics, p.spec.anchor), p.quad, fw, fh)
@@ -241,7 +249,20 @@ function placeInQuad(
 }
 
 // ---------------- 渲染 ----------------
+let rafId = 0
+/** 把重绘合并到下一帧(滚动/拖选高频触发时,每帧最多画一次) */
+function scheduleRender() {
+  if (rafId) return
+  rafId = requestAnimationFrame(() => {
+    rafId = 0
+    doRender()
+  })
+}
 function doRender() {
+  if (rafId) {
+    cancelAnimationFrame(rafId)
+    rafId = 0
+  }
   const r = renderer.value
   if (!r) return
   view.value.zoom = zoom.value
@@ -284,7 +305,7 @@ function onScroll() {
   view.value.scrollX = sc.scrollLeft
   view.value.scrollY = sc.scrollTop
   tooltip.value = null
-  doRender()
+  scheduleRender()
 }
 
 let resizeObserver: ResizeObserver | null = null
@@ -300,6 +321,7 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
+  if (rafId) cancelAnimationFrame(rafId)
   disposeOverlays()
   if (workbook.value) revokeImages(workbook.value)
 })
@@ -510,19 +532,19 @@ function onMouseMove(e: MouseEvent) {
       const cell = r.cellAtScreen(view.value, p.x, p.y)
       if (cell) {
         selActive.value = cell
-        doRender()
+        scheduleRender()
       }
     } else if (dragMode === 'row') {
       const row = r.rowAtScreen(view.value, p.y)
       if (row >= 0) {
         selActive.value = { row, col: 0 }
-        doRender()
+        scheduleRender()
       }
     } else {
       const col = r.colAtScreen(view.value, p.x)
       if (col >= 0) {
         selActive.value = { row: 0, col }
-        doRender()
+        scheduleRender()
       }
     }
     return
