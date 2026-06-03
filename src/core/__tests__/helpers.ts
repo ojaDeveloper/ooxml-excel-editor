@@ -36,6 +36,7 @@ export function makeSheet(over: Partial<SheetModel> = {}): SheetModel {
     dataValidations: [],
     images: [],
     charts: [],
+    shapes: [],
     sparklines: [],
     showGridLines: true,
   }

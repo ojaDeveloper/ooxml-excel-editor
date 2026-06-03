@@ -154,6 +154,7 @@ function buildSheet(ws: ExcelJS.Worksheet, index: number, theme: CssColor[], onR
     dataValidations,
     images: [],
     charts: [],
+    shapes: [],
     sparklines: [],
     showGridLines,
   }

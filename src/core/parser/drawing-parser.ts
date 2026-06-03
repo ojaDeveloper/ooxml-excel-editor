@@ -9,7 +9,7 @@
 import type { RawPackage } from './raw-xml'
 import { parseRels, toArray, basename } from './raw-xml'
 import { parseChart } from './chart-parser'
-import type { AnchorCell, ChartSpec, ImageAnchor, SheetModel } from '../model/types'
+import type { AnchorCell, ChartSpec, ImageAnchor, ShapeSpec, SheetModel } from '../model/types'
 
 const MIME: Record<string, string> = {
   png: 'image/png',
@@ -96,8 +96,50 @@ function parseDrawing(pkg: RawPackage, drawingPath: string, sheet: SheetModel): 
           sheet.charts.push(chart)
         }
       }
+      continue
+    }
+
+    // 形状 / 文本框(sp)
+    const sp = a.sp
+    if (sp) {
+      sheet.shapes.push(parseShape(sp, anchorBase))
     }
   }
+}
+
+function parseShape(sp: any, anchor: ImageAnchor): ShapeSpec {
+  const spPr = sp.spPr || {}
+  const prst = String(spPr.prstGeom?.['@_prst'] ?? 'rect')
+  const geom: ShapeSpec['geom'] =
+    prst === 'roundRect' ? 'roundRect' : prst === 'ellipse' || prst === 'circle' ? 'ellipse' : prst === 'rect' ? 'rect' : 'other'
+
+  const fillColor = srgb(spPr.solidFill?.srgbClr?.['@_val'])
+  const lineColor = srgb(spPr.ln?.solidFill?.srgbClr?.['@_val'])
+
+  // 文本: txBody > p[] > r[] > t,拼接;取首段 run 的字体色/加粗近似
+  let text = ''
+  let textColor: string | undefined
+  let bold = false
+  const paras = toArray(sp.txBody?.p)
+  for (const p of paras) {
+    for (const r of toArray(p.r)) {
+      const t = r.t
+      text += t == null ? '' : typeof t === 'object' ? t['#text'] ?? '' : String(t)
+      if (!textColor) textColor = srgb(r.rPr?.solidFill?.srgbClr?.['@_val'])
+      if (r.rPr?.['@_b'] === 1 || r.rPr?.['@_b'] === '1') bold = true
+    }
+    text += '\n'
+  }
+  text = text.trim()
+  const algn = paras[0]?.pPr?.['@_algn']
+  const align = algn === 'ctr' ? 'center' : algn === 'r' ? 'right' : 'left'
+
+  return { anchor, geom, text: text || undefined, fillColor, lineColor, textColor, bold, align }
+}
+
+function srgb(v: any): string | undefined {
+  if (!v) return undefined
+  return '#' + String(v).toUpperCase()
 }
 
 function readAnchorCell(node: any): AnchorCell | null {

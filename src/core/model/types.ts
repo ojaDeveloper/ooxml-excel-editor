@@ -216,9 +216,25 @@ export interface SheetModel {
   dataValidations: MergeRange[]
   images: ImageAnchor[]
   charts: ChartSpec[]
+  /** 形状 / 文本框(DrawingML sp) */
+  shapes: ShapeSpec[]
   /** 迷你图(单元格内嵌折线/柱/盈亏图) */
   sparklines: Sparkline[]
   showGridLines: boolean
+}
+
+/** 形状 / 文本框: 用锚点定位,带填充/边框/文字 */
+export interface ShapeSpec {
+  anchor: ImageAnchor
+  /** 形状类型(prstGeom): rect / roundRect / ellipse / 其它(按 rect 处理) */
+  geom: 'rect' | 'roundRect' | 'ellipse' | 'other'
+  text?: string
+  fillColor?: CssColor
+  lineColor?: CssColor
+  textColor?: CssColor
+  bold?: boolean
+  /** 文本水平对齐 */
+  align?: 'left' | 'center' | 'right'
 }
 
 /** 迷你图: 锚在某个单元格，数据来自一段区域的数值 */

@@ -94,6 +94,12 @@ interface ChartPlaceholder {
   quad: Quad
 }
 let chartPlaceholders: ChartPlaceholder[] = []
+interface ShapeEl {
+  el: HTMLDivElement
+  shapeIdx: number
+  quad: Quad
+}
+let shapeEls: ShapeEl[] = []
 
 /** 锚点落在哪个象限(冻结行/列内的钉住,其余随滚动) */
 function quadrantOf(anchor: ImageAnchor): Quad {
@@ -117,6 +123,8 @@ function disposeOverlays() {
   chartInstances = []
   for (const p of chartPlaceholders) p.el.remove()
   chartPlaceholders = []
+  for (const sh of shapeEls) sh.el.remove()
+  shapeEls = []
   for (const im of imageEls) im.el.remove()
   imageEls = []
 }
@@ -137,6 +145,34 @@ async function buildOverlays() {
     el.style.pointerEvents = 'none'
     ovContainer(quad)?.appendChild(el)
     imageEls.push({ el, anchorIdx: i, quad })
+  }
+
+  // 形状 / 文本框
+  for (let i = 0; i < s.shapes.length; i++) {
+    const shape = s.shapes[i]
+    const quad = quadrantOf(shape.anchor)
+    const el = document.createElement('div')
+    el.style.position = 'absolute'
+    el.style.boxSizing = 'border-box'
+    el.style.pointerEvents = 'none'
+    el.style.overflow = 'hidden'
+    el.style.display = 'flex'
+    el.style.padding = '3px 5px'
+    el.style.alignItems = 'center'
+    el.style.justifyContent = shape.align === 'center' ? 'center' : shape.align === 'right' ? 'flex-end' : 'flex-start'
+    el.style.whiteSpace = 'pre-wrap'
+    el.style.wordBreak = 'break-word'
+    el.style.lineHeight = '1.2'
+    if (shape.fillColor) el.style.background = shape.fillColor
+    if (shape.lineColor) el.style.border = `1px solid ${shape.lineColor}`
+    if (shape.geom === 'roundRect') el.style.borderRadius = '8px'
+    else if (shape.geom === 'ellipse') el.style.borderRadius = '50%'
+    if (shape.textColor) el.style.color = shape.textColor
+    if (shape.bold) el.style.fontWeight = 'bold'
+    el.style.textAlign = shape.align ?? 'left'
+    el.textContent = shape.text ?? ''
+    ovContainer(quad)?.appendChild(el)
+    shapeEls.push({ el, shapeIdx: i, quad })
   }
 
   if (s.charts.length) {
@@ -204,6 +240,11 @@ function positionOverlays() {
 
   for (const im of imageEls) {
     placeInQuad(im.el, anchorRect(r.metrics, s.images[im.anchorIdx]), im.quad, fw, fh)
+  }
+  const shapeFont = Math.round(11 * (96 / 72) * r.metrics.zoom)
+  for (const sh of shapeEls) {
+    sh.el.style.fontSize = shapeFont + 'px'
+    placeInQuad(sh.el, anchorRect(r.metrics, s.shapes[sh.shapeIdx].anchor), sh.quad, fw, fh)
   }
   for (const c of chartInstances) {
     const rect = anchorRect(r.metrics, c.spec.anchor)
