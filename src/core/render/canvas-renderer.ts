@@ -674,22 +674,45 @@ export class CanvasRenderer {
   private drawRichText(cell: CellModel, style: CellStyle, x: number, y: number, w: number, h: number, zoom: number): void {
     const ctx = this.ctx
     const pad = CELL_PADDING * zoom
+    const runs = cell.rich || []
+    const baseFont = style.font
+
+    // 预测总宽(用于水平对齐)
+    let totalW = 0
+    const fontCache: string[] = []
+    for (let i = 0; i < runs.length; i++) {
+      const f = fontToCss({ ...baseFont, ...runs[i].font } as any, zoom)
+      fontCache[i] = f
+      ctx.font = f
+      totalW += ctx.measureText(runs[i].text).width
+    }
+
+    // 水平起点(尊重 hAlign;富文本默认按文本左对齐)
+    const hAlign = resolveHAlign(style.hAlign, false)
+    let tx = x + pad
+    if (hAlign === 'center') tx = x + (w - totalW) / 2
+    else if (hAlign === 'right') tx = x + w - pad - totalW
+
+    // 垂直基线(尊重 vAlign)
+    const asc = baseFont.size * zoom * (96 / 72) * 0.72
+    const lineH = baseFont.size * zoom * (96 / 72) * LINE_HEIGHT_FACTOR
+    let ty: number
+    if (style.vAlign === 'top') ty = y + pad + asc
+    else if (style.vAlign === 'middle') ty = y + (h - lineH) / 2 + asc
+    else ty = y + h - pad - lineH + asc
+
     ctx.save()
     ctx.beginPath()
     ctx.rect(x, y, w, h)
     ctx.clip()
     ctx.textBaseline = 'alphabetic'
     ctx.textAlign = 'left'
-    const baseFont = style.font
-    let tx = x + pad
-    const ty = y + h / 2 + baseFont.size * zoom * (96 / 72) * 0.35
-    for (const run of cell.rich || []) {
-      const f = { ...baseFont, ...run.font }
-      ctx.font = fontToCss(f as any, zoom)
-      ctx.fillStyle = (run.font?.color as string) || baseFont.color
-      ctx.fillText(run.text, tx, ty)
-      tx += ctx.measureText(run.text).width
-      if (tx > x + w) break
+    for (let i = 0; i < runs.length; i++) {
+      ctx.font = fontCache[i]
+      ctx.fillStyle = (runs[i].font?.color as string) || baseFont.color
+      ctx.fillText(runs[i].text, tx, ty)
+      tx += ctx.measureText(runs[i].text).width
+      if (tx > x + w + 50) break
     }
     ctx.restore()
   }

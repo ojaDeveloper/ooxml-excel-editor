@@ -19,7 +19,14 @@ export function paintFill(
   if (fill.type === 'gradient') {
     const stops = fill.gradientStops || []
     if (!stops.length) return
-    const grad = ctx.createLinearGradient(x, y, x + w, y + h)
+    // 按角度确定渐变线(0°=左→右, 90°=上→下);缺省 90
+    const angle = ((fill.gradientAngle ?? 90) * Math.PI) / 180
+    const cx = x + w / 2
+    const cy = y + h / 2
+    const half = (Math.abs(w * Math.cos(angle)) + Math.abs(h * Math.sin(angle))) / 2
+    const dx = Math.cos(angle) * half
+    const dy = Math.sin(angle) * half
+    const grad = ctx.createLinearGradient(cx - dx, cy - dy, cx + dx, cy + dy)
     for (const s of stops) grad.addColorStop(Math.min(1, Math.max(0, s.position)), s.color)
     ctx.fillStyle = grad
     ctx.fillRect(x, y, w, h)

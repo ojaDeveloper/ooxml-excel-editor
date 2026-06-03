@@ -303,7 +303,9 @@ function toFill(fill: any, theme: CssColor[]): Fill {
       position: st.position ?? 0,
       color: resolveColor(st.color, theme) || '#FFFFFF',
     }))
-    return { type: 'gradient', gradientStops: stops, fgColor: stops[0]?.color }
+    // ExcelJS: gradient === 'angle' 时有 degree(度);'path' 型近似按对角
+    const gradientAngle = typeof fill.degree === 'number' ? fill.degree : undefined
+    return { type: 'gradient', gradientStops: stops, gradientAngle, fgColor: stops[0]?.color }
   }
   return { type: 'none' }
 }
