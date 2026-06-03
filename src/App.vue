@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import ExcelViewer from './components/ExcelViewer.vue'
+import { definePlugin } from './core/plugin'
 
 const src = ref<File | string | undefined>(undefined)
 const fileName = ref<string>('')
@@ -30,6 +31,17 @@ async function loadSample() {
 
 // ---- 扩展 API 演示 ----
 const lastEvent = ref('')
+
+// 示例插件: 负数标红 + 单击单元格写到 toast(definePlugin 把 cellStyle+events 打包)
+const negativesPlugin = definePlugin({
+  name: 'demo-highlight-negatives',
+  cellStyle: (cell) =>
+    typeof cell.raw === 'number' && cell.raw < 0 ? { font: { color: '#d00', bold: true } } : undefined,
+  events: {
+    'cell-click': (p) => (lastEvent.value = `[插件] 点击 R${p.row + 1}C${p.col + 1}: ${p.text}`),
+  },
+})
+const plugins = [negativesPlugin]
 type Rect = { x: number; y: number; w: number; h: number } | null
 // overlay slot: 在 B3(row2,col1)叠一个徽标,随滚动跟随;tick 变化触发重算
 function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
@@ -67,7 +79,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
       <ExcelViewer
         :src="src"
         :file-name="fileName"
-        @cell-click="(c) => (lastEvent = `点击 R${c.row + 1}C${c.col + 1}: ${c.text}`)"
+        :plugins="plugins"
         @selection-change="(s) => (lastEvent = `选区 ${s.range.top + 1},${s.range.left + 1} → ${s.range.bottom + 1},${s.range.right + 1}`)"
       >
         <!-- 分层 UI 演示: B3 上叠一个可点徽标,随滚动跟随 -->

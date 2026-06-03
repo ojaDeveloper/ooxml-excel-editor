@@ -1,8 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import type * as EChartsNS from 'echarts'
+import type { ExcelPlugin, ExcelPluginContext, OverlayContext, PluginEvent, ViewerApi } from '@/core/plugin'
 import type { ExcelSource } from '@/core/loader'
 import type {
+  CellModel,
   CellStyleFn,
   ChartSpec,
   ImageAnchor,
@@ -34,9 +36,35 @@ const props = withDefaults(
     cellStyle?: CellStyleFn
     /** 单击超链接是否默认在新标签打开(false 时只派发 hyperlink-click 事件) */
     openLinks?: boolean
+    /** 插件列表(打包主题/钩子/事件/overlay) */
+    plugins?: ExcelPlugin[]
   }>(),
   { openLinks: true },
 )
+
+const normalizedPlugins = computed<ExcelPlugin[]>(() => props.plugins ?? [])
+
+// 合并各扩展点: 插件按数组顺序,组件 prop 最后覆盖
+const effectiveTheme = computed(() =>
+  Object.assign({}, ...normalizedPlugins.value.map((p) => p.theme || {}), props.theme || {}),
+)
+const hasCellStyleHook = computed(() => !!props.cellStyle || normalizedPlugins.value.some((p) => p.cellStyle))
+function combinedCellStyle(cell: CellModel, pos: { row: number; col: number }) {
+  let acc: Record<string, unknown> | undefined
+  const apply = (fn?: CellStyleFn) => {
+    const o = fn?.(cell, pos)
+    if (o) acc = { ...(acc || {}), ...o }
+  }
+  for (const p of normalizedPlugins.value) apply(p.cellStyle)
+  apply(props.cellStyle)
+  return acc as ReturnType<CellStyleFn>
+}
+function effectiveTransform(wb: WorkbookModel): WorkbookModel {
+  let m = wb
+  for (const p of normalizedPlugins.value) if (p.transformModel) m = p.transformModel(m) ?? m
+  if (props.transformModel) m = props.transformModel(m) ?? m
+  return m
+}
 
 const emit = defineEmits<{
   /** 工作簿解析并首次渲染完成 */
@@ -351,8 +379,8 @@ function rebuildRenderer() {
   const canvas = canvasEl.value
   if (!s || !wb || !canvas) return
   renderer.value = new CanvasRenderer(canvas, s, wb, zoom.value, {
-    theme: props.theme,
-    cellStyle: props.cellStyle,
+    theme: effectiveTheme.value,
+    cellStyle: hasCellStyleHook.value ? combinedCellStyle : undefined,
   })
   contentSize.value = { w: renderer.value.contentWidth, h: renderer.value.contentHeight }
   clearSelection() // 切表清空选区
@@ -388,7 +416,8 @@ function onScroll() {
 let resizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
-  if (props.src) load(props.src, props.transformModel)
+  initPlugins()
+  if (props.src) load(props.src, effectiveTransform)
   resizeObserver = new ResizeObserver(() => {
     measure()
     doRender()
@@ -399,22 +428,26 @@ onMounted(() => {
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   if (rafId) cancelAnimationFrame(rafId)
+  pluginCleanups.forEach((fn) => fn())
   disposeOverlays()
   if (workbook.value) revokeImages(workbook.value)
 })
 
 watch(() => props.src, (s) => {
-  if (s) load(s, props.transformModel)
+  if (s) load(s, effectiveTransform)
 })
 
-// 主题 / cellStyle 变化 → 重建渲染器(它们在构造时注入)
+// 主题 / cellStyle / 插件 变化 → 重建渲染器(它们在构造时注入)
 watch(
-  () => [props.theme, props.cellStyle],
+  () => [effectiveTheme.value, props.cellStyle, props.plugins],
   () => {
     if (renderer.value) rebuildRenderer()
   },
   { deep: true },
 )
+
+// 插件列表变化 → 重新初始化生命周期/事件订阅
+watch(() => props.plugins, () => initPlugins(), { deep: false })
 
 watch(workbook, async (wb) => {
   if (!wb) return
@@ -427,7 +460,7 @@ watch(workbook, async (wb) => {
 // 切表派发 sheet-change
 watch(activeSheet, (idx) => {
   const wb = workbook.value
-  if (wb?.sheets[idx]) emit('sheet-change', { index: idx, name: wb.sheets[idx].name })
+  if (wb?.sheets[idx]) fire('sheet-change', { index: idx, name: wb.sheets[idx].name })
 })
 
 watch(error, (msg) => {
@@ -686,10 +719,10 @@ function onMouseUp(e: MouseEvent) {
     const hit = hitRegion(e)
     const r = renderer.value
     if (hit.region === 'cell' && r) {
-      emit('cell-click', { row: hit.row, col: hit.col, text: r.cellText(hit.row, hit.col) })
+      fire('cell-click', { row: hit.row, col: hit.col, text: r.cellText(hit.row, hit.col) })
       const link = r.cellHyperlink(hit.row, hit.col)
       if (link) {
-        emit('hyperlink-click', { url: link, cell: { row: hit.row, col: hit.col } })
+        fire('hyperlink-click', { url: link, cell: { row: hit.row, col: hit.col } })
         if (props.openLinks) window.open(link, '_blank', 'noopener')
       }
     }
@@ -770,7 +803,7 @@ function onDblClick(e: MouseEvent) {
   } else {
     // 非边界 → 双击单元格事件
     const cell = r.cellAtScreen(view.value, p.x, p.y)
-    if (cell) emit('cell-dblclick', { row: cell.row, col: cell.col, text: r.cellText(cell.row, cell.col) })
+    if (cell) fire('cell-dblclick', { row: cell.row, col: cell.col, text: r.cellText(cell.row, cell.col) })
     return
   }
   contentSize.value = { w: r.contentWidth, h: r.contentHeight }
@@ -941,7 +974,7 @@ async function copySelection() {
 // ---------------- 选区变化事件 + overlay 定位 API ----------------
 // selection/selActive 在上方已定义,这里安全引用
 watch(selection, (sel) => {
-  if (sel && selActive.value) emit('selection-change', { range: sel, active: selActive.value })
+  if (sel && selActive.value) fire('selection-change', { range: sel, active: selActive.value })
 })
 
 /** 单元格当前屏幕矩形(render-area 相对坐标);供 overlay slot / 命令式定位 */
@@ -967,26 +1000,63 @@ function programmaticSetSelection(range: MergeRange) {
   doRender()
 }
 
-defineExpose({
-  /** 重新加载数据源 */
-  load: (src: ExcelSource) => load(src, props.transformModel),
-  /** 取当前工作簿模型 */
+const viewerApi: ViewerApi = {
+  load: (src: ExcelSource) => load(src, effectiveTransform),
   getWorkbook: () => workbook.value,
-  /** 当前激活的工作表索引 */
   getActiveSheet: () => activeSheet.value,
-  /** 切换工作表 */
   setActiveSheet: (i: number) => {
     if (workbook.value?.sheets[i]) activeSheet.value = i
   },
-  /** 取当前选区(范围) */
   getSelection: () => selection.value,
-  /** 设置选区 */
   setSelection: programmaticSetSelection,
-  /** 单元格/区域当前屏幕矩形 */
   rectOf,
   rectOfRange,
-  /** 主动重绘 */
   redraw: () => doRender(),
+}
+defineExpose(viewerApi)
+
+// ---------------- 插件运行时 ----------------
+const pluginHandlers = new Map<PluginEvent, Set<(p: any) => void>>()
+let pluginCleanups: Array<() => void> = []
+
+/** 派发交互事件: 既 emit 给模板,也通知插件 */
+function fire(event: PluginEvent, payload: any) {
+  emit(event as any, payload)
+  pluginHandlers.get(event)?.forEach((h) => h(payload))
+}
+
+/** (重新)初始化插件: 清理旧的 → 注册 events → 跑 setup 收集清理 */
+function initPlugins() {
+  pluginCleanups.forEach((fn) => fn())
+  pluginCleanups = []
+  pluginHandlers.clear()
+  const register = (event: PluginEvent, fn: (p: any) => void) => {
+    let set = pluginHandlers.get(event)
+    if (!set) pluginHandlers.set(event, (set = new Set()))
+    set.add(fn)
+  }
+  const ctx: ExcelPluginContext = { viewer: viewerApi, on: register, redraw: () => doRender() }
+  for (const p of normalizedPlugins.value) {
+    if (p.events) for (const [ev, fn] of Object.entries(p.events)) if (fn) register(ev as PluginEvent, fn)
+    const cleanup = p.setup?.(ctx)
+    if (typeof cleanup === 'function') pluginCleanups.push(cleanup)
+  }
+}
+
+/** 渲染插件 overlay(读 renderTick 以随滚动/缩放重渲) */
+const PluginOverlays = defineComponent({
+  name: 'PluginOverlays',
+  setup() {
+    return () => {
+      const ctx: OverlayContext = {
+        rectOf,
+        rectOfRange,
+        tick: renderTick.value,
+        workbook: workbook.value,
+      }
+      return normalizedPlugins.value.filter((p) => p.overlay).map((p) => p.overlay!(ctx))
+    }
+  },
 })
 </script>
 
@@ -1032,6 +1102,7 @@ defineExpose({
       <!-- 分层 UI: 消费方在格子上叠自己的组件,用 rectOf 定位、tick 触发跟随 -->
       <div class="ov-slot">
         <slot name="overlay" :rect-of="rectOf" :rect-of-range="rectOfRange" :tick="renderTick" />
+        <PluginOverlays />
       </div>
 
       <div

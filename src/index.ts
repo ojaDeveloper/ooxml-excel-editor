@@ -31,11 +31,23 @@ export type {
   CssColor,
   TransformModelFn,
   CellStyleFn,
+  CellStyleOverride,
 } from './core/model/types'
 
 // 扩展: 主题
 export type { ViewerTheme } from './core/render/theme'
 export { DEFAULT_THEME, mergeTheme } from './core/render/theme'
+
+// 扩展: 插件
+export { definePlugin } from './core/plugin'
+export type {
+  ExcelPlugin,
+  ExcelPluginContext,
+  ViewerApi,
+  OverlayContext,
+  PluginEvent,
+  Rect,
+} from './core/plugin'
 
 // 作为 Vue 插件全局注册
 const plugin: Plugin = {

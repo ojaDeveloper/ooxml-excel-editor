@@ -3,7 +3,7 @@
  * 渲染顺序(每个 pane 内): 网格线 → 填充/条件背景 → 数据条 → 边框 → 文本/图标 → 筛选按钮。
  * 表头(行号/列字母)最后绘制，覆盖在最上层。
  */
-import type { CellModel, CellStyle, CellStyleFn, MergeRange, SheetModel, Sparkline, WorkbookModel } from '../model/types'
+import type { CellModel, CellStyle, CellStyleFn, CellStyleOverride, MergeRange, SheetModel, Sparkline, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
 import { type ViewerTheme, mergeTheme } from './theme'
 import { GridMetrics, colIndexToLetters } from '../layout/grid-metrics'
@@ -952,7 +952,7 @@ export class CanvasRenderer {
 }
 
 /** 合并 cellStyle 钩子返回的部分样式: font/fill/borders 浅合并,其余覆盖 */
-function applyStyleOverride(base: CellStyle, over: Partial<CellStyle>): CellStyle {
+function applyStyleOverride(base: CellStyle, over: CellStyleOverride): CellStyle {
   return {
     ...base,
     ...over,

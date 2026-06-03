@@ -143,7 +143,31 @@ console.log(wb.sheets[0].cells)
 ```
 覆盖层容器 `pointer-events:none`(滚动穿透),子元素自动 `pointer-events:auto`(可点)。
 
-> 正式的 `definePlugin({ setup(api) })` 插件注册系统将作为以上扩展点的薄层封装在后续版本加入。
+### 插件 `definePlugin`
+把上面所有扩展点(主题/数据钩子/渲染钩子/事件/overlay/命令式 API)打包成一个插件,`:plugins` 分发;多个插件按数组顺序合并,组件自身 props 最后覆盖。
+```ts
+import { definePlugin } from 'ooxml-excel-preview'
+
+const highlightNegatives = definePlugin({
+  name: 'highlight-negatives',
+  theme: { selBorder: '#e91e63' },
+  cellStyle: (c) => (typeof c.raw === 'number' && c.raw < 0 ? { font: { color: '#d00' } } : undefined),
+  events: { 'cell-click': (p) => console.log('clicked', p) },
+  overlay: ({ rectOf }) => {
+    const r = rectOf(0, 0)
+    return r ? h('div', { style: { position: 'absolute', left: r.x + 'px', top: r.y + 'px' } }, '⚑') : null
+  },
+  setup: ({ viewer, on }) => {
+    on('selection-change', (s) => console.log(s))
+    // viewer.setSelection(...) / viewer.getWorkbook() ...
+    return () => {/* 清理 */}
+  },
+})
+```
+```vue
+<ExcelViewer :src="file" :plugins="[highlightNegatives]" />
+```
+插件字段:`theme` / `transformModel` / `cellStyle` / `events`(事件→处理器) / `overlay`(返回 VNode,随滚动跟随) / `setup(ctx)`(拿 `viewer` 命令式 API、`on()` 订阅事件,返回可选清理函数)。
 
 ## 浏览器支持
 
