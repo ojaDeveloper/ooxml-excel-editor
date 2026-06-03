@@ -60,4 +60,24 @@ describe('parseWorkbook (端到端)', () => {
     const s3 = wb.sheets[2]
     expect(s3.dimension.rows).toBe(2000)
   })
+
+  it('批注被解析(格式样例 sheet)', async () => {
+    const wb = await parseWorkbook(loadSample())
+    const s2 = wb.sheets[1]
+    const hasComment = [...s2.cells.values()].some((c) => !!c.comment)
+    expect(hasComment).toBe(true)
+  })
+
+  it('列表数据验证被解析', async () => {
+    const wb = await parseWorkbook(loadSample())
+    const s2 = wb.sheets[1]
+    expect(s2.dataValidations.length).toBeGreaterThanOrEqual(1)
+  })
+
+  it('超链接单元格被识别', async () => {
+    const wb = await parseWorkbook(loadSample())
+    const s2 = wb.sheets[1]
+    const hasLink = [...s2.cells.values()].some((c) => !!c.hyperlink)
+    expect(hasLink).toBe(true)
+  })
 })
