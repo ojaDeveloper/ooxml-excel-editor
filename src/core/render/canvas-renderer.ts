@@ -154,6 +154,30 @@ export class CanvasRenderer {
     this.selection = sel
   }
 
+  // ---------------- 查找 ----------------
+  private findHits: { row: number; col: number }[] = []
+  private findCurrent = -1
+  /** 扫描非空单元格,返回命中的格(按阅读顺序: 先行后列) */
+  searchCells(query: string, opts: { matchCase?: boolean; wholeCell?: boolean } = {}): { row: number; col: number }[] {
+    if (!query) return []
+    const q = opts.matchCase ? query : query.toLowerCase()
+    const out: { row: number; col: number }[] = []
+    for (const cell of this.sheet.cells.values()) {
+      if (cell.type === 'empty') continue
+      let text = this.cellText(cell.row, cell.col)
+      if (!text) continue
+      if (!opts.matchCase) text = text.toLowerCase()
+      if (opts.wholeCell ? text === q : text.includes(q)) out.push({ row: cell.row, col: cell.col })
+    }
+    out.sort((a, b) => a.row - b.row || a.col - b.col)
+    return out
+  }
+  /** 设置高亮命中集 + 当前项(供 drawFind 绘制) */
+  setFind(hits: { row: number; col: number }[], current: number): void {
+    this.findHits = hits
+    this.findCurrent = current
+  }
+
   /** 屏幕坐标 → 单元格(0-based)。落在表头或越界返回 null。 */
   cellAtScreen(view: ViewState, x: number, y: number): { row: number; col: number } | null {
     const hw = this.metrics.rowHeaderWidth
@@ -422,7 +446,37 @@ export class CanvasRenderer {
     if (flags.headers) this.drawHeaders(layout.panes, view)
     this.drawFreezeLines(layout) // 导出时 freeze=0 → 直接返回
     if (flags.pageBreaks) this.drawPageBreaks(view)
+    if (flags.selection && this.findHits.length) this.drawFind(view)
     if (flags.selection) this.drawSelection(view)
+  }
+
+  /** 查找高亮: 所有命中淡黄,当前项橙色描边 */
+  private drawFind(view: ViewState): void {
+    const ctx = this.ctx
+    const hw = this.metrics.rowHeaderWidth
+    const hh = this.metrics.colHeaderHeight
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(hw, hh, view.width - hw, view.height - hh)
+    ctx.clip()
+    for (let i = 0; i < this.findHits.length; i++) {
+      const hit = this.findHits[i]
+      const mg = this.merges.rangeOf(hit.row, hit.col)
+      const top = mg ? mg.top : hit.row
+      const left = mg ? mg.left : hit.col
+      const tl = this.screenRectOfCell(view, top, left)
+      const w = mg ? this.metrics.colLeft(mg.right + 1) - this.metrics.colLeft(mg.left) : tl.w
+      const h = mg ? this.metrics.rowTop(mg.bottom + 1) - this.metrics.rowTop(mg.top) : tl.h
+      if (tl.x + w < hw || tl.y + h < hh || tl.x > view.width || tl.y > view.height) continue
+      ctx.fillStyle = i === this.findCurrent ? 'rgba(255,145,0,0.40)' : 'rgba(255,231,76,0.50)'
+      ctx.fillRect(tl.x, tl.y, w, h)
+      if (i === this.findCurrent) {
+        ctx.strokeStyle = '#F57C00'
+        ctx.lineWidth = 2
+        ctx.strokeRect(Math.round(tl.x) + 1, Math.round(tl.y) + 1, Math.round(w) - 2, Math.round(h) - 2)
+      }
+    }
+    ctx.restore()
   }
 
   /**

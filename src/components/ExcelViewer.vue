@@ -40,6 +40,7 @@ import {
 import ViewerToolbar from './ViewerToolbar.vue'
 import SheetTabs from './SheetTabs.vue'
 import ExportDialog from './ExportDialog.vue'
+import FindBar from './FindBar.vue'
 import type { ExportConfig } from './export-types'
 
 const props = withDefaults(
@@ -402,6 +403,10 @@ function rebuildRenderer() {
   })
   contentSize.value = { w: renderer.value.contentWidth, h: renderer.value.contentHeight }
   clearSelection() // 切表清空选区
+  // 切表/换簿清空查找命中(列表已失效)
+  findHits.value = []
+  findIndex.value = -1
+  if (findQuery.value) recomputeFind()
   tooltip.value = null
   // 重置滚动
   if (scrollerEl.value) {
@@ -1311,6 +1316,77 @@ function reportExportError(e: unknown) {
   if (typeof window !== 'undefined' && window.alert) window.alert(msg)
 }
 
+// ---- 查找 ----
+const findOpen = ref(false)
+const findQuery = ref('')
+const findMatchCase = ref(false)
+const findWholeCell = ref(false)
+const findHits = shallowRef<{ row: number; col: number }[]>([])
+const findIndex = ref(-1)
+
+/** 重新计算命中并应用(query/选项变化时) */
+function recomputeFind() {
+  const r = renderer.value
+  if (!r || !findQuery.value) {
+    findHits.value = []
+    findIndex.value = -1
+    r?.setFind([], -1)
+    doRender()
+    return
+  }
+  const hits = r.searchCells(findQuery.value, { matchCase: findMatchCase.value, wholeCell: findWholeCell.value })
+  findHits.value = hits
+  findIndex.value = hits.length ? 0 : -1
+  applyFind()
+}
+
+/** 把当前命中应用到渲染器 + 移动选区/滚动到视图 */
+function applyFind() {
+  const r = renderer.value
+  if (!r) return
+  r.setFind(findHits.value, findIndex.value)
+  const hit = findHits.value[findIndex.value]
+  if (hit) {
+    selMode.value = 'range'
+    selAnchor.value = { row: hit.row, col: hit.col }
+    selActive.value = { row: hit.row, col: hit.col }
+    scrollActiveIntoView()
+  }
+  doRender()
+}
+
+function findNext() {
+  if (!findHits.value.length) return
+  findIndex.value = (findIndex.value + 1) % findHits.value.length
+  applyFind()
+}
+function findPrev() {
+  if (!findHits.value.length) return
+  findIndex.value = (findIndex.value - 1 + findHits.value.length) % findHits.value.length
+  applyFind()
+}
+function openFind() {
+  findOpen.value = true
+}
+function closeFind() {
+  findOpen.value = false
+  findQuery.value = ''
+  findHits.value = []
+  findIndex.value = -1
+  renderer.value?.setFind([], -1)
+  doRender()
+  scrollerEl.value?.focus()
+}
+watch([findQuery, findMatchCase, findWholeCell], recomputeFind)
+
+/** 根容器捕获 Ctrl/Cmd+F → 打开查找(替代浏览器原生查找) */
+function onRootKeydown(e: KeyboardEvent) {
+  if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
+    e.preventDefault()
+    openFind()
+  }
+}
+
 // ---- 导出设置对话框 ----
 const exportDialogOpen = ref(false)
 /** 把对话框配置映射成各导出方法的入参并执行 */
@@ -1414,7 +1490,7 @@ const PluginOverlays = defineComponent({
 </script>
 
 <template>
-  <div class="excel-viewer" ref="rootEl">
+  <div class="excel-viewer" ref="rootEl" @keydown="onRootKeydown">
     <slot
       v-if="workbook"
       name="toolbar"
@@ -1465,6 +1541,21 @@ const PluginOverlays = defineComponent({
       >
         <div class="spacer" :style="{ width: contentSize.w + 'px', height: contentSize.h + 'px' }" />
       </div>
+
+      <FindBar
+        v-if="findOpen && workbook"
+        :query="findQuery"
+        :match-count="findHits.length"
+        :current="findIndex"
+        :match-case="findMatchCase"
+        :whole-cell="findWholeCell"
+        @update:query="findQuery = $event"
+        @update:match-case="findMatchCase = $event"
+        @update:whole-cell="findWholeCell = $event"
+        @next="findNext"
+        @prev="findPrev"
+        @close="closeFind"
+      />
 
       <!-- 分层 UI: 消费方在格子上叠自己的组件,用 rectOf 定位、tick 触发跟随 -->
       <div class="ov-slot">
