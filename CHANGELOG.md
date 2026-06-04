@@ -5,6 +5,11 @@
 
 ## [Unreleased]
 
+### 边框还原(对齐 Excel/WPS)
+- **合并单元格内部不再画网格线**(之前无填充的合并格会透出内部浅灰网格线)。
+- **斜线边框(对角线 ↘/↗)**:parser 解析 `diagonal{up,down,style,color}`,canvas 与矢量 PDF 都绘制。
+- **相邻共享边按权重取较重者**(hair<…<medium<thick<double):普通格的边框绘制顺序无关、与 Excel/WPS 一致(合并区仍画自身四周)。
+
 ### 新增
 - **React 壳**:`ooxml-excel-preview/react` 导出 `<ExcelViewer>`(`forwardRef` + 命令式 `ExcelViewerHandle`)与 `useExcelDocument`,与 Vue 壳**共用 ~100% core 引擎**。
 - **框架无关 core 入口**:`ooxml-excel-preview/core` 暴露引擎(`ViewerController` / `CanvasRenderer` / `WorkbookExporter` / `OverlayManager`)+ 解析 + 读数据 + 类型,零框架依赖。

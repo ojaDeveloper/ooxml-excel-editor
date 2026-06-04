@@ -337,6 +337,11 @@ function drawVectorCell(
   drawBorder(doc, s.borders.bottom, x, y + h, x + w, y + h)
   drawBorder(doc, s.borders.left, x, y, x, y + h)
   drawBorder(doc, s.borders.right, x + w, y, x + w, y + h)
+  // 对角线边框(↘ / ↗)
+  if (s.borders.diagonal && (s.borders.diagonalDown || s.borders.diagonalUp)) {
+    if (s.borders.diagonalDown) drawBorder(doc, s.borders.diagonal, x, y, x + w, y + h)
+    if (s.borders.diagonalUp) drawBorder(doc, s.borders.diagonal, x, y + h, x + w, y)
+  }
   // 条件格式图标(画在左侧,文本相应右移)
   let iconShift = 0
   if (eff?.icon) {

@@ -37,6 +37,12 @@ export interface Borders {
   bottom?: BorderEdge
   left?: BorderEdge
   right?: BorderEdge
+  /** 对角线边框样式(up/down 共用此线型与颜色) */
+  diagonal?: BorderEdge
+  /** ↗ 左下→右上 对角线 */
+  diagonalUp?: boolean
+  /** ↘ 左上→右下 对角线 */
+  diagonalDown?: boolean
 }
 
 export interface Font {

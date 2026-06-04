@@ -402,11 +402,16 @@ function toBorders(b: any, theme: CssColor[]) {
     e && e.style
       ? { style: e.style, color: resolveColor(e.color, theme) || '#000000' }
       : undefined
+  // ExcelJS: border.diagonal = { up, down, style, color }
+  const diag = b.diagonal
   return {
     top: edge(b.top),
     bottom: edge(b.bottom),
     left: edge(b.left),
     right: edge(b.right),
+    diagonal: edge(diag),
+    diagonalUp: !!diag?.up,
+    diagonalDown: !!diag?.down,
   }
 }
 

@@ -1,6 +1,34 @@
 /** 单元格边框绘制。 */
 import type { BorderEdge, BorderStyle } from '../model/types'
 
+/**
+ * 边框线型权重(越大越"重")。两个相邻单元格在共享边上各自定义了边框时,
+ * Excel/WPS 取较重的那条来画 —— 顺序依 OOXML 约定(hair<dotted<…<medium<thick<double)。
+ */
+const STYLE_WEIGHT: Record<BorderStyle, number> = {
+  none: 0,
+  hair: 1,
+  dotted: 2,
+  dashDotDot: 3,
+  dashDot: 4,
+  dashed: 5,
+  thin: 6,
+  mediumDashDotDot: 7,
+  slantDashDot: 8,
+  mediumDashDot: 9,
+  mediumDashed: 10,
+  medium: 11,
+  thick: 12,
+  double: 13,
+}
+
+/** 共享边取较重的一条(同重则取 a / 本单元格的)。任一为空按 none 计。 */
+export function heavierEdge(a: BorderEdge | undefined, b: BorderEdge | undefined): BorderEdge | undefined {
+  const wa = a ? STYLE_WEIGHT[a.style] : 0
+  const wb = b ? STYLE_WEIGHT[b.style] : 0
+  return wb > wa ? b : a
+}
+
 /** 返回 [线宽, 虚线数组, 是否双线] */
 function borderSpec(style: BorderStyle): { width: number; dash: number[]; double: boolean } {
   switch (style) {
@@ -63,4 +91,26 @@ function line(ctx: CanvasRenderingContext2D, x1: number, y1: number, x2: number,
   ctx.moveTo(x1, y1)
   ctx.lineTo(x2, y2)
   ctx.stroke()
+}
+
+/**
+ * 画一条任意方向的对角线(单元格对角线边框 ↘ / ↗)。
+ * 用线型的宽度/虚线/颜色;double 退化为单线(对角双线极罕见,不值得歪斜偏移)。
+ */
+export function drawDiagonalEdge(
+  ctx: CanvasRenderingContext2D,
+  edge: BorderEdge | undefined,
+  x1: number,
+  y1: number,
+  x2: number,
+  y2: number,
+): void {
+  if (!edge || edge.style === 'none') return
+  const spec = borderSpec(edge.style)
+  ctx.save()
+  ctx.strokeStyle = edge.color
+  ctx.lineWidth = spec.width
+  ctx.setLineDash(spec.dash)
+  line(ctx, x1, y1, x2, y2)
+  ctx.restore()
 }

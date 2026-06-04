@@ -3,7 +3,7 @@
  * 渲染顺序(每个 pane 内): 网格线 → 填充/条件背景 → 数据条 → 边框 → 文本/图标 → 筛选按钮。
  * 表头(行号/列字母)最后绘制，覆盖在最上层。
  */
-import type { CellModel, CellStyle, CellStyleFn, CellStyleOverride, MergeRange, SheetModel, Sparkline, WorkbookModel } from '../model/types'
+import type { BorderEdge, CellModel, CellStyle, CellStyleFn, CellStyleOverride, MergeRange, SheetModel, Sparkline, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
 import { cellDisplayText } from '../model/data-access'
 import { type ViewerTheme, mergeTheme } from './theme'
@@ -14,7 +14,7 @@ import { computeViewport, type Pane } from '../layout/viewport'
 import { ConditionalEngine, type CellEffect } from './conditional'
 import { formatValue } from '../format/number-format'
 import { paintFill } from './fills'
-import { drawEdge } from './borders'
+import { drawEdge, drawDiagonalEdge, heavierEdge } from './borders'
 import {
   fontToCss, measureWidth, resolveHAlign, shrinkScale, wrapLines,
   LINE_HEIGHT_FACTOR, CELL_PADDING,
@@ -714,7 +714,7 @@ export class CanvasRenderer {
       const w = this.metrics.colLeft(m.right + 1) - this.metrics.colLeft(m.left)
       const h = this.metrics.rowTop(m.bottom + 1) - this.metrics.rowTop(m.top)
       const cell = this.sheet.cells.get(cellKey(m.top, m.left))
-      this.paintCellBox(cell, m.top, m.left, x, y, w, h, zoom)
+      this.paintCellBox(cell, m.top, m.left, x, y, w, h, zoom, true)
       coveredAnchorsDrawn.add(cellKey(m.top, m.left))
     }
 
@@ -734,6 +734,14 @@ export class CanvasRenderer {
     ctx.restore()
   }
 
+  /** 取某格指定边的边框样式(供相邻共享边取较重者);越界/无格返回 undefined */
+  private borderEdgeOf(row: number, col: number, side: 'top' | 'bottom' | 'left' | 'right'): BorderEdge | undefined {
+    if (row < 0 || col < 0 || row >= this.metrics.rows || col >= this.metrics.cols) return undefined
+    const cell = this.sheet.cells.get(cellKey(row, col))
+    if (!cell) return undefined
+    return this.styleOf(cell).borders[side]
+  }
+
   /** 画单个 cell(或合并区)的: 填充 → 条件背景 → 数据条 → 边框 → 内容 → 图标 → 筛选按钮 */
   private paintCellBox(
     cell: CellModel | undefined,
@@ -744,6 +752,7 @@ export class CanvasRenderer {
     w: number,
     h: number,
     zoom: number,
+    isMerge = false,
   ): void {
     const ctx = this.ctx
     const style = cell ? this.styleOf(cell) : undefined
@@ -778,10 +787,24 @@ export class CanvasRenderer {
     // 边框
     if (style) {
       const b = style.borders
-      drawEdge(ctx, b.top, x, y, x + w, y)
-      drawEdge(ctx, b.bottom, x, y + h, x + w, y + h)
-      drawEdge(ctx, b.left, x, y, x, y + h)
-      drawEdge(ctx, b.right, x + w, y, x + w, y + h)
+      if (isMerge) {
+        // 合并区:画自身四周(相邻优先级对多列/多行边界复杂,合并区一般自带边框,直接画)
+        drawEdge(ctx, b.top, x, y, x + w, y)
+        drawEdge(ctx, b.bottom, x, y + h, x + w, y + h)
+        drawEdge(ctx, b.left, x, y, x, y + h)
+        drawEdge(ctx, b.right, x + w, y, x + w, y + h)
+      } else {
+        // 普通格:共享边与相邻格取较重的一条,绘制顺序无关、与 Excel/WPS 一致
+        drawEdge(ctx, heavierEdge(b.top, this.borderEdgeOf(row - 1, col, 'bottom')), x, y, x + w, y)
+        drawEdge(ctx, heavierEdge(b.bottom, this.borderEdgeOf(row + 1, col, 'top')), x, y + h, x + w, y + h)
+        drawEdge(ctx, heavierEdge(b.left, this.borderEdgeOf(row, col - 1, 'right')), x, y, x, y + h)
+        drawEdge(ctx, heavierEdge(b.right, this.borderEdgeOf(row, col + 1, 'left')), x + w, y, x + w, y + h)
+      }
+      // 对角线(↘ 左上→右下 / ↗ 左下→右上),合并区跨整块
+      if (b.diagonal && (b.diagonalDown || b.diagonalUp)) {
+        if (b.diagonalDown) drawDiagonalEdge(ctx, b.diagonal, x, y, x + w, y + h)
+        if (b.diagonalUp) drawDiagonalEdge(ctx, b.diagonal, x, y + h, x + w, y)
+      }
     }
 
     // 图标(条件格式 iconSet)
