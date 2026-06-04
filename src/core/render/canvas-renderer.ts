@@ -675,28 +675,40 @@ export class CanvasRenderer {
     const gridR0 = this.metrics.rowAt(pane.clipY - hh + pane.offsetY)
     const gridR1 = this.metrics.rowAt(pane.clipY + pane.clipH - hh + pane.offsetY) + 1
 
-    // 1. 网格线
+    // 可视区内的合并区(网格线绘制与合并绘制共用)
+    const visibleMerges = this.sheet.merges.filter(
+      (m) => !(m.bottom < pane.rowStart || m.top > pane.rowEnd || m.right < pane.colStart || m.left > pane.colEnd),
+    )
+
+    // 1. 网格线 —— 合并区内部不画(跟 Excel/WPS 一致:合并后内部网格线消失,只留外边界)
     if (this.sheet.showGridLines) {
       ctx.strokeStyle = this.theme.gridLine
       ctx.lineWidth = 1
       ctx.beginPath()
+      const yTop = pane.clipY
+      const yBot = pane.clipY + pane.clipH
       for (let c = Math.max(0, gridC0); c <= gridC1; c++) {
         const x = Math.round(sx(c)) + 0.5
-        ctx.moveTo(x, pane.clipY)
-        ctx.lineTo(x, pane.clipY + pane.clipH)
+        // c 落在某合并区内部(m.left < c <= m.right)→ 该竖线在此合并区的纵向区间不画
+        const gaps: Array<[number, number]> = []
+        for (const m of visibleMerges) if (m.left < c && c <= m.right) gaps.push([sy(m.top), sy(m.bottom + 1)])
+        strokeGapped(ctx, x, yTop, yBot, gaps, true)
       }
+      const xL = pane.clipX
+      const xR = pane.clipX + pane.clipW
       for (let r = Math.max(0, gridR0); r <= gridR1; r++) {
         const y = Math.round(sy(r)) + 0.5
-        ctx.moveTo(pane.clipX, y)
-        ctx.lineTo(pane.clipX + pane.clipW, y)
+        // r 落在某合并区内部(m.top < r <= m.bottom)→ 该横线在此合并区的横向区间不画
+        const gaps: Array<[number, number]> = []
+        for (const m of visibleMerges) if (m.top < r && r <= m.bottom) gaps.push([sx(m.left), sx(m.right + 1)])
+        strokeGapped(ctx, y, xL, xR, gaps, false)
       }
       ctx.stroke()
     }
 
     // 2. 合并区(锚点可能在可视区外，需单独扫描)
     const coveredAnchorsDrawn = new Set<string>()
-    for (const m of this.sheet.merges) {
-      if (m.bottom < pane.rowStart || m.top > pane.rowEnd || m.right < pane.colStart || m.left > pane.colEnd) continue
+    for (const m of visibleMerges) {
       const x = sx(m.left)
       const y = sy(m.top)
       const w = this.metrics.colLeft(m.right + 1) - this.metrics.colLeft(m.left)
@@ -1234,6 +1246,49 @@ function withAlpha(color: string, alpha: number): string {
   if (!m) return color
   const n = parseInt(m[1], 16)
   return `rgba(${(n >> 16) & 255},${(n >> 8) & 255},${n & 255},${alpha})`
+}
+
+/**
+ * [start,end] 减去 gaps(合并区内部区间,可重叠/乱序)的补集 → 要画的实线段。
+ * 纯函数,便于单测。合并区内部的网格线靠此被"挖空"。
+ */
+export function gridSegments(start: number, end: number, gaps: Array<[number, number]>): Array<[number, number]> {
+  if (!gaps.length) return start < end ? [[start, end]] : []
+  const sorted = [...gaps].sort((a, b) => a[0] - b[0])
+  const out: Array<[number, number]> = []
+  let cur = start
+  for (const [gs, ge] of sorted) {
+    const s = Math.max(gs, start)
+    const e = Math.min(ge, end)
+    if (s > cur) out.push([cur, s]) // 空隙前的实线段
+    if (e > cur) cur = e // 推进越过本合并区
+  }
+  if (cur < end) out.push([cur, end])
+  return out
+}
+
+/**
+ * 往当前 path 里加 [start,end] 网格线段,跳过 gaps(合并区内部)。
+ * vertical=true: 竖线,fixed=x,start/end 为 y;否则横线,fixed=y,start/end 为 x。
+ */
+function strokeGapped(
+  ctx: CanvasRenderingContext2D,
+  fixed: number,
+  start: number,
+  end: number,
+  gaps: Array<[number, number]>,
+  vertical: boolean,
+): void {
+  for (const [a, b] of gridSegments(start, end, gaps)) {
+    if (b - a <= 0.0001) continue
+    if (vertical) {
+      ctx.moveTo(fixed, a)
+      ctx.lineTo(fixed, b)
+    } else {
+      ctx.moveTo(a, fixed)
+      ctx.lineTo(b, fixed)
+    }
+  }
 }
 
 /** 在单元格内画迷你图(折线/柱/盈亏)。 */
