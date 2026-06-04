@@ -5,6 +5,7 @@
  */
 import type { CellModel, CellStyle, CellStyleFn, CellStyleOverride, MergeRange, SheetModel, Sparkline, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
+import { cellDisplayText } from '../model/data-access'
 import { type ViewerTheme, mergeTheme } from './theme'
 import { GridMetrics, colIndexToLetters } from '../layout/grid-metrics'
 import { MergeIndex } from '../layout/merges'
@@ -384,9 +385,8 @@ export class CanvasRenderer {
   /** 单元格的显示文本(套数字格式后);空返回 '' */
   cellText(row: number, col: number): string {
     const cell = this.sheet.cells.get(cellKey(row, col))
-    if (!cell || cell.type === 'empty') return ''
-    if (cell.type === 'richtext' && cell.rich) return cell.rich.map((r) => r.text).join('')
-    return formatValue(cell.raw, this.styleOf(cell).numFmt, this.workbook.date1904).text
+    // 用 styleOf(含 cellStyle 钩子)的 numFmt;复用纯函数 cellDisplayText 保持单一真相源
+    return cellDisplayText(cell, cell ? this.styleOf(cell) : undefined, this.workbook.date1904)
   }
 
   /** 单元格的公式文本(无则 null),供公式栏显示 */

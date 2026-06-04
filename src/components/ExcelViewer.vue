@@ -14,6 +14,8 @@ import type {
   WorkbookModel,
 } from '@/core/model/types'
 import type { ParseProgress } from '@/core/progress'
+import type { ReadOptions } from '@/core/model/data-access'
+import { getCellValue, getCellText, getSheetData, getRangeData, sheetToJSON } from '@/core/model/data-access'
 import type { ViewerTheme } from '@/core/render/theme'
 import { useExcelDocument } from '@/composables/useExcelDocument'
 import { CanvasRenderer, type ViewState } from '@/core/render/canvas-renderer'
@@ -1616,6 +1618,36 @@ const viewerApi: ViewerApi = {
   exportPdf,
   downloadPdf,
   print,
+  // ---- 数据读取(委托独立函数,自动绑 date1904 + 默认当前表) ----
+  getCellValue: (row, col, si) => {
+    const s = dataSheet(si)
+    return s ? getCellValue(s, row, col) : null
+  },
+  getCellText: (row, col, si) => {
+    const s = dataSheet(si)
+    return s ? getCellText(s, row, col, workbook.value?.date1904 ?? false) : ''
+  },
+  getSheetData: (opts, si) => {
+    const s = dataSheet(si)
+    return s ? getSheetData(s, withDate1904(opts)) : []
+  },
+  getSheetJSON: (opts, si) => {
+    const s = dataSheet(si)
+    return s ? sheetToJSON(s, withDate1904(opts)) : []
+  },
+  getRangeData: (range, opts, si) => {
+    const s = dataSheet(si)
+    return s ? getRangeData(s, range, withDate1904(opts)) : []
+  },
+}
+/** 取用于读数据的 sheet(缺省=当前活动表) */
+function dataSheet(sheetIndex?: number): SheetModel | null {
+  const wb = workbook.value
+  if (!wb) return null
+  return wb.sheets[sheetIndex ?? activeSheet.value] ?? null
+}
+function withDate1904<T extends ReadOptions>(opts?: T): T {
+  return { ...(opts as T), date1904: workbook.value?.date1904 ?? false }
 }
 defineExpose(viewerApi)
 

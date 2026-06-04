@@ -68,6 +68,15 @@ async function exportPdfWithWatermark() {
   }
 }
 
+// 演示数据读取 API: 取当前表为 JSON(示例表头在第 1 行)→ 复制到剪贴板 + toast
+function showSheetJSON() {
+  const viewer = viewerRef.value
+  if (!viewer) return
+  const json = viewer.getSheetJSON({ headerRow: 1 })
+  navigator.clipboard?.writeText(JSON.stringify(json, null, 2)).catch(() => {})
+  lastEvent.value = `[数据] ${json.length} 行已复制为 JSON · 首行: ${JSON.stringify(json[0] ?? {})}`.slice(0, 140)
+}
+
 // 示例插件: 负数标红 + 单击 toast + 贡献一个工具栏按钮(definePlugin 打包 cellStyle/events/toolbar)
 const negativesPlugin = definePlugin({
   name: 'demo-highlight-negatives',
@@ -121,6 +130,9 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
       <button class="sample-btn" @click="loadSample">加载示例</button>
       <button v-if="src" class="sample-btn" @click="exportPdfWithWatermark" title="演示 beforeRenderPage 钩子">
         PDF(页码+水印)
+      </button>
+      <button v-if="src" class="sample-btn" @click="showSheetJSON" title="演示数据读取 API getSheetJSON">
+        数据→JSON
       </button>
     </header>
 

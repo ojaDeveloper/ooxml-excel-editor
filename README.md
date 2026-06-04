@@ -17,6 +17,8 @@
 - 🖨 **导出 / 打印**:整表/选区/多表导出 **PNG/JPEG**、**PDF**(位图 + **矢量·文字可选可搜**两种)、**系统打印**(可另存 PDF);默认还原原生 `pageSetup`(纸张/方向/页边距/缩放/打印区域/**打印标题行列每页重复**);宽表**横向跨页**(页矩阵);`beforeRenderPage` 注入页眉/页脚/水印、`configureDoc` 注册字体;内置「导出设置」对话框
 - ⚡ **按需加载**(无图表文件不下载 echarts、不导出 PDF 不下载 jspdf)、**友好错误兜底**(损坏/加密/旧 .xls)、解析失败自动给出可读提示
 
+- 📤 **数据读取 API**:不必自己再解析 —— `getCellText`/`getSheetData`/`sheetToJSON`/`getRangeData`(独立函数 + 组件 ref 方法),值/显示文本可选,合并/日期/数字格式都处理好
+
 > 预览不需要公式引擎 —— .xlsx 缓存了公式结果,直接显示。详见 [EXCEL还原难点.md](./EXCEL还原难点.md)。
 
 ## 安装
@@ -64,15 +66,48 @@ import 'ooxml-excel-preview/style.css'
 app.use(OoxmlExcelPreview) // 注册全局组件 <ExcelViewer />
 ```
 
-### 程序化解析(只要数据模型,不渲染)
+### 读取数据(好用的数据访问 API)
 
+不必自己再解析。两条路径,都拿同一份数据:
+
+**A. 独立函数**(配 `parseWorkbook`,不渲染也能用):
 ```ts
-import { parseWorkbook, loadArrayBuffer } from 'ooxml-excel-preview'
+import { parseWorkbook, loadArrayBuffer, getSheetData, sheetToJSON, getCellText, getWorkbookJSON } from 'ooxml-excel-preview'
 
-const buffer = await loadArrayBuffer(file) // File/Blob/ArrayBuffer/Uint8Array/URL
-const wb = await parseWorkbook(buffer)
-console.log(wb.sheets[0].cells)
+const wb = await parseWorkbook(await loadArrayBuffer(file))
+const sheet = wb.sheets[0]
+
+getCellText(sheet, 1, 0, wb.date1904)         // 单格显示文本,如 '产品' / '¥1,234.50'
+getSheetData(sheet, { date1904: wb.date1904 })            // 二维数组(显示文本)
+getSheetData(sheet, { format: false, date1904: wb.date1904 }) // 二维数组(原始 number/Date)
+sheetToJSON(sheet, { headerRow: 0, date1904: wb.date1904 })   // 首行作表头 → [{ 产品:'鼠标', 单价:89 }, ...]
+getWorkbookJSON(wb)                            // 全簿 → { 表名: 对象数组 }(自动带 date1904)
 ```
+
+**B. 组件 ref**(自动带 `date1904` + 默认当前表;插件 `ctx.viewer` 同样可用):
+```ts
+const viewer = ref()  // <ExcelViewer ref="viewer" />
+viewer.value.getCellText(1, 0)                 // 显示文本
+viewer.value.getCellValue(1, 0)                // 原始值
+viewer.value.getSheetData()                    // 当前表 2D(默认显示文本)
+viewer.value.getSheetJSON({ headerRow: 1 })    // 对象数组
+viewer.value.getRangeData(viewer.value.getSelection())  // 取"我选中的"区域
+```
+
+| 函数 / 方法 | 返回 |
+|---|---|
+| `getCellValue` / `getCellText` / `getCellStyle` / `getCell` | 单格 原始值 / 显示文本 / 解析样式 / 模型 |
+| `getSheetData` | 二维数组(稠密 `rows×cols`) |
+| `getRangeData(range)` | 区域二维数组 |
+| `sheetToJSON` | 对象数组(首行作 key,空表头回退列字母,全空行跳过) |
+| `getWorkbookJSON` | `{ 表名: 对象数组 }` |
+
+- **值 vs 文本**:`format` 默认 `true` → 套了数字/日期格式的**显示文本**(所见即所得);`{ format: false }` → 原始 `number/Date/boolean`。
+- **合并单元格**:2D/JSON 里**锚点(左上)持值,其余为空**(单格 `getCellValue` 仍返回模型里的字面值)。
+- **公式**:不重算,沿用 Excel 缓存结果(公式串见 `cell.formula`)。
+- 也 re-export 了底层 `formatValue` / `cellKey`。
+
+> 想要更底层的渲染模型,仍可直接用 `parseWorkbook` 的返回值 / `getWorkbook()` / `@rendered`(`WorkbookModel`:`sheets[].cells: Map<"row:col">`、`styles[styleId]`)。
 
 ## API
 

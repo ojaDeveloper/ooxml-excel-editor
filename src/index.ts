@@ -16,6 +16,23 @@ export { parseWorkbook } from './core/parser'
 export { loadArrayBuffer } from './core/loader'
 export type { ExcelSource } from './core/loader'
 
+// 数据读取 API(配 parseWorkbook 独立用;组件 ref 也有同名方法)
+export {
+  cellDisplayText,
+  getCell,
+  getCellValue,
+  getCellStyle,
+  getCellText,
+  getSheetData,
+  getRangeData,
+  sheetToJSON,
+  getWorkbookJSON,
+} from './core/model/data-access'
+export type { CellValue, ReadOptions, SheetToJSONOptions } from './core/model/data-access'
+// 顺带导出消费者常用的底层工具
+export { formatValue } from './core/format/number-format'
+export { cellKey } from './core/model/types'
+
 // 中间数据模型类型，供宿主项目做二次处理/类型标注
 export type {
   WorkbookModel,

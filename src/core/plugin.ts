@@ -12,6 +12,7 @@
  */
 import type { VNodeChild } from 'vue'
 import type { CellStyleFn, MergeRange, TransformModelFn, WorkbookModel } from './model/types'
+import type { CellValue, ReadOptions, SheetToJSONOptions } from './model/data-access'
 import type { ViewerTheme } from './render/theme'
 import type { ExcelSource } from './loader'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from './export/types'
@@ -51,6 +52,17 @@ export interface ViewerApi {
   downloadPdf(opts?: PdfExportOptions): Promise<void>
   /** 打开系统打印(可在对话框另存为 PDF) */
   print(opts?: PrintOptions): Promise<void>
+  // ---- 数据读取(自动用当前 workbook 的 date1904;sheetIndex 缺省=当前活动表) ----
+  /** 单元格原始值 */
+  getCellValue(row: number, col: number, sheetIndex?: number): CellValue
+  /** 单元格格式化显示文本 */
+  getCellText(row: number, col: number, sheetIndex?: number): string
+  /** 整表二维数组(format 默认 true=显示文本) */
+  getSheetData(opts?: ReadOptions, sheetIndex?: number): CellValue[][]
+  /** 整表对象数组(首行作表头) */
+  getSheetJSON(opts?: SheetToJSONOptions, sheetIndex?: number): Record<string, CellValue>[]
+  /** 区域二维数组 */
+  getRangeData(range: MergeRange, opts?: ReadOptions, sheetIndex?: number): CellValue[][]
 }
 
 /** overlay 渲染上下文(随滚动/缩放,tick 变即重渲) */
