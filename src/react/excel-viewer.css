@@ -161,6 +161,26 @@
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.18);
   font-size: 13px;
 }
+.rxl-filterpop .sort {
+  display: flex;
+  gap: 6px;
+  padding: 8px 8px 0;
+}
+.rxl-filterpop .sort button {
+  flex: 1;
+  height: 26px;
+  border: 1px solid #d0d3d6;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+}
+.rxl-filterpop .sort button.on {
+  background: #d6e9d9;
+  border-color: #21a366;
+  color: #1b7a4d;
+  font-weight: 600;
+}
 .rxl-filterpop .list {
   overflow: auto;
   padding: 6px 8px;

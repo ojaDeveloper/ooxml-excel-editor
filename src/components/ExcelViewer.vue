@@ -751,9 +751,11 @@ const PluginOverlays = defineComponent({
         :selected="filterPopup.selected"
         :x="filterPopup.x"
         :y="filterPopup.y"
+        :sort-dir="filterPopup.sortDir"
         @apply="controller?.applyFilterSelection($event)"
         @clear="controller?.clearFilterColumn()"
         @close="controller?.closeFilterPopup()"
+        @sort="(dir) => { const c = filterPopup?.col; controller?.closeFilterPopup(); if (c != null) controller?.sortColumn(c, dir) }"
       />
 
       <!-- 分层 UI: 消费方在格子上叠自己的组件,用 rectOf 定位、tick 触发跟随 -->

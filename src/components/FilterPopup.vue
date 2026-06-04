@@ -7,11 +7,13 @@ const props = defineProps<{
   selected: string[] // 当前勾选(允许)的值;空数组视为全选
   x: number
   y: number
+  sortDir?: 'asc' | 'desc' | null // 该列当前排序方向(高亮用)
 }>()
 const emit = defineEmits<{
   (e: 'apply', checked: string[]): void
   (e: 'clear'): void
   (e: 'close'): void
+  (e: 'sort', dir: 'asc' | 'desc'): void
 }>()
 
 const search = ref('')
@@ -45,6 +47,10 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocPointer))
 
 <template>
   <div class="filter-pop" ref="rootEl" :style="{ left: x + 'px', top: y + 'px' }" @keydown.stop>
+    <div class="sort">
+      <button :class="{ on: sortDir === 'asc' }" @click="emit('sort', 'asc')" title="升序">↑ 升序</button>
+      <button :class="{ on: sortDir === 'desc' }" @click="emit('sort', 'desc')" title="降序">↓ 降序</button>
+    </div>
     <input class="search" type="text" placeholder="搜索…" v-model="search" />
     <label class="all">
       <input type="checkbox" :checked="allShownChecked" @change="toggleAll" />
@@ -81,6 +87,22 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onDocPointer))
   flex-direction: column;
   gap: 6px;
 }
+.sort {
+  display: flex;
+  gap: 6px;
+}
+.sort button {
+  flex: 1;
+  height: 26px;
+  border: 1px solid #d0d3d6;
+  border-radius: 4px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  color: #444;
+}
+.sort button:hover { background: #f0f2f4; }
+.sort button.on { background: #d6e9d9; border-color: #21a366; color: #1b7a4d; font-weight: 600; }
 .search {
   height: 26px;
   border: 1px solid #d0d3d6;

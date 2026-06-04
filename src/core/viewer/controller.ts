@@ -10,7 +10,8 @@
  * onSelectionChange(壳据此 +1 让选区相关计算属性重算)、onCellClick/onCellDblClick/onHyperlink/onFilterButton/onTooltip
  * (交互回调,壳决定 emit / 插件派发 / 策略)。壳不需镜像 contentSize/selection —— 直接读控制器。
  */
-import type { MergeRange, SheetModel, WorkbookModel } from '../model/types'
+import type { CellModel, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
+import { cellKey } from '../model/types'
 import { CanvasRenderer, type RendererOptions, type ViewState } from '../render/canvas-renderer'
 import { OverlayManager, type OverlayQuads } from './overlay-manager'
 import { WorkbookExporter, type ExporterHost } from '../export/exporter'
@@ -40,6 +41,8 @@ export interface FilterPopupState {
   selected: string[]
   x: number
   y: number
+  /** 该列当前排序方向(用于浮层高亮 ↑/↓);null = 未按此列排序 */
+  sortDir: 'asc' | 'desc' | null
 }
 
 export interface ViewerControllerEls {
@@ -121,6 +124,10 @@ export class ViewerController {
   private filterOrigHidden = new Map<number, boolean>() // 行 → 原始 hidden(首次筛选前快照)
   private filterPopup: FilterPopupState | null = null
 
+  // ---- 排序态(仅作用于当前表;rebuild 时重置) ----
+  private sortCol = -1
+  private sortDir: 'asc' | 'desc' | null = null
+
   constructor(
     private els: ViewerControllerEls,
     private hooks: ViewerControllerHooks,
@@ -146,6 +153,8 @@ export class ViewerController {
     this.findHits = []
     this.findIndex = -1
     this.hooks.onTooltip(null)
+    this.sortCol = -1
+    this.sortDir = null
 
     this.sheet = sheet
     this.workbook = workbook
@@ -864,6 +873,7 @@ export class ViewerController {
       selected: this.filterState.has(col) ? [...this.filterState.get(col)!] : [],
       x,
       y,
+      sortDir: this.sortCol === col ? this.sortDir : null,
     }
     this.hooks.onFilterChange()
   }
@@ -948,6 +958,87 @@ export class ViewerController {
     this.render()
   }
 
+  // ====================== 排序 ======================
+
+  /** 当前排序状态(壳可读以显示指示) */
+  getSortState(): { col: number; dir: 'asc' | 'desc' | null } {
+    return { col: this.sortCol, dir: this.sortDir }
+  }
+
+  /**
+   * 按某列对自动筛选数据区排序(只读视图重排:移动行内容 + 行高,不改文件)。
+   * 合并区与数据区相交则拒绝(与 Excel 一致)。排序前会清除该表筛选,避免行索引快照错位。
+   */
+  sortColumn(col: number, dir: 'asc' | 'desc'): void {
+    const r = this.renderer
+    const s = this.sheet
+    if (!r || !s?.autoFilterRange) return
+    const af = s.autoFilterRange
+    const top = af.top + 1
+    const bottom = this.filterDataBottom()
+    const left = af.left
+    const right = af.right
+    if (bottom <= top) return // 不足两行数据,无需排序
+    if (col < left || col > right) return
+    // 合并区相交 → 拒绝(Excel 行为)
+    for (const m of s.merges) {
+      if (!(m.bottom < top || m.top > bottom || m.right < left || m.left > right)) {
+        console.warn('[ooxml-preview] 排序区域含合并单元格,已跳过(与 Excel 一致)')
+        return
+      }
+    }
+    // 先清筛选(恢复隐藏行 + 清状态),避免按行索引的快照在重排后错位
+    this.resetFilter(s)
+
+    // 收集每行 [left..right] 的单元格 + 行信息 + 排序键
+    type Entry = { key: CellModel['raw']; cells: CellModel[]; rowInfo: RowInfo | undefined }
+    const entries: Entry[] = []
+    for (let row = top; row <= bottom; row++) {
+      const cells: CellModel[] = []
+      for (let c = left; c <= right; c++) {
+        const cell = s.cells.get(cellKey(row, c))
+        if (cell) cells.push(cell)
+      }
+      const keyCell = s.cells.get(cellKey(row, col))
+      entries.push({ key: keyCell ? keyCell.raw : null, cells, rowInfo: s.rows.get(row) })
+    }
+    // 稳定排序:空值恒排末尾(不随方向翻转),其余按类型/数值/文本比较
+    const sign = dir === 'asc' ? 1 : -1
+    const order = entries.map((_, i) => i)
+    order.sort((a, b) => {
+      const ka = entries[a].key
+      const kb = entries[b].key
+      const ba = isBlankValue(ka)
+      const bb = isBlankValue(kb)
+      if (ba && bb) return a - b
+      if (ba) return 1
+      if (bb) return -1
+      const c = compareCellValues(ka, kb)
+      return c !== 0 ? sign * c : a - b
+    })
+    // 清空旧区段,再按新顺序回填
+    for (let row = top; row <= bottom; row++) {
+      for (let c = left; c <= right; c++) s.cells.delete(cellKey(row, c))
+      s.rows.delete(row)
+    }
+    for (let i = 0; i < order.length; i++) {
+      const targetRow = top + i
+      const e = entries[order[i]]
+      for (const cell of e.cells) {
+        cell.row = targetRow
+        s.cells.set(cellKey(targetRow, cell.col), cell)
+      }
+      if (e.rowInfo) s.rows.set(targetRow, e.rowInfo)
+    }
+    this.sortCol = col
+    this.sortDir = dir
+    r.rebuildMetrics()
+    this.refreshContentSize()
+    this.clearSelection()
+    this.hooks.onFilterChange() // 浮层/工具栏据此重算排序指示
+    this.render()
+  }
+
   // ====================== 导出 / 打印(委托 WorkbookExporter) ======================
 
   exportImage(opts?: ImageExportOptions): Promise<Blob> {
@@ -981,6 +1072,37 @@ function cellRange(c: Cell): MergeRange {
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/** 排序用:空值判定(null / 空串 / undefined) */
+export function isBlankValue(v: CellModel['raw']): boolean {
+  return v === null || v === undefined || v === ''
+}
+
+/**
+ * 排序用:非空值比较(升序基准,返回 -1/0/1)。
+ * 类型序:数字/日期 < 文本 < 布尔;同类型内数值比大小、文本按自然顺序(中文/数字混排)。
+ */
+export function compareCellValues(a: CellModel['raw'], b: CellModel['raw']): number {
+  const ra = typeRank(a)
+  const rb = typeRank(b)
+  if (ra !== rb) return ra - rb
+  if (ra === 0) {
+    const na = toNumber(a)
+    const nb = toNumber(b)
+    return na < nb ? -1 : na > nb ? 1 : 0
+  }
+  if (ra === 2) return (a ? 1 : 0) - (b ? 1 : 0)
+  return String(a).localeCompare(String(b), undefined, { numeric: true })
+}
+
+function typeRank(v: CellModel['raw']): number {
+  if (typeof v === 'number' || v instanceof Date) return 0
+  if (typeof v === 'boolean') return 2
+  return 1
+}
+function toNumber(v: CellModel['raw']): number {
+  return v instanceof Date ? v.getTime() : typeof v === 'number' ? v : Number(v)
 }
 
 /** Ctrl+方向: 跳到数据块边界(Excel 行为) */

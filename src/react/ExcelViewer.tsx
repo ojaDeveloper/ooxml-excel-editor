@@ -381,9 +381,15 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
             selected={filterPopup.selected}
             x={filterPopup.x}
             y={filterPopup.y}
+            sortDir={filterPopup.sortDir}
             onApply={(checked) => controllerRef.current?.applyFilterSelection(checked)}
             onClear={() => controllerRef.current?.clearFilterColumn()}
             onClose={() => controllerRef.current?.closeFilterPopup()}
+            onSort={(dir) => {
+              const c = filterPopup.col
+              controllerRef.current?.closeFilterPopup()
+              controllerRef.current?.sortColumn(c, dir)
+            }}
           />
         )}
 
@@ -439,9 +445,11 @@ function FilterPopup(props: {
   selected: string[]
   x: number
   y: number
+  sortDir: 'asc' | 'desc' | null
   onApply: (checked: string[]) => void
   onClear: () => void
   onClose: () => void
+  onSort: (dir: 'asc' | 'desc') => void
 }) {
   // selected 为空 = 该列未筛选 = 全选
   const initial = props.selected.length ? new Set(props.selected) : new Set(props.values)
@@ -454,6 +462,14 @@ function FilterPopup(props: {
   }
   return (
     <div className="rxl-filterpop" style={{ left: props.x, top: props.y }}>
+      <div className="sort">
+        <button className={props.sortDir === 'asc' ? 'on' : ''} onClick={() => props.onSort('asc')}>
+          ↑ 升序
+        </button>
+        <button className={props.sortDir === 'desc' ? 'on' : ''} onClick={() => props.onSort('desc')}>
+          ↓ 降序
+        </button>
+      </div>
       <div className="list">
         <label>
           <input
