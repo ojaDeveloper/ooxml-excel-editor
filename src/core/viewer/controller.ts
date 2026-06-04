@@ -13,6 +13,8 @@
 import type { MergeRange, SheetModel, WorkbookModel } from '../model/types'
 import { CanvasRenderer, type RendererOptions, type ViewState } from '../render/canvas-renderer'
 import { OverlayManager, type OverlayQuads } from './overlay-manager'
+import { WorkbookExporter, type ExporterHost } from '../export/exporter'
+import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '../export/types'
 
 export type Cell = { row: number; col: number }
 export interface TooltipState {
@@ -87,6 +89,14 @@ export class ViewerController {
   private contentW = 0
   private contentH = 0
 
+  // ---- 导出上下文(供 WorkbookExporter 取数) ----
+  private workbook: WorkbookModel | null = null
+  private activeIndex = 0
+  private rendererOpts: RendererOptions = {}
+  /** 下载默认文件名(壳可随 props 更新) */
+  fileName: string | undefined = undefined
+  private exporter: WorkbookExporter
+
   // ---- 选区模型 ----
   private selAnchor: Cell | null = null // 固定角(扩选时不动)
   private selActive: Cell | null = null // 活动角(移动/扩选时变)
@@ -116,6 +126,14 @@ export class ViewerController {
     private hooks: ViewerControllerHooks,
   ) {
     this.overlays = new OverlayManager(els.overlays)
+    const host: ExporterHost = {
+      getWorkbook: () => this.workbook,
+      getActiveIndex: () => this.activeIndex,
+      getLiveRenderer: () => this.renderer,
+      getRendererOpts: () => this.rendererOpts,
+      getFileName: () => this.fileName,
+    }
+    this.exporter = new WorkbookExporter(host)
   }
 
   /** 切表/换簿/主题变化: 清状态,重建渲染器,重置滚动,量尺寸,建叠加层,绘制,按需重跑查找 */
@@ -130,6 +148,9 @@ export class ViewerController {
     this.hooks.onTooltip(null)
 
     this.sheet = sheet
+    this.workbook = workbook
+    this.activeIndex = Math.max(0, workbook.sheets.indexOf(sheet))
+    this.rendererOpts = opts
     this.renderer = new CanvasRenderer(this.els.canvas, sheet, workbook, zoom, opts)
     this.hooks.onRenderer(this.renderer)
     this.view.zoom = zoom
@@ -925,6 +946,24 @@ export class ViewerController {
     this.refreshContentSize()
     this.hooks.onFilterChange()
     this.render()
+  }
+
+  // ====================== 导出 / 打印(委托 WorkbookExporter) ======================
+
+  exportImage(opts?: ImageExportOptions): Promise<Blob> {
+    return this.exporter.exportImage(opts)
+  }
+  downloadImage(opts?: ImageExportOptions): Promise<void> {
+    return this.exporter.downloadImage(opts)
+  }
+  exportPdf(opts?: PdfExportOptions): Promise<Blob> {
+    return this.exporter.exportPdf(opts)
+  }
+  downloadPdf(opts?: PdfExportOptions): Promise<void> {
+    return this.exporter.downloadPdf(opts)
+  }
+  print(opts?: PrintOptions): Promise<void> {
+    return this.exporter.print(opts)
   }
 }
 

@@ -1,13 +1,10 @@
 <script setup lang="ts">
 import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import type * as EChartsNS from 'echarts'
 import type { ExcelPlugin, ExcelPluginContext, OverlayContext, PluginEvent, ToolbarItem, ViewerApi } from '@/core/plugin'
 import type { ExcelSource } from '@/core/loader'
 import type {
   CellModel,
   CellStyleFn,
-  ChartSpec,
-  ImageAnchor,
   MergeRange,
   SheetModel,
   TransformModelFn,
@@ -19,28 +16,10 @@ import { getCellValue, getCellText, getSheetData, getRangeData, sheetToJSON } fr
 import type { ViewerTheme } from '@/core/render/theme'
 import { useExcelDocument } from '@/composables/useExcelDocument'
 import { CanvasRenderer, type ViewState } from '@/core/render/canvas-renderer'
-import { GridMetrics, colIndexToLetters } from '@/core/layout/grid-metrics'
-import { anchorRect } from '@/core/overlay/anchor'
-import { chartToOption } from '@/core/overlay/chart-mapper'
-import { loadECharts } from '@/core/overlay/echarts-loader'
+import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { ViewerController, type TooltipState, type FindState } from '@/core/viewer/controller'
 import { revokeImages } from '@/core/finalize'
-import {
-  canvasToBlob,
-  compositeOverlays,
-  downloadBlob,
-  exportToPdf,
-  exportToVectorPdf,
-  loadImage,
-  printSheets,
-  type ExportDecorations,
-  type ExportSheetImage,
-  type ExportTarget,
-  type ImageExportOptions,
-  type PdfExportOptions,
-  type PrintOptions,
-  type VectorSheet,
-} from '@/core/export'
+import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '@/core/export'
 import ViewerToolbar from './ViewerToolbar.vue'
 import SheetTabs from './SheetTabs.vue'
 import ExportDialog from './ExportDialog.vue'
@@ -214,6 +193,7 @@ onMounted(() => {
       },
     )
     view.value = controller.view // 壳与控制器共享同一 view 对象(现有 view.value 读法不变)
+    controller.fileName = props.fileName // 导出默认文件名
   }
   if (props.src) load(props.src, effectiveTransform)
   resizeObserver = new ResizeObserver(() => {
@@ -232,6 +212,10 @@ onBeforeUnmount(() => {
 
 watch(() => props.src, (s) => {
   if (s) load(s, effectiveTransform)
+})
+
+watch(() => props.fileName, (f) => {
+  if (controller) controller.fileName = f
 })
 
 // 主题 / cellStyle / 插件 变化 → 重建渲染器(它们在构造时注入)
@@ -353,285 +337,12 @@ function rectOfRange(range: MergeRange): { x: number; y: number; w: number; h: n
   return controller?.rectOfRange(range) ?? null
 }
 
-// ---------------- 导出 / 打印 ----------------
-/** target → 工作表索引列表 */
-function resolveTargets(target: ExportTarget = 'active'): number[] {
-  const wb = workbook.value
-  if (!wb) return []
-  if (target === 'all') return wb.sheets.map((_, i) => i).filter((i) => wb.sheets[i].state === 'visible')
-  if (target === 'active') return [activeSheet.value]
-  if (typeof target === 'number') return [target]
-  return target.filter((i) => wb.sheets[i])
-}
-
-/** 离屏渲染一个图表为 dataURL(供非当前表 / 统一合成);echarts 不可用返回 null */
-async function chartDataUrl(spec: ChartSpec, metrics: GridMetrics): Promise<string | null> {
-  let echarts: typeof EChartsNS
-  try {
-    echarts = await loadECharts()
-  } catch {
-    return null
-  }
-  const rect = anchorRect(metrics, spec.anchor)
-  const div = document.createElement('div')
-  div.style.cssText = `position:fixed;left:-10000px;top:0;width:${Math.max(80, Math.round(rect.width))}px;height:${Math.max(60, Math.round(rect.height))}px`
-  document.body.appendChild(div)
-  const inst = echarts.init(div)
-  try {
-    inst.setOption(chartToOption(spec))
-    return inst.getDataURL({ pixelRatio: 2, backgroundColor: '#fff' })
-  } catch {
-    return null
-  } finally {
-    inst.dispose()
-    div.remove()
-  }
-}
-
-/** 收集一个工作表的叠加层装饰(图片/图表/形状),供合成到导出底图 */
-async function collectDecorations(s: SheetModel, metrics: GridMetrics): Promise<ExportDecorations> {
-  const images: { source: CanvasImageSource; anchor: ImageAnchor }[] = []
-  for (const anchor of s.images) {
-    if (!anchor.src) continue
-    try {
-      images.push({ source: await loadImage(anchor.src), anchor })
-    } catch {
-      /* 单张图加载失败跳过 */
-    }
-  }
-  const charts: { source: CanvasImageSource; anchor: ImageAnchor }[] = []
-  for (const chart of s.charts) {
-    const url = await chartDataUrl(chart, metrics)
-    if (!url) continue
-    try {
-      charts.push({ source: await loadImage(url), anchor: chart.anchor })
-    } catch {
-      /* 跳过 */
-    }
-  }
-  return { images, charts, shapes: s.shapes }
-}
-
-/**
- * 为一个工作表生成合成底图(格子 + 图片/图表/形状)。
- * withTitles(PDF/打印): 应用 pageSetup 打印标题行(抽出标题条 + 正文剔除标题行)与缩放。
- * 范围优先级: opts.range > pageSetup.printArea > 整表。
- */
-async function buildSheetImage(
-  sheetIdx: number,
-  opts: PdfExportOptions,
-  withTitles = false,
-): Promise<ExportSheetImage | null> {
-  const wb = workbook.value
-  const s = wb?.sheets[sheetIdx]
-  if (!wb || !s) return null
-  // 当前表复用 live renderer;其它表临时建一个(在离屏 canvas 上)
-  const r =
-    sheetIdx === activeSheet.value && renderer.value
-      ? renderer.value
-      : new CanvasRenderer(document.createElement('canvas'), s, wb, 1, {
-          theme: effectiveTheme.value,
-          cellStyle: hasCellStyleHook.value ? combinedCellStyle : undefined,
-        })
-
-  const ps = s.pageSetup
-  const dim = s.dimension
-  const full: MergeRange = { top: 0, left: 0, bottom: Math.max(0, dim.rows - 1), right: Math.max(0, dim.cols - 1) }
-  const range = opts.range ?? ps?.printArea ?? full
-
-  // 打印标题行/列: 标题在正文上方/左侧时,抽出标题条,正文起点相应内移(避免重复)
-  let titleRows: [number, number] | null = null
-  let titleCols: [number, number] | null = null
-  let bodyTop = range.top
-  let bodyLeft = range.left
-  if (withTitles && ps?.printTitleRows) {
-    const [a, b] = ps.printTitleRows
-    if (b >= a && a <= range.top && b < range.bottom) {
-      titleRows = [a, b]
-      bodyTop = Math.max(range.top, b + 1)
-    }
-  }
-  if (withTitles && ps?.printTitleCols) {
-    const [a, b] = ps.printTitleCols
-    if (b >= a && a <= range.left && b < range.right) {
-      titleCols = [a, b]
-      bodyLeft = Math.max(range.left, b + 1)
-    }
-  }
-
-  const render = (rg: MergeRange, scale?: number) =>
-    r.exportToCanvas({
-      range: rg,
-      scale: scale ?? opts.scale,
-      includeHeaders: opts.includeHeaders,
-      gridlines: opts.gridlines,
-      background: opts.background,
-    })
-
-  const base = render({ top: bodyTop, left: bodyLeft, bottom: range.bottom, right: range.right })
-  const deco = await collectDecorations(s, base.metrics)
-  compositeOverlays(base, deco)
-  const S = base.scale // 标题条用同一 scale → 与正文等宽/等高,可逐页拼接
-
-  let repeatTop: ExportSheetImage['repeatTop']
-  let repeatLeft: ExportSheetImage['repeatLeft']
-  let corner: ExportSheetImage['corner']
-  if (titleRows) {
-    const strip = render({ top: titleRows[0], bottom: titleRows[1], left: bodyLeft, right: range.right }, S)
-    repeatTop = { canvas: strip.canvas, heightCss: strip.bodyH }
-  }
-  if (titleCols) {
-    const strip = render({ top: bodyTop, bottom: range.bottom, left: titleCols[0], right: titleCols[1] }, S)
-    repeatLeft = { canvas: strip.canvas, widthCss: strip.bodyW }
-  }
-  if (titleRows && titleCols) {
-    const c = render({ top: titleRows[0], bottom: titleRows[1], left: titleCols[0], right: titleCols[1] }, S)
-    corner = { canvas: c.canvas }
-  }
-
-  // 打印缩放: 非 fitToWidth 时套用 pageSetup.scale
-  const zoom = opts.fitToWidth === false && ps?.scale ? ps.scale / 100 : undefined
-
-  return {
-    canvas: base.canvas,
-    bodyWcss: base.bodyW,
-    bodyHcss: base.bodyH,
-    sheetName: s.name,
-    repeatTop,
-    repeatLeft,
-    corner,
-    zoom,
-  }
-}
-
-/** 为一个工作表生成矢量导出输入(逐格信息 + 兜底底图 + 图片图表 + 标题行) */
-async function buildVectorSheet(sheetIdx: number, opts: PdfExportOptions): Promise<VectorSheet | null> {
-  const wb = workbook.value
-  const s = wb?.sheets[sheetIdx]
-  if (!wb || !s) return null
-  const r =
-    sheetIdx === activeSheet.value && renderer.value
-      ? renderer.value
-      : new CanvasRenderer(document.createElement('canvas'), s, wb, 1, {
-          theme: effectiveTheme.value,
-          cellStyle: hasCellStyleHook.value ? combinedCellStyle : undefined,
-        })
-  const metrics = new GridMetrics(s, 1)
-  const ps = s.pageSetup
-  const dim = s.dimension
-  const full: MergeRange = { top: 0, left: 0, bottom: Math.max(0, dim.rows - 1), right: Math.max(0, dim.cols - 1) }
-  const range = opts.range ?? ps?.printArea ?? full
-
-  let titleRows: [number, number] | undefined
-  let titleCols: [number, number] | undefined
-  let bodyTop = range.top
-  let bodyLeft = range.left
-  if (ps?.printTitleRows) {
-    const [a, b] = ps.printTitleRows
-    if (b >= a && a <= range.top && b < range.bottom) {
-      titleRows = [a, b]
-      bodyTop = Math.max(range.top, b + 1)
-    }
-  }
-  if (ps?.printTitleCols) {
-    const [a, b] = ps.printTitleCols
-    if (b >= a && a <= range.left && b < range.right) {
-      titleCols = [a, b]
-      bodyLeft = Math.max(range.left, b + 1)
-    }
-  }
-  // 兜底底图须覆盖 标题行/列 ∪ 正文(标题格无字体中文也要能裁图)
-  const rasterTop = titleRows ? Math.min(range.top, titleRows[0]) : range.top
-  const rasterLeft = titleCols ? Math.min(range.left, titleCols[0]) : range.left
-
-  const base = r.exportToCanvas({
-    range: { top: rasterTop, left: rasterLeft, bottom: range.bottom, right: range.right },
-    scale: opts.scale,
-    includeHeaders: false,
-    gridlines: opts.gridlines,
-    background: opts.background,
-  })
-  const deco = await collectDecorations(s, base.metrics)
-  const images = [...(deco.images ?? []), ...(deco.charts ?? [])]
-  const zoom = opts.fitToWidth === false && ps?.scale ? ps.scale / 100 : undefined
-
-  return {
-    sheetName: s.name,
-    metrics,
-    bodyLeft,
-    bodyRight: range.right,
-    bodyTop,
-    bodyBottom: range.bottom,
-    titleRows,
-    titleCols,
-    merges: s.merges,
-    gridlines: opts.gridlines ?? s.showGridLines,
-    zoom,
-    getCell: (rr, cc) => r.exportCellDraw(rr, cc),
-    rasterCanvas: base.canvas,
-    rasterScale: base.scale,
-    rasterTop,
-    rasterLeft,
-    images,
-  }
-}
-
-/** 从工作表原生 pageSetup 推导导出默认值(纸张/方向/边距/是否适应页宽) */
-function pageSetupDefaults(sheetIdx: number): Partial<PdfExportOptions> {
-  const ps = workbook.value?.sheets[sheetIdx]?.pageSetup
-  if (!ps) return {}
-  const d: Partial<PdfExportOptions> = {}
-  if (ps.paperFormat) d.format = ps.paperFormat
-  if (ps.orientation) d.orientation = ps.orientation
-  if (ps.margins) d.margin = { top: ps.margins.top, right: ps.margins.right, bottom: ps.margins.bottom, left: ps.margins.left }
-  // fitToPage → 适应页宽;否则按自然尺寸×scale(下面 buildSheetImage 用 zoom 处理)
-  d.fitToWidth = ps.fitToPage ? true : false
-  return d
-}
-
-function baseName(): string {
-  return (props.fileName || workbook.value?.sheets[activeSheet.value]?.name || 'workbook').replace(/\.[^.]+$/, '')
-}
-
-/** 导出当前/指定表为图片 Blob(图片为单表;多表请用 PDF) */
-async function exportImage(opts: ImageExportOptions = {}): Promise<Blob> {
-  const targets = resolveTargets(opts.target)
-  if (!targets.length) throw new Error('无可导出的工作表')
-  const img = await buildSheetImage(targets[0], opts)
-  if (!img) throw new Error('导出失败: 无法生成底图')
-  return canvasToBlob(img.canvas, opts.type ?? 'png', opts.quality ?? 0.92)
-}
-async function downloadImage(opts: ImageExportOptions = {}): Promise<void> {
-  const blob = await exportImage(opts)
-  const ext = opts.type === 'jpeg' ? 'jpg' : opts.type === 'webp' ? 'webp' : 'png'
-  downloadBlob(blob, opts.fileName ?? `${baseName()}.${ext}`)
-}
-
-/** 导出为 PDF Blob(每个目标表分页;需可选依赖 jspdf)。未显式指定的页面参数取自工作表 pageSetup。 */
-async function exportPdf(opts: PdfExportOptions = {}): Promise<Blob> {
-  const targets = resolveTargets(opts.target)
-  if (!targets.length) throw new Error('无可导出的工作表')
-  const eff: PdfExportOptions = { ...pageSetupDefaults(targets[0]), ...opts }
-  if (eff.vector) {
-    const vs = (await Promise.all(targets.map((i) => buildVectorSheet(i, eff)))).filter(Boolean) as VectorSheet[]
-    return exportToVectorPdf(vs, eff)
-  }
-  const images = (await Promise.all(targets.map((i) => buildSheetImage(i, eff, true)))).filter(Boolean) as ExportSheetImage[]
-  return exportToPdf(images, eff)
-}
-async function downloadPdf(opts: PdfExportOptions = {}): Promise<void> {
-  const blob = await exportPdf(opts)
-  downloadBlob(blob, opts.fileName ?? `${baseName()}.pdf`)
-}
-
-/** 打开系统打印(可在对话框另存为 PDF)。页面参数同样默认取自 pageSetup。 */
-async function print(opts: PrintOptions = {}): Promise<void> {
-  const targets = resolveTargets(opts.target)
-  if (!targets.length) return
-  const eff: PrintOptions = { ...pageSetupDefaults(targets[0]), ...opts }
-  const images = (await Promise.all(targets.map((i) => buildSheetImage(i, eff, true)))).filter(Boolean) as ExportSheetImage[]
-  printSheets(images, { ...eff, title: eff.title ?? baseName() })
-}
+// ---------------- 导出 / 打印(编排在 core/export/WorkbookExporter,控制器委托) ----------------
+const exportImage = (opts?: ImageExportOptions): Promise<Blob> => controller!.exportImage(opts)
+const downloadImage = (opts?: ImageExportOptions): Promise<void> => controller!.downloadImage(opts)
+const exportPdf = (opts?: PdfExportOptions): Promise<Blob> => controller!.exportPdf(opts)
+const downloadPdf = (opts?: PdfExportOptions): Promise<void> => controller!.downloadPdf(opts)
+const print = (opts?: PrintOptions): Promise<void> => controller!.print(opts)
 
 /** 工具栏触发 PDF: 捕获 jspdf 缺失等错误,给用户可读提示而非静默失败 */
 async function onExportPdf() {
