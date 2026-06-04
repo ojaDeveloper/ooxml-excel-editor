@@ -41,6 +41,7 @@ import ViewerToolbar from './ViewerToolbar.vue'
 import SheetTabs from './SheetTabs.vue'
 import ExportDialog from './ExportDialog.vue'
 import FindBar from './FindBar.vue'
+import FilterPopup from './FilterPopup.vue'
 import type { ExportConfig } from './export-types'
 
 const props = withDefaults(
@@ -474,6 +475,10 @@ watch(() => props.plugins, () => initPlugins(), { deep: false })
 
 watch(workbook, async (wb) => {
   if (!wb) return
+  // 新工作簿: 旧筛选态作废(模型已换)
+  filterOrigHidden.clear()
+  filterState.clear()
+  filterPopup.value = null
   activeSheet.value = wb.activeSheet
   await nextTick()
   rebuildRenderer()
@@ -494,7 +499,8 @@ watch(progress, (p) => {
   if (p) emit('progress', p)
 })
 
-watch(activeSheet, async () => {
+watch(activeSheet, async (_idx, oldIdx) => {
+  resetFilterFor(oldIdx) // 离开旧表: 恢复其筛选隐藏的行
   await nextTick()
   rebuildRenderer()
 })
@@ -655,6 +661,14 @@ function onMouseDown(e: MouseEvent) {
   scrollerEl.value?.focus()
   const r = renderer.value
   const p = localXY(e)
+  // 自动筛选下拉按钮(优先于一切)
+  if (r && p) {
+    const fcol = r.filterButtonAt(view.value, p.x, p.y)
+    if (fcol != null) {
+      openFilterPopup(fcol)
+      return
+    }
+  }
   // 表头边界拖拽改宽高(优先于选择)
   if (r && p) {
     if (p.y < r.metrics.colHeaderHeight) {
@@ -1387,6 +1401,112 @@ function onRootKeydown(e: KeyboardEvent) {
   }
 }
 
+// ---- 自动筛选 ----
+// 列 → 允许值集合(缺省=该列未筛选);仅作用于当前表
+const filterState = new Map<number, Set<string>>()
+// 行 → 原始 hidden(首次筛选前快照,清除时恢复)
+const filterOrigHidden = new Map<number, boolean>()
+const filterPopup = ref<{ col: number; values: string[]; selected: string[]; x: number; y: number } | null>(null)
+
+const BLANK = '(空白)'
+
+/** 筛选数据区底行: 正常用 af.bottom;若 af 只含表头(bottom===top)则延伸到数据末行 */
+function filterDataBottom(): number {
+  const s = sheet.value!
+  const af = s.autoFilterRange!
+  return af.bottom > af.top ? af.bottom : s.dimension.rows - 1
+}
+
+/** 某列(自动筛选数据区)的去重值,数值/中文自然排序 */
+function distinctColumnValues(col: number): string[] {
+  const r = renderer.value
+  const s = sheet.value
+  if (!r || !s?.autoFilterRange) return []
+  const af = s.autoFilterRange
+  const set = new Set<string>()
+  for (let row = af.top + 1; row <= filterDataBottom(); row++) set.add(r.cellText(row, col) || BLANK)
+  return [...set].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+}
+
+/** 重算筛选导致的隐藏行并应用到模型(行隐藏机制 → 几何归零) */
+function applyFilters() {
+  const r = renderer.value
+  const s = sheet.value
+  if (!r || !s?.autoFilterRange) return
+  const af = s.autoFilterRange
+  const bottom = filterDataBottom()
+  if (!filterOrigHidden.size) {
+    for (let row = af.top + 1; row <= bottom; row++) filterOrigHidden.set(row, s.rows.get(row)?.hidden ?? false)
+  }
+  for (let row = af.top + 1; row <= bottom; row++) {
+    const orig = filterOrigHidden.get(row) ?? false
+    let excluded = false
+    for (const [col, allowed] of filterState) {
+      if (!allowed.has(r.cellText(row, col) || BLANK)) {
+        excluded = true
+        break
+      }
+    }
+    const hidden = orig || excluded
+    const info = s.rows.get(row)
+    if (info) info.hidden = hidden
+    else if (hidden) s.rows.set(row, { height: s.defaultRowHeight, hidden: true })
+  }
+  r.setFilteredCols(new Set(filterState.keys()))
+  r.rebuildMetrics()
+  contentSize.value = { w: r.contentWidth, h: r.contentHeight }
+  clearSelection()
+  doRender()
+}
+
+function openFilterPopup(col: number) {
+  const r = renderer.value
+  const s = sheet.value
+  if (!r || !s?.autoFilterRange) return
+  const rect = r.cellScreenRect(view.value, s.autoFilterRange.top, col)
+  let x = rect.x
+  let y = rect.y + rect.h
+  if (x + 228 > view.value.width) x = Math.max(0, view.value.width - 232)
+  if (y + 320 > view.value.height) y = Math.max(0, rect.y - 320)
+  filterPopup.value = {
+    col,
+    values: distinctColumnValues(col),
+    selected: filterState.has(col) ? [...filterState.get(col)!] : [],
+    x,
+    y,
+  }
+}
+function onFilterApply(checked: string[]) {
+  const pop = filterPopup.value
+  if (!pop) return
+  const all = distinctColumnValues(pop.col)
+  if (checked.length >= all.length) filterState.delete(pop.col) // 全选 = 取消该列筛选
+  else filterState.set(pop.col, new Set(checked)) // 子集(含空集 = 全隐藏)
+  filterPopup.value = null
+  applyFilters()
+}
+function onFilterClear() {
+  const pop = filterPopup.value
+  if (!pop) return
+  filterState.delete(pop.col)
+  filterPopup.value = null
+  applyFilters()
+}
+/** 离开某表时恢复其被筛选隐藏的行,清空筛选态 */
+function resetFilterFor(idx: number | undefined) {
+  if (idx == null) return
+  const s = workbook.value?.sheets[idx]
+  if (s && filterOrigHidden.size) {
+    for (const [row, orig] of filterOrigHidden) {
+      const info = s.rows.get(row)
+      if (info) info.hidden = orig
+    }
+  }
+  filterOrigHidden.clear()
+  filterState.clear()
+  filterPopup.value = null
+}
+
 // ---- 导出设置对话框 ----
 const exportDialogOpen = ref(false)
 /** 把对话框配置映射成各导出方法的入参并执行 */
@@ -1555,6 +1675,17 @@ const PluginOverlays = defineComponent({
         @next="findNext"
         @prev="findPrev"
         @close="closeFind"
+      />
+
+      <FilterPopup
+        v-if="filterPopup"
+        :values="filterPopup.values"
+        :selected="filterPopup.selected"
+        :x="filterPopup.x"
+        :y="filterPopup.y"
+        @apply="onFilterApply"
+        @clear="onFilterClear"
+        @close="filterPopup = null"
       />
 
       <!-- 分层 UI: 消费方在格子上叠自己的组件,用 rectOf 定位、tick 触发跟随 -->

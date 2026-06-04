@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import ExcelViewer from './components/ExcelViewer.vue'
 import { definePlugin } from './core/plugin'
 import type { ViewerApi } from './core/plugin'
@@ -34,6 +34,13 @@ async function loadSample() {
 // ---- 扩展 API 演示 ----
 const lastEvent = ref('')
 const viewerRef = ref<ViewerApi | null>(null)
+
+// 开发环境把命令式 API 挂到 window,便于 e2e 计算 canvas 上的几何(如筛选按钮位置)
+if (import.meta.env.DEV) {
+  watch(viewerRef, (v) => {
+    ;(window as unknown as { __excelViewer?: ViewerApi | null }).__excelViewer = v
+  })
+}
 
 // 演示 beforeRenderPage 扩展钩子: 每页右下角页码 + 居中淡水印
 async function exportPdfWithWatermark() {

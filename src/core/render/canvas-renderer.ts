@@ -19,7 +19,7 @@ import {
   LINE_HEIGHT_FACTOR, CELL_PADDING,
 } from './text'
 import { autoFitRowHeights } from '../layout/autofit'
-import { drawFilterButton, isFilterHeader } from './autofilter'
+import { drawFilterButton, filterButtonBox, isFilterHeader } from './autofilter'
 
 export interface RendererOptions {
   theme?: Partial<ViewerTheme>
@@ -176,6 +176,35 @@ export class CanvasRenderer {
   setFind(hits: { row: number; col: number }[], current: number): void {
     this.findHits = hits
     this.findCurrent = current
+  }
+
+  // ---------------- 筛选 ----------------
+  private filteredCols = new Set<number>()
+  /** 标记哪些列处于筛选态(下拉按钮画成蓝色漏斗) */
+  setFilteredCols(cols: Set<number>): void {
+    this.filteredCols = cols
+  }
+
+  /** 单元格的当前屏幕矩形(冻结感知: 冻结行/列不随滚动) */
+  cellScreenRect(view: ViewState, row: number, col: number): { x: number; y: number; w: number; h: number } {
+    const hw = this.metrics.rowHeaderWidth
+    const hh = this.metrics.colHeaderHeight
+    const x = hw + this.metrics.colLeft(col) - (col < this.freeze.frozenCols ? 0 : view.scrollX)
+    const y = hh + this.metrics.rowTop(row) - (row < this.freeze.frozenRows ? 0 : view.scrollY)
+    return { x, y, w: this.metrics.colWidth(col), h: this.metrics.rowHeight(row) }
+  }
+
+  /** 屏幕坐标是否落在某个自动筛选表头的下拉按钮上;是则返回列号 */
+  filterButtonAt(view: ViewState, px: number, py: number): number | null {
+    const af = this.sheet.autoFilterRange
+    if (!af) return null
+    const cell = this.cellAtScreen(view, px, py)
+    if (!cell || cell.row !== af.top || cell.col < af.left || cell.col > af.right) return null
+    const rect = this.cellScreenRect(view, af.top, cell.col)
+    const box = filterButtonBox(rect.x, rect.y, rect.w, rect.h)
+    if (!box) return null
+    if (px >= box.x && px <= box.x + box.size && py >= box.y && py <= box.y + box.size) return cell.col
+    return null
   }
 
   /** 屏幕坐标 → 单元格(0-based)。落在表头或越界返回 null。 */
@@ -763,7 +792,7 @@ export class CanvasRenderer {
 
     // 自动筛选下拉
     if (isFilterHeader(this.sheet.autoFilterRange, row, col)) {
-      drawFilterButton(ctx, x, y, w, h)
+      drawFilterButton(ctx, x, y, w, h, this.filteredCols.has(col))
     }
 
     // 数据验证下拉: 仅在"活动单元格"(选区左上)且属列表验证时显示(同 Excel)

@@ -61,7 +61,7 @@ s1.getColumn(2).width = 14
 s1.getColumn(3).width = 10
 s1.getColumn(4).width = 16
 s1.getColumn(5).width = 12
-s1.autoFilter = 'A2:E2'
+s1.autoFilter = 'A2:E7' // 表头 + 5 行数据(真实自动筛选覆盖整张表)
 
 // 数据条 + 色阶条件格式
 s1.addConditionalFormatting({
