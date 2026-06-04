@@ -130,6 +130,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         :src="src"
         :file-name="fileName"
         :plugins="plugins"
+        :toolbar="['find', 'filter', 'clear-filter', 'separator', 'copy', 'freeze', 'separator', 'zoom', 'export']"
         @selection-change="(s) => (lastEvent = `选区 ${s.range.top + 1},${s.range.left + 1} → ${s.range.bottom + 1},${s.range.right + 1}`)"
       >
         <!-- 分层 UI 演示: B3 上叠一个可点徽标,随滚动跟随 -->

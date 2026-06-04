@@ -45,6 +45,7 @@ import FilterPopup from './FilterPopup.vue'
 import ActionToolbar from './ActionToolbar.vue'
 import type { ExportConfig } from './export-types'
 import type { ResolvedToolbarItem } from './toolbar-types'
+import { TOOLBAR_ICONS } from './toolbar-icons'
 
 const props = withDefaults(
   defineProps<{
@@ -1516,6 +1517,30 @@ function resetFilterFor(idx: number | undefined) {
   filterPopup.value = null
 }
 
+/** 清除当前表全部筛选 */
+function clearAllFilters() {
+  if (!filterState.size) return
+  filterState.clear()
+  applyFilters()
+}
+
+/** 在活动单元格处冻结 / 取消冻结 */
+function toggleFreeze() {
+  const s = sheet.value
+  const r = renderer.value
+  if (!s || !r) return
+  const fz = s.freeze
+  if (fz.frozenRows || fz.frozenCols) {
+    s.freeze = { frozenRows: 0, frozenCols: 0 }
+  } else {
+    const c = selActive.value
+    s.freeze = { frozenRows: c ? c.row : 1, frozenCols: c ? c.col : 0 }
+  }
+  r.rebuildMetrics()
+  contentSize.value = { w: r.contentWidth, h: r.contentHeight }
+  doRender()
+}
+
 /** 工具栏「筛选」: 切换自动筛选。无则按选区(或整张已用区)新建,使下拉按钮出现。 */
 function toggleAutoFilter() {
   const s = sheet.value
@@ -1595,64 +1620,124 @@ const viewerApi: ViewerApi = {
 defineExpose(viewerApi)
 
 // ---------------- 操作工具栏(可配置 + 可插件) ----------------
+const I = (name: string) => TOOLBAR_ICONS[name]
+function bi(o: Partial<ResolvedToolbarItem> & { id: string }): ResolvedToolbarItem {
+  return { kind: 'builtin', ...o }
+}
 function builtinTool(id: string): ResolvedToolbarItem | null {
-  if (id === 'find')
-    return {
-      id,
-      icon: '🔍',
-      label: '查找',
-      title: '查找 (Ctrl+F)',
-      active: findOpen.value,
-      onClick: () => (findOpen.value ? closeFind() : openFind()),
-      kind: 'builtin',
+  switch (id) {
+    case 'find':
+      return bi({
+        id,
+        iconSvg: I('find'),
+        label: '查找',
+        title: '查找 (Ctrl+F)',
+        active: findOpen.value,
+        onClick: () => (findOpen.value ? closeFind() : openFind()),
+      })
+    case 'filter':
+      return bi({
+        id,
+        iconSvg: I('filter'),
+        label: '筛选',
+        title: '切换自动筛选',
+        active: !!sheet.value?.autoFilterRange,
+        onClick: toggleAutoFilter,
+      })
+    case 'clear-filter':
+      return bi({
+        id,
+        iconSvg: I('clear-filter'),
+        label: '清除筛选',
+        title: '清除当前表全部筛选',
+        disabled: filterState.size === 0,
+        onClick: clearAllFilters,
+      })
+    case 'copy':
+      return bi({
+        id,
+        iconSvg: I('copy'),
+        label: '复制',
+        title: '复制选区 (Ctrl+C)',
+        disabled: !selection.value,
+        onClick: () => void copySelection(),
+      })
+    case 'freeze': {
+      const fz = sheet.value?.freeze
+      return bi({
+        id,
+        iconSvg: I('freeze'),
+        label: '冻结',
+        title: '冻结/取消冻结(在活动单元格)',
+        active: !!(fz && (fz.frozenRows || fz.frozenCols)),
+        onClick: toggleFreeze,
+      })
     }
-  if (id === 'filter')
-    return {
-      id,
-      icon: '🔽',
-      label: '筛选',
-      title: '切换自动筛选',
-      active: !!sheet.value?.autoFilterRange,
-      onClick: toggleAutoFilter,
-      kind: 'builtin',
-    }
-  // 'sort' 待实现(Phase 3),暂不产出按钮
-  return null
+    case 'export':
+      return bi({
+        id,
+        iconSvg: I('export'),
+        label: '导出',
+        title: '导出 / 打印',
+        items: [
+          bi({ id: 'export-png', label: '导出为图片 (PNG)', onClick: () => void downloadImage() }),
+          bi({ id: 'export-pdf', label: '导出为 PDF (位图)', onClick: onExportPdf }),
+          bi({ id: 'export-pdf-vector', label: '导出为 PDF (矢量·文字可选)', onClick: onExportPdfVector }),
+          bi({ id: 'export-print', label: '打印…', onClick: () => void print() }),
+          bi({ id: 'export-sep', type: 'separator' }),
+          bi({ id: 'export-settings', label: '导出设置…', onClick: () => (exportDialogOpen.value = true) }),
+        ],
+      })
+    case 'zoom':
+      return bi({
+        id,
+        iconSvg: I('zoom'),
+        label: Math.round(zoom.value * 100) + '%',
+        title: '缩放',
+        items: [50, 75, 100, 125, 150, 200].map((p) =>
+          bi({ id: 'zoom-' + p, label: p + '%', active: Math.round(zoom.value * 100) === p, onClick: () => (zoom.value = p / 100) }),
+        ),
+      })
+    default:
+      return null // 'sort' 等待实现
+  }
+}
+
+/** 把外来 ToolbarItem(自定义/插件)解析成 ResolvedToolbarItem(递归子菜单) */
+function resolveItem(it: ToolbarItem, kind: 'custom' | 'plugin'): ResolvedToolbarItem {
+  return {
+    id: it.id,
+    type: it.type,
+    iconSvg: it.iconSvg,
+    icon: it.icon,
+    label: it.label,
+    title: it.title,
+    active: !!it.active?.(viewerApi),
+    disabled: !!it.disabled?.(viewerApi),
+    onClick: it.onClick ? () => it.onClick!(viewerApi) : undefined,
+    items: it.items?.map((sub) => resolveItem(sub, kind)),
+    kind,
+  }
 }
 
 const resolvedToolbar = computed<ResolvedToolbarItem[]>(() => {
-  void renderTick.value // 选区/状态变化时重算 active
+  void renderTick.value // 选区/状态变化时重算 active/disabled/label
   if (props.toolbar === false) return []
   const entries: Array<string | ToolbarItem> = Array.isArray(props.toolbar) ? props.toolbar : ['find', 'filter']
   const out: ResolvedToolbarItem[] = []
   for (const e of entries) {
     if (typeof e === 'string') {
-      const b = builtinTool(e)
-      if (b) out.push(b)
+      if (e === 'separator' || e === '|') out.push({ id: 'sep-' + out.length, type: 'separator', kind: 'builtin' })
+      else {
+        const b = builtinTool(e)
+        if (b) out.push(b)
+      }
     } else {
-      out.push({
-        id: e.id,
-        icon: e.icon,
-        label: e.label,
-        title: e.title,
-        active: !!e.active?.(viewerApi),
-        onClick: () => e.onClick?.(viewerApi),
-        kind: 'custom',
-      })
+      out.push(resolveItem(e, 'custom'))
     }
   }
   for (const p of normalizedPlugins.value) {
-    for (const it of p.toolbar ?? []) {
-      out.push({
-        id: it.id,
-        icon: it.icon,
-        label: it.label,
-        title: it.title,
-        active: !!it.active?.(viewerApi),
-        onClick: () => it.onClick?.(viewerApi),
-        kind: 'plugin',
-      })
-    }
+    for (const it of p.toolbar ?? []) out.push(resolveItem(it, 'plugin'))
   }
   return out
 })

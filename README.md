@@ -189,17 +189,18 @@ await viewer.value.downloadPdf({
 ```
 > 提示:中文表格若不注册字体,矢量模式会产生很多小图、文件偏大且较慢 —— 注册一个子集字体即可全矢量。
 
-### 操作工具栏(可配置 / 可插件)
-顶栏(文件名/导出/缩放)下方有一行**操作工具栏**,内置 `find`(查找)/ `filter`(切换自动筛选)按钮默认显示。用 `:toolbar` 配置:
+### 操作工具栏(可配置 / 可插件 / 响应式)
+顶栏(文件名/导出/缩放)下方有一行**操作工具栏**,内置 `find`/`filter` 按钮默认显示。用 `:toolbar` 配置:
 ```vue
-<ExcelViewer :src="file" />                               <!-- 默认: 显示内置项 -->
-<ExcelViewer :src="file" :toolbar="['find', 'export']" /> <!-- 显式控制项与顺序 -->
-<ExcelViewer :src="file" :toolbar="false" />              <!-- 隐藏整条 -->
+<ExcelViewer :src="file" />                                           <!-- 默认: find + filter -->
+<ExcelViewer :toolbar="['find','filter','separator','zoom','export']" /> <!-- 控制项/顺序/分隔 -->
+<ExcelViewer :toolbar="false" />                                      <!-- 隐藏整条 -->
 ```
-- **内置 id**:`find`(查找)、`filter`(切换自动筛选 —— 文件没设筛选时点一下即给数据区加下拉)、`sort`(规划中)。
-- **自定义项**:数组里直接放 `ToolbarItem`(`{ id, icon?, label?, title?, onClick(viewer), active?(viewer) }`)。
+- **内置 id**:`find`(查找)、`filter`(切换自动筛选 —— 文件没设也能点出下拉)、`clear-filter`(清除筛选,无筛选时禁用)、`copy`(复制选区)、`freeze`(冻结/取消)、`zoom`(缩放下拉)、`export`(导出/打印下拉)、`'separator'`/`'|'`(分隔线);`sort` 规划中。
+- **富项类型**(`ToolbarItem`):`type:'separator'` 分隔线;`items: ToolbarItem[]` 变下拉子菜单;`disabled?(viewer)` 禁用态;`iconSvg`(内联 SVG,优先于 `icon` emoji)/ `icon` / `label` / `title` / `onClick(viewer)` / `active?(viewer)`。
+- **响应式溢出**:宽度不足时,放不下的项自动折叠进「⋯ 更多」下拉。
 - **插件贡献**:`ExcelPlugin.toolbar: ToolbarItem[]`,插件加载即追加(opt-in)。
-- `「筛选」按钮`让筛选**看得见**:不必依赖文件自带 autofilter。
+- 内置图标用极简线性 **SVG**(跨平台一致);`filter` 按钮让筛选**看得见**,不必依赖文件自带 autofilter。
 
 ### 分层 UI(slots)
 具名 slot:`header`(顶栏)/ `toolbar`(作用域 `{ items }`,替换整条操作栏)/ `statusbar` / `loading` / `error` / `empty`(缺省用内置)。

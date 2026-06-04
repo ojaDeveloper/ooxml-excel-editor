@@ -58,7 +58,7 @@ test.describe('筛选 e2e(自动筛选下拉 → 隐藏行)', () => {
     // 重新打开 → 清除筛选 → 恢复原高度
     await clickFilterButton(page, 1, 0)
     await expect(page.locator('.filter-pop')).toBeVisible()
-    await page.getByRole('button', { name: '清除筛选' }).click()
+    await page.locator('.filter-pop').getByRole('button', { name: '清除筛选' }).click()
     await expect.poll(() => spacerH(page)).toBe(before)
   })
 })

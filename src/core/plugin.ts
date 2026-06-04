@@ -71,18 +71,26 @@ export interface ExcelPluginContext {
 
 /** 操作工具栏的一个按钮(插件贡献 / 组件 :toolbar 配置 / 命令式自定义共用) */
 export interface ToolbarItem {
-  /** 唯一 id(内置: 'find' | 'filter' | 'sort';自定义任意) */
+  /** 唯一 id(内置: 'find'|'filter'|'sort'|'export'|'zoom'|'copy'|'freeze'|'clear-filter';自定义任意) */
   id: string
-  /** 图标(emoji / 字形) */
+  /** 类型: 'button'(默认) | 'separator'(分隔线,其余字段忽略) */
+  type?: 'button' | 'separator'
+  /** 图标(emoji / 字形);跨平台一致建议用 iconSvg */
   icon?: string
+  /** 内联 SVG(优先于 icon);建议 24×24 viewBox、stroke=currentColor */
+  iconSvg?: string
   /** 文字 */
   label?: string
   /** 悬停提示 */
   title?: string
-  /** 点击回调(拿到命令式 API) */
+  /** 点击回调(拿到命令式 API);有 items 时点击改为展开下拉 */
   onClick?: (viewer: ViewerApi) => void
   /** 是否高亮(激活态),如开关类按钮 */
   active?: (viewer: ViewerApi) => boolean
+  /** 是否禁用(置灰不可点) */
+  disabled?: (viewer: ViewerApi) => boolean
+  /** 下拉子菜单项;有则本项为下拉按钮(点击展开) */
+  items?: ToolbarItem[]
 }
 
 export interface ExcelPlugin {
