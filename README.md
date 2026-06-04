@@ -23,19 +23,35 @@
 
 ## 安装
 
+一个包,三个子入口 —— **框架无关的 core 引擎被 Vue / React 两个薄壳共享**(`dist/core.js` 只打一份)。按你的框架装对应 peer:
+
 ```bash
+# Vue 项目
 npm i ooxml-excel-preview vue exceljs
-# echarts 可选:仅当要渲染图表时才需要
-npm i echarts
-# jspdf 可选:仅当要导出 PDF 时才需要(打印/图片导出不需要)
-npm i jspdf
+
+# React 项目
+npm i ooxml-excel-preview react react-dom exceljs
+
+# 只解析 / 读数据 / 导出(不渲染 UI)
+npm i ooxml-excel-preview exceljs
+
+# echarts 可选:仅渲染图表时需要;jspdf 可选:仅导出 PDF 时需要
+npm i echarts jspdf
 ```
 
-`vue` / `exceljs` 是必需 **peerDependencies**;`echarts` / `jspdf` 为**可选** peer —— 未安装时分别只影响"图表渲染""PDF 导出",其余功能正常,且不会被打包进你的产物(运行时才动态加载)。
+三个入口:
+
+| import | 内容 | 需要的 peer |
+|---|---|---|
+| `ooxml-excel-preview` | Vue 3 组件 `<ExcelViewer>` | `vue` + `exceljs` |
+| `ooxml-excel-preview/react` | React 组件 `<ExcelViewer>` | `react` + `react-dom` + `exceljs` |
+| `ooxml-excel-preview/core` | 框架无关引擎(解析/渲染/控制器/导出/读数据) | `exceljs` |
+
+`exceljs` 必需;`vue` / `react` / `react-dom` 按框架二选一(均为可选 peer);`echarts` / `jspdf` 为**可选** peer —— 未装分别只影响"图表渲染""PDF 导出",其余正常,且**绝不打包进你的产物**(运行时才动态加载)。
 
 ## 使用
 
-### 组件方式
+### Vue
 
 ```vue
 <script setup lang="ts">
@@ -55,6 +71,40 @@ const file = ref<File>()
     @error="(msg) => console.error(msg)"
   />
 </template>
+```
+
+### React
+
+同一套 core 引擎,React 薄壳。命令式 API 走 `ref`(`getSheetData` / `setSelection` / `downloadPdf` …,与 Vue 组件 ref 对齐):
+
+```tsx
+import { useRef, useState } from 'react'
+import { ExcelViewer, type ExcelViewerHandle } from 'ooxml-excel-preview/react'
+
+export function Preview() {
+  const [file, setFile] = useState<File>()
+  const viewer = useRef<ExcelViewerHandle>(null)
+  return (
+    <>
+      <input type="file" accept=".xlsx" onChange={(e) => setFile(e.target.files?.[0])} />
+      <ExcelViewer
+        ref={viewer}
+        src={file}
+        fileName={file?.name}
+        style={{ height: '100vh' }}
+        onRendered={(wb) => console.log('已渲染', wb.sheets.length, '个工作表')}
+        onSelectionChange={({ range, active }) => console.log(range, active)}
+      />
+    </>
+  )
+}
+```
+
+### 仅引擎(不渲染 UI)
+
+```ts
+// 解析 + 读数据 + 导出,全程不依赖任何框架
+import { parseWorkbook, loadArrayBuffer, getSheetData, WorkbookExporter } from 'ooxml-excel-preview/core'
 ```
 
 ### 全局注册(Vue 插件)
