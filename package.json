@@ -1,6 +1,6 @@
 {
   "name": "ooxml-excel-preview",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "High-fidelity OOXML (.xlsx) preview — canvas renderer, read-only. Framework-agnostic core with Vue 3 and React shells.",
   "type": "module",
   "license": "MIT",
