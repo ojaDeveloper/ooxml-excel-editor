@@ -1,5 +1,6 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import react from '@vitejs/plugin-react'
 import dts from 'vite-plugin-dts'
 import { fileURLToPath, URL } from 'node:url'
 
@@ -23,13 +24,15 @@ export default defineConfig(({ mode, command }) => {
     worker: { format: 'es' },
     plugins: [
       vue(),
-      // 仅 lib 构建时生成 .d.ts
+      // React 壳(.tsx)走 react 插件;与 vue 插件并存,各管各的文件类型
+      react(),
+      // 仅 lib 构建时生成 .d.ts(只针对 Vue 库入口;React 壳的 .tsx/react-demo 不进 Vue 包)
       ...(isDemo
         ? []
         : [
             dts({
               include: ['src/**/*.ts', 'src/**/*.vue'],
-              exclude: ['src/**/__tests__/**', 'src/main.ts', 'src/App.vue', 'src/env.d.ts'],
+              exclude: ['src/**/__tests__/**', 'src/main.ts', 'src/App.vue', 'src/env.d.ts', 'src/react/**', 'src/react-demo/**'],
               insertTypesEntry: true,
               tsconfigPath: './tsconfig.json',
             }),
