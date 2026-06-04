@@ -9,4 +9,6 @@ export interface ExportConfig {
   format: 'auto' | 'a4' | 'a3' | 'letter'
   orientation: 'auto' | 'portrait' | 'landscape'
   fitToWidth: boolean
+  /** PDF 类型: true=矢量(文字可选可搜),false=位图 */
+  pdfVector: boolean
 }

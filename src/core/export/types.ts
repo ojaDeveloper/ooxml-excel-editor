@@ -81,6 +81,17 @@ export interface PdfExportOptions extends RenderExportOptions, PageSetup {
   fileName?: string
   /** 每页贴图后调用,用于画页眉/页脚/水印/页码等(扩展点) */
   beforeRenderPage?: BeforeRenderPage
+  /**
+   * 矢量 PDF: 逐格用 jsPDF 真文字/矢量绘制(可选可搜、清晰、文件小)。
+   * 默认 false = 位图 PDF(整表贴图)。
+   */
+  vector?: boolean
+  /**
+   * 矢量模式扩展钩子: 建好 jsPDF doc 后调用一次,宿主可在此 addFont 注册中文等字体。
+   *   configureDoc: (doc) => { doc.addFileToVFS('f.ttf', b64); doc.addFont('f.ttf','CN','normal'); doc.setFont('CN') }
+   * 注册了自定义字体 → 全矢量;否则非拉丁文本(中文)的单元格自动栅格兜底(不丢内容)。
+   */
+  configureDoc?: (doc: any) => void
 }
 
 /** 打印选项 */

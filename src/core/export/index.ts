@@ -17,4 +17,5 @@ export { canvasToBlob, canvasToDataURL, downloadBlob, loadImage, resolvePageSize
 export { compositeOverlays, type ExportDecorations } from './composite'
 export { sliceToPages, type SlicedPage } from './paginate'
 export { exportToPdf, type ExportSheetImage } from './pdf'
+export { exportToVectorPdf, type VectorSheet } from './vector-pdf'
 export { printSheets } from './print'

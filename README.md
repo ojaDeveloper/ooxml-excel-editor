@@ -14,7 +14,7 @@
 - 🖼 **图片 + 图表**(DrawingML → ECharts 近似还原)、**形状/文本框**、**迷你图**(sparklines)、**批注**、**数据验证**下拉、**自动筛选**样式
 - 📝 **文本溢出**到相邻空格、**自动行高**
 - 🖱 **交互**:单元格选区(合并感知)、拖选、公式栏、状态栏(计数/求和/均值/最值)、超链接可点、裁切文本悬停看全文、Ctrl+C 复制为 TSV
-- 🖨 **导出 / 打印**:整表/选区/多表导出 **PNG/JPEG**、**PDF**(分页,可选 jspdf)、**系统打印**(可另存 PDF);默认还原原生 `pageSetup`(纸张/方向/页边距/缩放/打印区域/**打印标题行每页重复**);`beforeRenderPage` 钩子注入页眉/页脚/水印/页码;内置「导出设置」对话框
+- 🖨 **导出 / 打印**:整表/选区/多表导出 **PNG/JPEG**、**PDF**(位图 + **矢量·文字可选可搜**两种)、**系统打印**(可另存 PDF);默认还原原生 `pageSetup`(纸张/方向/页边距/缩放/打印区域/**打印标题行每页重复**);`beforeRenderPage` 注入页眉/页脚/水印、`configureDoc` 注册字体;内置「导出设置」对话框
 - ⚡ **按需加载**(无图表文件不下载 echarts、不导出 PDF 不下载 jspdf)、**友好错误兜底**(损坏/加密/旧 .xls)、解析失败自动给出可读提示
 
 > 预览不需要公式引擎 —— .xlsx 缓存了公式结果,直接显示。详见 [EXCEL还原难点.md](./EXCEL还原难点.md)。
@@ -164,6 +164,28 @@ await viewer.value.downloadPdf({
 ```
 打印另有 `title` / `headerHtml` / `footerHtml`(每页 HTML 片段)。
 > 图片/图表/形状是 DOM 叠加层,导出时会自动合成到底图;"导出全部表"中非当前表的图表需 `echarts` 可用才能离屏渲染。
+
+#### 矢量 PDF(文字可选可搜)
+
+两种 PDF 并存,工具栏菜单有「位图 / 矢量」两项,API 用 `vector` 切换:
+```ts
+await viewer.value.downloadPdf({ vector: true })
+```
+- **位图 PDF**(默认):整表贴图,完整还原观感。
+- **矢量 PDF**:逐格用真文字 + 矢量填充/边框绘制 —— 文字**可选中、可搜索、放大清晰、文件更小**。条件格式数据条/图标、迷你图、旋转文字、富文本等"难啃"的格会自动从底图**裁小图兜底**(内容不丢)。
+
+**中文字体** —— jsPDF 内置字体只认拉丁/数字。用 `configureDoc(doc)` 钩子注册中文 TTF 即可全矢量;不注册时,含中文的单元格自动转为该格小图(清晰但不可选):
+```ts
+await viewer.value.downloadPdf({
+  vector: true,
+  configureDoc: (doc) => {
+    doc.addFileToVFS('NotoSansSC.ttf', base64Ttf)  // 你的中文字体(建议子集化)
+    doc.addFont('NotoSansSC.ttf', 'NotoSC', 'normal')
+    doc.setFont('NotoSC')                            // 设为默认 → 中文也走矢量
+  },
+})
+```
+> 提示:中文表格若不注册字体,矢量模式会产生很多小图、文件偏大且较慢 —— 注册一个子集字体即可全矢量。
 
 ### 分层 UI(slots)
 具名 slot:`toolbar` / `statusbar` / `loading` / `error` / `empty`(缺省用内置)。

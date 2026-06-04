@@ -33,6 +33,7 @@ const form = reactive<ExportConfig>({
   format: 'auto',
   orientation: 'auto',
   fitToWidth: true,
+  pdfVector: false,
 })
 
 function run(action: ExportConfig['action']) {
@@ -76,6 +77,14 @@ function run(action: ExportConfig['action']) {
           <div class="opts inline">
             <label><input type="checkbox" v-model="form.includeHeaders" /> 含行列号</label>
             <label><input type="checkbox" v-model="form.gridlines" /> 网格线</label>
+          </div>
+        </div>
+
+        <div class="field">
+          <label class="lbl">PDF 类型</label>
+          <div class="opts">
+            <label><input type="radio" :value="false" v-model="form.pdfVector" /> 位图 <span class="hint">(完整还原观感)</span></label>
+            <label><input type="radio" :value="true" v-model="form.pdfVector" /> 矢量 <span class="hint">(文字可选可搜·清晰·文件小;中文需注册字体,否则该格转图)</span></label>
           </div>
         </div>
 

@@ -26,6 +26,7 @@ import {
   compositeOverlays,
   downloadBlob,
   exportToPdf,
+  exportToVectorPdf,
   loadImage,
   printSheets,
   type ExportDecorations,
@@ -34,6 +35,7 @@ import {
   type ImageExportOptions,
   type PdfExportOptions,
   type PrintOptions,
+  type VectorSheet,
 } from '@/core/export'
 import ViewerToolbar from './ViewerToolbar.vue'
 import SheetTabs from './SheetTabs.vue'
@@ -1133,6 +1135,67 @@ async function buildSheetImage(
   return { canvas: base.canvas, bodyWcss: base.bodyW, bodyHcss: base.bodyH, sheetName: s.name, repeatTop, zoom }
 }
 
+/** 为一个工作表生成矢量导出输入(逐格信息 + 兜底底图 + 图片图表 + 标题行) */
+async function buildVectorSheet(sheetIdx: number, opts: PdfExportOptions): Promise<VectorSheet | null> {
+  const wb = workbook.value
+  const s = wb?.sheets[sheetIdx]
+  if (!wb || !s) return null
+  const r =
+    sheetIdx === activeSheet.value && renderer.value
+      ? renderer.value
+      : new CanvasRenderer(document.createElement('canvas'), s, wb, 1, {
+          theme: effectiveTheme.value,
+          cellStyle: hasCellStyleHook.value ? combinedCellStyle : undefined,
+        })
+  const metrics = new GridMetrics(s, 1)
+  const ps = s.pageSetup
+  const dim = s.dimension
+  const full: MergeRange = { top: 0, left: 0, bottom: Math.max(0, dim.rows - 1), right: Math.max(0, dim.cols - 1) }
+  const range = opts.range ?? ps?.printArea ?? full
+
+  let titleRows: [number, number] | undefined
+  let bodyTop = range.top
+  let rasterTop = range.top
+  if (ps?.printTitleRows) {
+    const [tr0, tr1] = ps.printTitleRows
+    if (tr1 >= tr0 && tr0 <= range.top && tr1 < range.bottom) {
+      titleRows = [tr0, tr1]
+      bodyTop = Math.max(range.top, tr1 + 1)
+      rasterTop = Math.min(range.top, tr0)
+    }
+  }
+
+  // 兜底底图: 只画格子(不合成叠加层),覆盖 rasterTop..bottom × left..right
+  const base = r.exportToCanvas({
+    range: { top: rasterTop, left: range.left, bottom: range.bottom, right: range.right },
+    scale: opts.scale,
+    includeHeaders: false,
+    gridlines: opts.gridlines,
+    background: opts.background,
+  })
+  const deco = await collectDecorations(s, base.metrics)
+  const images = [...(deco.images ?? []), ...(deco.charts ?? [])]
+  const zoom = opts.fitToWidth === false && ps?.scale ? ps.scale / 100 : undefined
+
+  return {
+    sheetName: s.name,
+    metrics,
+    left: range.left,
+    right: range.right,
+    bodyTop,
+    bodyBottom: range.bottom,
+    titleRows,
+    merges: s.merges,
+    gridlines: opts.gridlines ?? s.showGridLines,
+    zoom,
+    getCell: (rr, cc) => r.exportCellDraw(rr, cc),
+    rasterCanvas: base.canvas,
+    rasterScale: base.scale,
+    rasterTop,
+    images,
+  }
+}
+
 /** 从工作表原生 pageSetup 推导导出默认值(纸张/方向/边距/是否适应页宽) */
 function pageSetupDefaults(sheetIdx: number): Partial<PdfExportOptions> {
   const ps = workbook.value?.sheets[sheetIdx]?.pageSetup
@@ -1169,6 +1232,10 @@ async function exportPdf(opts: PdfExportOptions = {}): Promise<Blob> {
   const targets = resolveTargets(opts.target)
   if (!targets.length) throw new Error('无可导出的工作表')
   const eff: PdfExportOptions = { ...pageSetupDefaults(targets[0]), ...opts }
+  if (eff.vector) {
+    const vs = (await Promise.all(targets.map((i) => buildVectorSheet(i, eff)))).filter(Boolean) as VectorSheet[]
+    return exportToVectorPdf(vs, eff)
+  }
   const images = (await Promise.all(targets.map((i) => buildSheetImage(i, eff, true)))).filter(Boolean) as ExportSheetImage[]
   return exportToPdf(images, eff)
 }
@@ -1190,6 +1257,13 @@ async function print(opts: PrintOptions = {}): Promise<void> {
 async function onExportPdf() {
   try {
     await downloadPdf()
+  } catch (e) {
+    reportExportError(e)
+  }
+}
+async function onExportPdfVector() {
+  try {
+    await downloadPdf({ vector: true })
   } catch (e) {
     reportExportError(e)
   }
@@ -1222,7 +1296,7 @@ async function onDialogExport(cfg: ExportConfig) {
   }
   try {
     if (cfg.action === 'png') await downloadImage(common)
-    else if (cfg.action === 'pdf') await downloadPdf({ ...common, ...page })
+    else if (cfg.action === 'pdf') await downloadPdf({ ...common, ...page, vector: cfg.pdfVector })
     else await print({ ...common, ...page })
   } catch (e) {
     reportExportError(e)
@@ -1321,6 +1395,7 @@ const PluginOverlays = defineComponent({
         @update:zoom="zoom = $event"
         @export-image="downloadImage()"
         @export-pdf="onExportPdf"
+        @export-pdf-vector="onExportPdfVector"
         @print="print()"
         @open-settings="exportDialogOpen = true"
       />

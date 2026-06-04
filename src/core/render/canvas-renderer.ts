@@ -70,6 +70,17 @@ export interface ViewState {
   zoom: number
 }
 
+/** 矢量导出: 一个单元格解析后的绘制信息 */
+export interface CellDrawInfo {
+  style: CellStyle
+  text: string
+  /** 有效字色(已并入条件格式/数字格式/超链接色) */
+  color: string
+  bold: boolean
+  /** 是否含矢量层画不动的效果(条件背景/数据条/图标/迷你图/旋转/富文本)→ 调用方栅格兜底 */
+  complex: boolean
+}
+
 export class CanvasRenderer {
   metrics: GridMetrics
   private merges: MergeIndex
@@ -274,6 +285,40 @@ export class CanvasRenderer {
       }
     }
     return { count, numCount, sum, avg: numCount ? sum / numCount : 0, min, max }
+  }
+
+  /**
+   * 矢量导出用: 解析一个单元格的绘制信息(样式 + 显示文本 + 有效字色/粗体 + 是否"复杂")。
+   * complex = 含条件格式背景/数据条/图标、迷你图、旋转、富文本 —— 矢量层画不动,调用方应栅格兜底。
+   * 返回 null 表示该格无任何可绘制内容(无填充/边框/文本)。
+   */
+  exportCellDraw(row: number, col: number): CellDrawInfo | null {
+    const cell = this.sheet.cells.get(cellKey(row, col))
+    if (!cell) return null
+    const style = this.styleOf(cell)
+    const text = this.cellText(row, col)
+    const hasBox = style.fill.type !== 'none' || style.borders.top || style.borders.bottom || style.borders.left || style.borders.right
+    if (!text && !hasBox) return null
+
+    const isRich = cell.type === 'richtext'
+    const rotation = style.textRotation
+    const sparkline = this.sparklineIndex.has(cellKey(row, col))
+    const effect = this.cond.hasRules() ? this.cond.effectsFor(row, col, cell.raw ?? null) : null
+    const complex =
+      isRich ||
+      (!!rotation && rotation !== 0) ||
+      sparkline ||
+      !!(effect && (effect.fillColor || effect.dataBar || effect.icon))
+
+    let color = style.font.color
+    if (!isRich) {
+      const formatted = formatValue(cell.raw, style.numFmt, this.workbook.date1904)
+      color =
+        effect?.fontColor ||
+        formatted.color ||
+        (cell.type === 'hyperlink' ? this.workbook.themeColors[10] || '#0563C1' : style.font.color)
+    }
+    return { style, text, color, bold: style.font.bold || !!effect?.bold, complex }
   }
 
   /** 单元格的显示文本(套数字格式后);空返回 '' */

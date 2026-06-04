@@ -10,6 +10,7 @@ const emit = defineEmits<{
   (e: 'update:zoom', value: number): void
   (e: 'export-image'): void
   (e: 'export-pdf'): void
+  (e: 'export-pdf-vector'): void
   (e: 'print'): void
   (e: 'open-settings'): void
 }>()
@@ -25,10 +26,12 @@ const menuOpen = ref(false)
 function toggleMenu() {
   menuOpen.value = !menuOpen.value
 }
-function pick(action: 'export-image' | 'export-pdf' | 'print' | 'open-settings') {
+type MenuAction = 'export-image' | 'export-pdf' | 'export-pdf-vector' | 'print' | 'open-settings'
+function pick(action: MenuAction) {
   menuOpen.value = false
   if (action === 'export-image') emit('export-image')
   else if (action === 'export-pdf') emit('export-pdf')
+  else if (action === 'export-pdf-vector') emit('export-pdf-vector')
   else if (action === 'print') emit('print')
   else emit('open-settings')
 }
@@ -53,7 +56,8 @@ onBeforeUnmount(() => {
       </button>
       <div v-if="menuOpen" class="menu">
         <button @click="pick('export-image')">导出为图片 (PNG)</button>
-        <button @click="pick('export-pdf')">导出为 PDF</button>
+        <button @click="pick('export-pdf')">导出为 PDF (位图)</button>
+        <button @click="pick('export-pdf-vector')">导出为 PDF (矢量·文字可选)</button>
         <button @click="pick('print')">打印…</button>
         <div class="sep" />
         <button @click="pick('open-settings')">导出设置…</button>
