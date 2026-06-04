@@ -249,11 +249,14 @@ const highlightNegatives = definePlugin({
 npm install
 npm run dev            # 本地预览(demo)
 node scripts/gen-sample.mjs   # 生成 public/sample.xlsx 示例
-npm run test           # 单元 + 端到端测试
+npm run test           # 单元测试(node 环境,纯逻辑)
+npm run test:e2e       # 真浏览器 e2e(Playwright):canvas 渲染 + jsPDF 导出 + 下载全链路
 npm run typecheck      # 类型检查
 npm run build          # 构建组件库(dist/)
 npm run build:demo     # 构建 demo 站点
 ```
+
+> **e2e 说明**:`npm run test:e2e` 用 Playwright 起 dev 服务 + 无头 Chromium,加载示例 → 渲染 → 导出 PNG/位图PDF/矢量PDF,校验产物(PNG 魔数、`%PDF`、矢量 PDF 的文字操作符数量多于位图)。覆盖 node 单测做不到的真实 canvas/jsPDF 绘制。首次需 `npx playwright install chromium` 下载浏览器(本仓库 `@playwright/test` 固定 `1.58.0` 对应 chromium-1208)。
 
 ## License
 

@@ -51,6 +51,7 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:e2e": "playwright test",
     "typecheck": "vue-tsc --noEmit",
     "prepublishOnly": "npm run build"
   },
@@ -73,6 +74,7 @@
     "fflate": "^0.8.2"
   },
   "devDependencies": {
+    "@playwright/test": "1.58.0",
     "@types/node": "^22.19.19",
     "@vitejs/plugin-vue": "^5.2.1",
     "echarts": "^5.5.1",

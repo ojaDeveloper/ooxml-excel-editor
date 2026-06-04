@@ -17,3 +17,8 @@ pnpm-debug.log*
 
 # vite
 .vite
+
+# playwright e2e
+test-results
+playwright-report
+.playwright
