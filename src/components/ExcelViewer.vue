@@ -22,6 +22,8 @@ import { CanvasRenderer, type ViewState } from '@/core/render/canvas-renderer'
 import { GridMetrics, colIndexToLetters } from '@/core/layout/grid-metrics'
 import { anchorRect } from '@/core/overlay/anchor'
 import { chartToOption } from '@/core/overlay/chart-mapper'
+import { loadECharts } from '@/core/overlay/echarts-loader'
+import { OverlayManager } from '@/core/viewer/overlay-manager'
 import { revokeImages } from '@/core/finalize'
 import {
   canvasToBlob,
@@ -153,230 +155,20 @@ const sheet = computed<SheetModel | null>(() => {
 
 const contentSize = ref({ w: 0, h: 0 })
 
-// ---------------- 图表实例管理 ----------------
-// echarts 按需加载: 只有 sheet 含图表时才动态 import，省掉无图表文件的 ~1MB 首包
-let echartsMod: typeof EChartsNS | null = null
-async function loadECharts(): Promise<typeof EChartsNS> {
-  if (!echartsMod) echartsMod = await import('echarts')
-  return echartsMod
-}
-
-type Quad = 'main' | 'frow' | 'fcol' | 'corner'
-interface ChartInstance {
-  el: HTMLDivElement
-  inst: EChartsNS.ECharts
-  spec: ChartSpec
-  quad: Quad
-  lastW: number // 上次尺寸,只有变化才 resize(避免滚动时每帧 resize)
-  lastH: number
-}
-let chartInstances: ChartInstance[] = []
-interface ImageEl {
-  el: HTMLImageElement
-  anchorIdx: number
-  quad: Quad
-}
-let imageEls: ImageEl[] = []
-// echarts 缺失时的占位框(仍按图表锚点定位，给出友好提示)
-interface ChartPlaceholder {
-  el: HTMLDivElement
-  spec: ChartSpec
-  quad: Quad
-}
-let chartPlaceholders: ChartPlaceholder[] = []
-interface ShapeEl {
-  el: HTMLDivElement
-  shapeIdx: number
-  quad: Quad
-}
-let shapeEls: ShapeEl[] = []
-
-/** 锚点落在哪个象限(冻结行/列内的钉住,其余随滚动) */
-function quadrantOf(anchor: ImageAnchor): Quad {
-  const fz = renderer.value!.freezeGeometry
-  const top = anchor.from.row < fz.frozenRows
-  const left = anchor.from.col < fz.frozenCols
-  if (top && left) return 'corner'
-  if (top) return 'frow'
-  if (left) return 'fcol'
-  return 'main'
-}
-function ovContainer(q: Quad): HTMLElement | null {
-  return q === 'main' ? ovMain.value : q === 'frow' ? ovFRow.value : q === 'fcol' ? ovFCol.value : ovCorner.value
-}
-
-function disposeOverlays() {
-  for (const c of chartInstances) {
-    c.inst.dispose()
-    c.el.remove()
-  }
-  chartInstances = []
-  for (const p of chartPlaceholders) p.el.remove()
-  chartPlaceholders = []
-  for (const sh of shapeEls) sh.el.remove()
-  shapeEls = []
-  for (const im of imageEls) im.el.remove()
-  imageEls = []
-}
-
-async function buildOverlays() {
-  disposeOverlays()
+// ---------------- 叠加层(图片/图表/形状)— 委托框架无关 OverlayManager ----------------
+let overlays: OverlayManager | null = null
+function buildOverlays() {
   const s = sheet.value
-  if (!s || !ovMain.value) return
-
-  for (let i = 0; i < s.images.length; i++) {
-    const img = s.images[i]
-    const quad = quadrantOf(img)
-    const el = document.createElement('img')
-    el.src = img.src
-    el.draggable = false
-    el.style.position = 'absolute'
-    el.style.objectFit = 'fill'
-    el.style.pointerEvents = 'none'
-    ovContainer(quad)?.appendChild(el)
-    imageEls.push({ el, anchorIdx: i, quad })
-  }
-
-  // 形状 / 文本框
-  for (let i = 0; i < s.shapes.length; i++) {
-    const shape = s.shapes[i]
-    const quad = quadrantOf(shape.anchor)
-    const el = document.createElement('div')
-    el.style.position = 'absolute'
-    el.style.boxSizing = 'border-box'
-    el.style.pointerEvents = 'none'
-    el.style.overflow = 'hidden'
-    el.style.display = 'flex'
-    el.style.padding = '3px 5px'
-    el.style.alignItems = 'center'
-    el.style.justifyContent = shape.align === 'center' ? 'center' : shape.align === 'right' ? 'flex-end' : 'flex-start'
-    el.style.whiteSpace = 'pre-wrap'
-    el.style.wordBreak = 'break-word'
-    el.style.lineHeight = '1.2'
-    if (shape.fillColor) el.style.background = shape.fillColor
-    if (shape.lineColor) el.style.border = `1px solid ${shape.lineColor}`
-    if (shape.geom === 'roundRect') el.style.borderRadius = '8px'
-    else if (shape.geom === 'ellipse') el.style.borderRadius = '50%'
-    if (shape.textColor) el.style.color = shape.textColor
-    if (shape.bold) el.style.fontWeight = 'bold'
-    el.style.textAlign = shape.align ?? 'left'
-    el.textContent = shape.text ?? ''
-    ovContainer(quad)?.appendChild(el)
-    shapeEls.push({ el, shapeIdx: i, quad })
-  }
-
-  if (s.charts.length) {
-    let echarts: typeof EChartsNS | null = null
-    try {
-      echarts = await loadECharts()
-    } catch (e) {
-      // echarts 是可选 peer 依赖，宿主未安装时会走到这里
-      console.warn('[ooxml-preview] 未能加载 echarts，图表降级为占位提示。请安装依赖: npm i echarts', e)
-    }
-    // 异步加载期间可能已切表，确认当前仍是该 sheet 才挂
-    if (sheet.value !== s) return
-
-    for (const chart of s.charts) {
-      const quad = quadrantOf(chart.anchor)
-      if (echarts) {
-        const el = document.createElement('div')
-        el.style.cssText = chartBoxCss
-        ovContainer(quad)?.appendChild(el)
-        const inst = echarts.init(el)
-        try {
-          inst.setOption(chartToOption(chart))
-        } catch (e) {
-          console.warn('[ooxml-preview] 图表渲染失败:', e)
-        }
-        chartInstances.push({ el, inst, spec: chart, quad, lastW: 0, lastH: 0 })
-      } else {
-        // 降级: 在图表位置画一个友好占位框
-        const el = document.createElement('div')
-        el.style.cssText = chartBoxCss + placeholderCss
-        el.innerHTML =
-          '<div style="font-size:22px;line-height:1">📊</div>' +
-          '<div style="margin-top:6px;font-weight:600">图表</div>' +
-          '<div style="margin-top:2px;font-size:11px;color:#9aa4ae">渲染需安装 echarts 依赖</div>'
-        ovContainer(quad)?.appendChild(el)
-        chartPlaceholders.push({ el, spec: chart, quad })
-      }
-    }
-  }
-  positionOverlays()
-}
-
-const chartBoxCss =
-  'position:absolute;background:rgba(255,255,255,0.96);border:1px solid #e2e4e7;box-shadow:0 1px 4px rgba(0,0,0,0.08);'
-const placeholderCss =
-  'display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;color:#6b7785;border-style:dashed;box-sizing:border-box;padding:8px;overflow:hidden;'
-
-function positionOverlays() {
   const r = renderer.value
+  if (overlays && s && r) overlays.build(s, r, view.value)
+}
+function positionOverlays() {
   const s = sheet.value
-  if (!r || !s) return
-  const hw = r.metrics.rowHeaderWidth
-  const hh = r.metrics.colHeaderHeight
-  const fz = r.freezeGeometry
-  const fw = fz.frozenWidth
-  const fh = fz.frozenHeight
-  const bodyW = Math.max(0, view.value.width - hw - fw)
-  const bodyH = Math.max(0, view.value.height - hh - fh)
-
-  // 四象限容器各自裁到对应区域(冻结角/行/列/主区)
-  setQuad(ovCorner.value, hw, hh, fw, fh)
-  setQuad(ovFRow.value, hw + fw, hh, bodyW, fh)
-  setQuad(ovFCol.value, hw, hh + fh, fw, bodyH)
-  setQuad(ovMain.value, hw + fw, hh + fh, bodyW, bodyH)
-
-  for (const im of imageEls) {
-    placeInQuad(im.el, anchorRect(r.metrics, s.images[im.anchorIdx]), im.quad, fw, fh)
-  }
-  const shapeFont = Math.round(11 * (96 / 72) * r.metrics.zoom)
-  for (const sh of shapeEls) {
-    sh.el.style.fontSize = shapeFont + 'px'
-    placeInQuad(sh.el, anchorRect(r.metrics, s.shapes[sh.shapeIdx].anchor), sh.quad, fw, fh)
-  }
-  for (const c of chartInstances) {
-    const rect = anchorRect(r.metrics, c.spec.anchor)
-    placeInQuad(c.el, rect, c.quad, fw, fh)
-    // 只有尺寸真变(缩放)才 resize;滚动只改位置,不必 resize(很费)
-    if (c.lastW !== rect.width || c.lastH !== rect.height) {
-      c.inst.resize()
-      c.lastW = rect.width
-      c.lastH = rect.height
-    }
-  }
-  for (const p of chartPlaceholders) {
-    placeInQuad(p.el, anchorRect(r.metrics, p.spec.anchor), p.quad, fw, fh)
-  }
+  const r = renderer.value
+  if (overlays && s && r) overlays.position(s, r, view.value)
 }
-
-function setQuad(el: HTMLElement | null, left: number, top: number, w: number, h: number) {
-  if (!el) return
-  el.style.left = left + 'px'
-  el.style.top = top + 'px'
-  el.style.width = Math.max(0, w) + 'px'
-  el.style.height = Math.max(0, h) + 'px'
-}
-
-/** 把元素定位到所在象限容器内的相对坐标(冻结方向不减滚动量) */
-function placeInQuad(
-  el: HTMLElement,
-  rect: { left: number; top: number; width: number; height: number },
-  quad: Quad,
-  fw: number,
-  fh: number,
-) {
-  const sx = view.value.scrollX
-  const sy = view.value.scrollY
-  // 主区/冻结行的横向随滚动(容器从 fw 处起,故减 fw);冻结列/角横向固定
-  const x = quad === 'main' || quad === 'frow' ? rect.left - fw - sx : rect.left
-  // 主区/冻结列的纵向随滚动(容器从 fh 处起,故减 fh);冻结行/角纵向固定
-  const y = quad === 'main' || quad === 'fcol' ? rect.top - fh - sy : rect.top
-  el.style.left = x + 'px'
-  el.style.top = y + 'px'
-  el.style.width = rect.width + 'px'
-  el.style.height = rect.height + 'px'
+function disposeOverlays() {
+  overlays?.dispose()
 }
 
 // ---------------- 渲染 ----------------
@@ -453,6 +245,15 @@ let resizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
   initPlugins()
+  // 叠加层四象限容器在模板里,挂载后才有 → 实例化框架无关 OverlayManager
+  if (ovMain.value && ovFRow.value && ovFCol.value && ovCorner.value) {
+    overlays = new OverlayManager({
+      main: ovMain.value,
+      frow: ovFRow.value,
+      fcol: ovFCol.value,
+      corner: ovCorner.value,
+    })
+  }
   if (props.src) load(props.src, effectiveTransform)
   resizeObserver = new ResizeObserver(() => {
     measure()
