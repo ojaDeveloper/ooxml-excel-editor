@@ -23,7 +23,7 @@ import { GridMetrics, colIndexToLetters } from '@/core/layout/grid-metrics'
 import { anchorRect } from '@/core/overlay/anchor'
 import { chartToOption } from '@/core/overlay/chart-mapper'
 import { loadECharts } from '@/core/overlay/echarts-loader'
-import { ViewerController } from '@/core/viewer/controller'
+import { ViewerController, type TooltipState } from '@/core/viewer/controller'
 import { revokeImages } from '@/core/finalize'
 import {
   canvasToBlob,
@@ -162,9 +162,6 @@ let controller: ViewerController | null = null
 function doRender() {
   controller?.render()
 }
-function scheduleRender() {
-  controller?.scheduleRender()
-}
 function measure() {
   controller?.measure()
 }
@@ -173,8 +170,8 @@ function rebuildRenderer() {
   const s = sheet.value
   const wb = workbook.value
   if (!s || !wb || !controller) return
-  // 先清 Vue 侧状态,再重建(rebuild 末尾会以"已清空选区"绘制)
-  clearSelection()
+  // 先清状态,再重建(rebuild 末尾会以"已清空选区"绘制)
+  controller.clearSelection()
   findHits.value = []
   findIndex.value = -1
   tooltip.value = null
@@ -207,9 +204,17 @@ onMounted(() => {
         overlays: { main: ovMain.value, frow: ovFRow.value, fcol: ovFCol.value, corner: ovCorner.value },
       },
       {
-        getSelection: () => selection.value,
         onRenderer: (r) => (renderer.value = r),
         onRenderTick: () => renderTick.value++,
+        onSelectionChange: () => selVersion.value++,
+        onCellClick: (row, col, text) => fire('cell-click', { row, col, text }),
+        onCellDblClick: (row, col, text) => fire('cell-dblclick', { row, col, text }),
+        onHyperlink: (url, cell) => {
+          fire('hyperlink-click', { url, cell })
+          if (props.openLinks) window.open(url, '_blank', 'noopener')
+        },
+        onFilterButton: (col) => openFilterPopup(col),
+        onTooltip: (tip) => (tooltip.value = tip),
       },
     )
     view.value = controller.view // 壳与控制器共享同一 view 对象(现有 view.value 读法不变)
@@ -279,45 +284,20 @@ watch(activeSheet, async (_idx, oldIdx) => {
 
 watch(zoom, (z) => controller?.setZoom(z))
 
-// ---------------- 交互: 选区 / 超链接 / 悬停 / 复制 ----------------
-type Cell = { row: number; col: number }
-const selAnchor = ref<Cell | null>(null) // 固定角(扩选时不动)
-const selActive = ref<Cell | null>(null) // 活动角(移动/扩选时变)
-const selMode = ref<'range' | 'rows' | 'cols'>('range')
-const tooltip = ref<{ text: string; x: number; y: number; kind: 'overflow' | 'comment' } | null>(null)
-let dragMode: 'none' | 'cell' | 'row' | 'col' | 'resize-col' | 'resize-row' = 'none'
-let resizeTarget = -1 // 正在拖拽改宽高的列/行索引
-let resizeStartPos = 0 // 起始鼠标坐标(px)
-let resizeStartSize = 0 // 起始宽/高(px)
-let dragMoved = false
-
-function cellRange(c: Cell): MergeRange {
-  return { top: c.row, left: c.col, bottom: c.row, right: c.col }
-}
+// ---------------- 交互: 选区 / 超链接 / 悬停 / 复制(模型与交互在 ViewerController) ----------------
+// 选区模型已下沉控制器;壳只持 selVersion(变化时让派生计算属性重算)+ tooltip(控制器经 onTooltip 回填)
+const selVersion = ref(0)
+const tooltip = ref<TooltipState | null>(null)
 
 const selection = computed<MergeRange | null>(() => {
-  const r = renderer.value
-  const a = selAnchor.value
-  const b = selActive.value
-  if (!r || !a || !b) return null
-  if (selMode.value === 'rows') {
-    return { top: Math.min(a.row, b.row), bottom: Math.max(a.row, b.row), left: 0, right: r.metrics.cols - 1 }
-  }
-  if (selMode.value === 'cols') {
-    return { left: Math.min(a.col, b.col), right: Math.max(a.col, b.col), top: 0, bottom: r.metrics.rows - 1 }
-  }
-  const ra = r.mergeAt(a.row, a.col) ?? cellRange(a)
-  const rb = r.mergeAt(b.row, b.col) ?? cellRange(b)
-  return {
-    top: Math.min(ra.top, rb.top),
-    left: Math.min(ra.left, rb.left),
-    bottom: Math.max(ra.bottom, rb.bottom),
-    right: Math.max(ra.right, rb.right),
-  }
+  void selVersion.value // 选区模型变化 → 重算
+  void renderer.value // renderer 就绪后重算
+  return controller?.getSelection() ?? null
 })
 
 const activeCellAddr = computed(() => {
-  const c = selActive.value
+  void selVersion.value
+  const c = controller?.getActiveCell()
   return c ? colIndexToLetters(c.col) + (c.row + 1) : ''
 })
 const selRangeLabel = computed(() => {
@@ -326,14 +306,16 @@ const selRangeLabel = computed(() => {
   return `${colIndexToLetters(s.left)}${s.top + 1}:${colIndexToLetters(s.right)}${s.bottom + 1}`
 })
 const formulaBarText = computed(() => {
+  void selVersion.value
   const r = renderer.value
-  const c = selActive.value
+  const c = controller?.getActiveCell()
   if (!r || !c) return ''
   return r.cellFormula(c.row, c.col) ?? r.cellText(c.row, c.col)
 })
 const stats = computed(() => {
+  void selVersion.value
   const r = renderer.value
-  const s = selection.value
+  const s = controller?.getSelection() ?? null
   return r && s ? r.selectionStats(s) : null
 })
 
@@ -342,424 +324,30 @@ function fmtNum(n: number): string {
   return n.toLocaleString('en-US', { maximumFractionDigits: 2 })
 }
 
-function clearSelection() {
-  selAnchor.value = null
-  selActive.value = null
-  selMode.value = 'range'
-}
-
-// ---- 命中区域 ----
-type Hit =
-  | { region: 'cell'; row: number; col: number }
-  | { region: 'row'; row: number }
-  | { region: 'col'; col: number }
-  | { region: 'corner' }
-  | { region: 'none' }
-
-function localXY(e: MouseEvent): { x: number; y: number } | null {
-  const area = renderAreaEl.value
-  if (!area) return null
-  const rect = area.getBoundingClientRect()
-  return { x: e.clientX - rect.left, y: e.clientY - rect.top }
-}
-function hitRegion(e: MouseEvent): Hit {
-  const r = renderer.value
-  const p = localXY(e)
-  if (!r || !p) return { region: 'none' }
-  const hw = r.metrics.rowHeaderWidth
-  const hh = r.metrics.colHeaderHeight
-  if (p.x < hw && p.y < hh) return { region: 'corner' }
-  if (p.x < hw) return { region: 'row', row: r.rowAtScreen(view.value, p.y) }
-  if (p.y < hh) return { region: 'col', col: r.colAtScreen(view.value, p.x) }
-  const cell = r.cellAtScreen(view.value, p.x, p.y)
-  return cell ? { region: 'cell', row: cell.row, col: cell.col } : { region: 'none' }
-}
-
-// ---- 选区设置 ----
-function setCell(cell: Cell, extend: boolean) {
-  selMode.value = 'range'
-  if (extend && selAnchor.value) selActive.value = cell
-  else {
-    selAnchor.value = cell
-    selActive.value = cell
-  }
-}
-function setRows(row: number, extend: boolean) {
-  selMode.value = 'rows'
-  const c: Cell = { row, col: 0 }
-  if (extend && selAnchor.value) selActive.value = c
-  else {
-    selAnchor.value = c
-    selActive.value = c
-  }
-}
-function setCols(col: number, extend: boolean) {
-  selMode.value = 'cols'
-  const c: Cell = { row: 0, col }
-  if (extend && selAnchor.value) selActive.value = c
-  else {
-    selAnchor.value = c
-    selActive.value = c
-  }
-}
-function selectAll() {
-  const r = renderer.value
-  if (!r) return
-  selMode.value = 'range'
-  selAnchor.value = { row: 0, col: 0 }
-  selActive.value = { row: r.metrics.rows - 1, col: r.metrics.cols - 1 }
-}
-
-// ---- 鼠标 ----
+// 模板事件 → 控制器(薄包装,避免模板里直接绑 controller 的 this/null 问题)
 function onMouseDown(e: MouseEvent) {
-  if (e.button !== 0) return
-  scrollerEl.value?.focus()
-  const r = renderer.value
-  const p = localXY(e)
-  // 自动筛选下拉按钮(优先于一切)
-  if (r && p) {
-    const fcol = r.filterButtonAt(view.value, p.x, p.y)
-    if (fcol != null) {
-      openFilterPopup(fcol)
-      return
-    }
-  }
-  // 表头边界拖拽改宽高(优先于选择)
-  if (r && p) {
-    if (p.y < r.metrics.colHeaderHeight) {
-      const b = nearColBorder(p.x, p.y)
-      if (b) {
-        dragMode = 'resize-col'
-        resizeTarget = b.col
-        resizeStartPos = p.x
-        resizeStartSize = r.metrics.colWidth(b.col)
-        return
-      }
-    } else if (p.x < r.metrics.rowHeaderWidth) {
-      const b = nearRowBorder(p.x, p.y)
-      if (b) {
-        dragMode = 'resize-row'
-        resizeTarget = b.row
-        resizeStartPos = p.y
-        resizeStartSize = r.metrics.rowHeight(b.row)
-        return
-      }
-    }
-  }
-  const hit = hitRegion(e)
-  dragMoved = false
-  if (hit.region === 'corner') {
-    selectAll()
-    dragMode = 'none'
-  } else if (hit.region === 'row') {
-    dragMode = 'row'
-    setRows(hit.row, e.shiftKey)
-  } else if (hit.region === 'col') {
-    dragMode = 'col'
-    setCols(hit.col, e.shiftKey)
-  } else if (hit.region === 'cell') {
-    dragMode = 'cell'
-    setCell({ row: hit.row, col: hit.col }, e.shiftKey)
-  } else {
-    dragMode = 'none'
-  }
-  doRender()
+  controller?.onMouseDown(e)
 }
 function onMouseMove(e: MouseEvent) {
-  if (dragMode !== 'none') {
-    const r = renderer.value
-    const p = localXY(e)
-    if (!r || !p) return
-    dragMoved = true
-    if (dragMode === 'resize-col') {
-      controller?.setColWidthPx(resizeTarget, resizeStartSize + (p.x - resizeStartPos))
-      return
-    }
-    if (dragMode === 'resize-row') {
-      controller?.setRowHeightPx(resizeTarget, resizeStartSize + (p.y - resizeStartPos))
-      return
-    }
-    if (dragMode === 'cell') {
-      const cell = r.cellAtScreen(view.value, p.x, p.y)
-      if (cell) {
-        selActive.value = cell
-        scheduleRender()
-      }
-    } else if (dragMode === 'row') {
-      const row = r.rowAtScreen(view.value, p.y)
-      if (row >= 0) {
-        selActive.value = { row, col: 0 }
-        scheduleRender()
-      }
-    } else {
-      const col = r.colAtScreen(view.value, p.x)
-      if (col >= 0) {
-        selActive.value = { row: 0, col }
-        scheduleRender()
-      }
-    }
-    return
-  }
-  updateHover(e)
+  controller?.onMouseMove(e)
 }
 function onMouseUp(e: MouseEvent) {
-  if (dragMode === 'cell' && !dragMoved) {
-    const hit = hitRegion(e)
-    const r = renderer.value
-    if (hit.region === 'cell' && r) {
-      fire('cell-click', { row: hit.row, col: hit.col, text: r.cellText(hit.row, hit.col) })
-      const link = r.cellHyperlink(hit.row, hit.col)
-      if (link) {
-        fire('hyperlink-click', { url: link, cell: { row: hit.row, col: hit.col } })
-        if (props.openLinks) window.open(link, '_blank', 'noopener')
-      }
-    }
-  }
-  dragMode = 'none'
-}
-function updateHover(e: MouseEvent) {
-  const r = renderer.value
-  const sc = scrollerEl.value
-  const p = localXY(e)
-  if (!r || !sc || !p) {
-    tooltip.value = null
-    return
-  }
-  // 表头边界 → 改宽高光标
-  if (p.y < r.metrics.colHeaderHeight && nearColBorder(p.x, p.y)) {
-    sc.style.cursor = 'col-resize'
-    tooltip.value = null
-    return
-  }
-  if (p.x < r.metrics.rowHeaderWidth && nearRowBorder(p.x, p.y)) {
-    sc.style.cursor = 'row-resize'
-    tooltip.value = null
-    return
-  }
-  const cell = r.cellAtScreen(view.value, p.x, p.y)
-  if (!cell) {
-    tooltip.value = null
-    sc.style.cursor = ''
-    return
-  }
-  sc.style.cursor = r.cellHyperlink(cell.row, cell.col) ? 'pointer' : 'cell'
-  const tx = p.x + 14
-  const ty = p.y + 18
-  const comment = r.commentAt(cell.row, cell.col)
-  if (comment) {
-    tooltip.value = { text: comment, x: tx, y: ty, kind: 'comment' }
-    return
-  }
-  const full = r.overflowTextAt(cell.row, cell.col)
-  tooltip.value = full ? { text: full, x: tx, y: ty, kind: 'overflow' } : null
+  controller?.onMouseUp(e)
 }
 function onMouseLeave() {
-  tooltip.value = null
-}
-
-// ---- 宽高自适应(双击边界) / 边界命中 ----
-function nearColBorder(x: number, y: number): { col: number } | null {
-  const r = renderer.value
-  if (!r || y >= r.metrics.colHeaderHeight) return null
-  const col = r.colAtScreen(view.value, x)
-  if (col < 0) return null
-  const rect = r.screenRectOfCell(view.value, 0, col)
-  if (Math.abs(x - (rect.x + rect.w)) <= 4) return { col }
-  if (Math.abs(x - rect.x) <= 4 && col > 0) return { col: col - 1 }
-  return null
-}
-function nearRowBorder(x: number, y: number): { row: number } | null {
-  const r = renderer.value
-  if (!r || x >= r.metrics.rowHeaderWidth) return null
-  const row = r.rowAtScreen(view.value, y)
-  if (row < 0) return null
-  const rect = r.screenRectOfCell(view.value, row, 0)
-  if (Math.abs(y - (rect.y + rect.h)) <= 4) return { row }
-  if (Math.abs(y - rect.y) <= 4 && row > 0) return { row: row - 1 }
-  return null
+  controller?.onMouseLeave()
 }
 function onDblClick(e: MouseEvent) {
-  const r = renderer.value
-  const p = localXY(e)
-  if (!r || !p) return
-  const colHit = nearColBorder(p.x, p.y)
-  const rowHit = colHit ? null : nearRowBorder(p.x, p.y)
-  if (colHit) {
-    controller?.autoFitColumn(colHit.col)
-  } else if (rowHit) {
-    controller?.autoFitRow(rowHit.row)
-  } else {
-    // 非边界 → 双击单元格事件
-    const cell = r.cellAtScreen(view.value, p.x, p.y)
-    if (cell) fire('cell-dblclick', { row: cell.row, col: cell.col, text: r.cellText(cell.row, cell.col) })
-  }
-}
-
-// ---- 键盘 ----
-function pageRows(): number {
-  const r = renderer.value
-  if (!r) return 10
-  return Math.max(1, Math.floor((view.value.height - r.metrics.colHeaderHeight) / r.defaultRowPx) - 1)
+  controller?.onDblClick(e)
 }
 function onKeyDown(e: KeyboardEvent) {
-  if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
-    copySelection()
-    e.preventDefault()
-    return
-  }
-  if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
-    selectAll()
-    doRender()
-    e.preventDefault()
-    return
-  }
-  const r = renderer.value
-  if (!r || !selActive.value) return
-  const maxRow = r.metrics.rows - 1
-  const maxCol = r.metrics.cols - 1
-  const ctrl = e.ctrlKey || e.metaKey
-  let { row, col } = selActive.value
-  let handled = true
-  switch (e.key) {
-    case 'ArrowUp': if (ctrl) { const j = jumpEdge(r, row, col, -1, 0); row = j.row; col = j.col } else row = Math.max(0, row - 1); break
-    case 'ArrowDown': if (ctrl) { const j = jumpEdge(r, row, col, 1, 0); row = j.row; col = j.col } else row = Math.min(maxRow, row + 1); break
-    case 'ArrowLeft': if (ctrl) { const j = jumpEdge(r, row, col, 0, -1); row = j.row; col = j.col } else col = Math.max(0, col - 1); break
-    case 'ArrowRight': if (ctrl) { const j = jumpEdge(r, row, col, 0, 1); row = j.row; col = j.col } else col = Math.min(maxCol, col + 1); break
-    case 'Home': col = 0; if (ctrl) row = 0; break
-    case 'End': col = maxCol; if (e.ctrlKey) row = maxRow; break
-    case 'PageUp': row = Math.max(0, row - pageRows()); break
-    case 'PageDown': row = Math.min(maxRow, row + pageRows()); break
-    case 'Enter': row = Math.min(maxRow, row + 1); break
-    case 'Tab': col = e.shiftKey ? Math.max(0, col - 1) : Math.min(maxCol, col + 1); break
-    default: handled = false
-  }
-  if (!handled) return
-  e.preventDefault()
-  const m = r.mergeAt(row, col)
-  if (m) {
-    row = m.top
-    col = m.left
-  }
-  selMode.value = 'range'
-  selActive.value = { row, col }
-  const extend = e.shiftKey && e.key !== 'Tab'
-  if (!extend) selAnchor.value = { row, col }
-  scrollActiveIntoView()
-  doRender()
-}
-function scrollActiveIntoView() {
-  const r = renderer.value
-  const sc = scrollerEl.value
-  const c = selActive.value
-  if (!r || !sc || !c) return
-  const hw = r.metrics.rowHeaderWidth
-  const hh = r.metrics.colHeaderHeight
-  const fz = r.freezeGeometry
-  let sx = sc.scrollLeft
-  let sy = sc.scrollTop
-  if (c.col >= fz.frozenCols) {
-    const cl = r.metrics.colLeft(c.col)
-    const cr = cl + r.metrics.colWidth(c.col)
-    const viewW = view.value.width - hw
-    if (cr > sx + viewW) sx = cr - viewW
-    if (cl < sx + fz.frozenWidth) sx = cl - fz.frozenWidth
-  }
-  if (c.row >= fz.frozenRows) {
-    const ct = r.metrics.rowTop(c.row)
-    const cb = ct + r.metrics.rowHeight(c.row)
-    const viewH = view.value.height - hh
-    if (cb > sy + viewH) sy = cb - viewH
-    if (ct < sy + fz.frozenHeight) sy = ct - fz.frozenHeight
-  }
-  sx = Math.max(0, sx)
-  sy = Math.max(0, sy)
-  if (sx !== sc.scrollLeft || sy !== sc.scrollTop) {
-    sc.scrollLeft = sx
-    sc.scrollTop = sy
-    view.value.scrollX = sx
-    view.value.scrollY = sy
-  }
-}
-/** Ctrl+方向: 跳到数据块边界(Excel 行为) */
-function jumpEdge(
-  r: CanvasRenderer,
-  row: number,
-  col: number,
-  dr: number,
-  dc: number,
-): { row: number; col: number } {
-  const maxRow = r.metrics.rows - 1
-  const maxCol = r.metrics.cols - 1
-  const inB = (rr: number, cc: number) => rr >= 0 && rr <= maxRow && cc >= 0 && cc <= maxCol
-  const filled = (rr: number, cc: number) => r.cellText(rr, cc) !== ''
-  let nr = row + dr
-  let nc = col + dc
-  if (!inB(nr, nc)) return { row, col }
-  if (filled(row, col) && filled(nr, nc)) {
-    // 沿填充块走到块尾
-    while (inB(nr + dr, nc + dc) && filled(nr + dr, nc + dc)) {
-      nr += dr
-      nc += dc
-    }
-  } else {
-    // 跳过空白到下一个填充(或边界)
-    while (inB(nr, nc) && !filled(nr, nc)) {
-      if (!inB(nr + dr, nc + dc)) break
-      nr += dr
-      nc += dc
-    }
-  }
-  return { row: nr, col: nc }
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-}
-async function copySelection() {
-  const r = renderer.value
-  const s = selection.value
-  if (!r || !s) return
-  // 防超大选区卡死: 复制范围软上限
-  const rowEnd = Math.min(s.bottom, s.top + 4999)
-  const colEnd = Math.min(s.right, s.left + 255)
-  const lines: string[] = []
-  const htmlRows: string[] = []
-  for (let row = s.top; row <= rowEnd; row++) {
-    const cells: string[] = []
-    const htmlCells: string[] = []
-    for (let col = s.left; col <= colEnd; col++) {
-      const text = r.cellText(row, col)
-      cells.push(text)
-      const css = r.cellInlineStyle(row, col)
-      htmlCells.push(`<td${css ? ` style="${css}"` : ''}>${escapeHtml(text)}</td>`)
-    }
-    lines.push(cells.join('\t'))
-    htmlRows.push(`<tr>${htmlCells.join('')}</tr>`)
-  }
-  const tsv = lines.join('\n')
-  const html = `<table border="1" style="border-collapse:collapse">${htmlRows.join('')}</table>`
-  try {
-    // 优先写 text/plain + text/html(粘到 Word/Excel 保留表格与格式)
-    const ClipItem = (window as any).ClipboardItem
-    if (ClipItem && navigator.clipboard?.write) {
-      await navigator.clipboard.write([
-        new ClipItem({
-          'text/plain': new Blob([tsv], { type: 'text/plain' }),
-          'text/html': new Blob([html], { type: 'text/html' }),
-        }),
-      ])
-    } else {
-      await navigator.clipboard.writeText(tsv)
-    }
-  } catch {
-    /* 某些环境无剪贴板权限，静默忽略 */
-  }
+  controller?.onKeyDown(e)
 }
 
 // ---------------- 选区变化事件 + overlay 定位 API ----------------
-// selection/selActive 在上方已定义,这里安全引用
 watch(selection, (sel) => {
-  if (sel && selActive.value) fire('selection-change', { range: sel, active: selActive.value })
+  const active = controller?.getActiveCell()
+  if (sel && active) fire('selection-change', { range: sel, active })
 })
 
 /** 单元格当前屏幕矩形(render-area 相对坐标);供 overlay slot / 命令式定位 */
@@ -1102,13 +690,8 @@ function applyFind() {
   if (!r) return
   r.setFind(findHits.value, findIndex.value)
   const hit = findHits.value[findIndex.value]
-  if (hit) {
-    selMode.value = 'range'
-    selAnchor.value = { row: hit.row, col: hit.col }
-    selActive.value = { row: hit.row, col: hit.col }
-    scrollActiveIntoView()
-  }
-  doRender()
+  if (hit) controller?.selectCell(hit.row, hit.col) // 移动选区 + 滚动到视图 + 重绘
+  else doRender()
 }
 
 function findNext() {
@@ -1197,7 +780,7 @@ function applyFilters() {
   r.setFilteredCols(new Set(filterState.keys()))
   r.rebuildMetrics()
   controller?.refreshContentSize()
-  clearSelection()
+  controller?.clearSelection()
   doRender()
 }
 
@@ -1265,7 +848,7 @@ function toggleFreeze() {
   if (fz.frozenRows || fz.frozenCols) {
     s.freeze = { frozenRows: 0, frozenCols: 0 }
   } else {
-    const c = selActive.value
+    const c = controller?.getActiveCell()
     s.freeze = { frozenRows: c ? c.row : 1, frozenCols: c ? c.col : 0 }
   }
   r.rebuildMetrics()
@@ -1325,10 +908,7 @@ async function onDialogExport(cfg: ExportConfig) {
 
 // ---------------- 命令式 API ----------------
 function programmaticSetSelection(range: MergeRange) {
-  selMode.value = 'range'
-  selAnchor.value = { row: range.top, col: range.left }
-  selActive.value = { row: range.bottom, col: range.right }
-  doRender()
+  controller?.setSelectionRange(range)
 }
 
 const viewerApi: ViewerApi = {
@@ -1422,7 +1002,7 @@ function builtinTool(id: string): ResolvedToolbarItem | null {
         label: '复制',
         title: '复制选区 (Ctrl+C)',
         disabled: !selection.value,
-        onClick: () => void copySelection(),
+        onClick: () => void controller?.copySelection(),
       })
     case 'freeze': {
       const fz = sheet.value?.freeze
