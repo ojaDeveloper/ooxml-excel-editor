@@ -31,8 +31,8 @@ export default defineConfig(({ mode, command }) => {
         ? []
         : [
             dts({
-              include: ['src/**/*.ts', 'src/**/*.vue'],
-              exclude: ['src/**/__tests__/**', 'src/main.ts', 'src/App.vue', 'src/env.d.ts', 'src/react/**', 'src/react-demo/**'],
+              include: ['src/**/*.ts', 'src/**/*.tsx', 'src/**/*.vue'],
+              exclude: ['src/**/__tests__/**', 'src/main.ts', 'src/App.vue', 'src/env.d.ts', 'src/react-demo/**'],
               insertTypesEntry: true,
               tsconfigPath: './tsconfig.json',
             }),
@@ -46,11 +46,12 @@ export default defineConfig(({ mode, command }) => {
     },
     resolve: {
       alias: [
-        // 库构建用 stub 顶替 worker-client(去掉 worker → 不打包 exceljs)
+        // 库构建用 stub 顶替 worker-client(去掉 worker → 不打包 exceljs)。
+        // 同时匹配 Vue 壳的相对引入(./worker-client)与 React 壳的别名引入(@/composables/worker-client)。
         ...(isLibBuild
           ? [
               {
-                find: /^\.\/worker-client$/,
+                find: /^(\.\/|@\/composables\/)worker-client$/,
                 replacement: fileURLToPath(new URL('./src/composables/worker-client.stub.ts', import.meta.url)),
               },
             ]
@@ -67,20 +68,25 @@ export default defineConfig(({ mode, command }) => {
           chunkSizeWarningLimit: 1500,
         }
       : {
-          // 组件库: ESM 产物。vue / exceljs / echarts 设为 external(peerDependencies)，
-          // 不打进库;fflate / fast-xml-parser 体积小且解析核心，打进库。
+          // 组件库: ESM 多入口 —— core(框架无关引擎) / index(Vue 壳) / react(React 壳)。
+          // 同名 chunk 抽到 chunks/ 共享(core 引擎被 vue+react 复用,只打一份)。
+          // peer 依赖(vue/react/exceljs/echarts/jspdf)全 external,不打进库。
           copyPublicDir: false, // 不把 public/sample.xlsx 打进库
           lib: {
-            entry: fileURLToPath(new URL('./src/index.ts', import.meta.url)),
-            name: 'OoxmlExcelPreview',
+            entry: {
+              core: fileURLToPath(new URL('./src/core/index.ts', import.meta.url)),
+              index: fileURLToPath(new URL('./src/index.ts', import.meta.url)),
+              react: fileURLToPath(new URL('./src/react/index.ts', import.meta.url)),
+            },
             formats: ['es'],
-            fileName: 'ooxml-excel-preview',
           },
           rollupOptions: {
             // jspdf 同 echarts: 可选 peer,运行时动态 import,不打进库
-            external: ['vue', 'exceljs', 'echarts', 'jspdf'],
+            external: ['vue', 'react', 'react-dom', 'react/jsx-runtime', 'exceljs', 'echarts', 'jspdf'],
             output: {
-              // 把唯一的 css 产物固定命名为 style.css，方便宿主 import '.../style.css'
+              entryFileNames: '[name].js',
+              chunkFileNames: 'chunks/[name]-[hash].js',
+              // 把 css 产物固定命名为 style.css(Vue 壳)/ react.css(React 壳)按需,默认 style.css
               assetFileNames: (info) =>
                 info.name && info.name.endsWith('.css') ? 'style.css' : 'assets/[name][extname]',
             },

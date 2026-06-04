@@ -1,13 +1,14 @@
 {
   "name": "ooxml-excel-preview",
   "version": "0.1.0",
-  "description": "Vue3 high-fidelity OOXML (.xlsx) preview component — canvas renderer, read-only",
+  "description": "High-fidelity OOXML (.xlsx) preview — canvas renderer, read-only. Framework-agnostic core with Vue 3 and React shells.",
   "type": "module",
   "license": "MIT",
   "author": "",
   "keywords": [
     "vue",
     "vue3",
+    "react",
     "excel",
     "xlsx",
     "ooxml",
@@ -31,13 +32,21 @@
   "files": [
     "dist"
   ],
-  "main": "./dist/ooxml-excel-preview.js",
-  "module": "./dist/ooxml-excel-preview.js",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/ooxml-excel-preview.js"
+      "import": "./dist/index.js"
+    },
+    "./react": {
+      "types": "./dist/react.d.ts",
+      "import": "./dist/react.js"
+    },
+    "./core": {
+      "types": "./dist/core.d.ts",
+      "import": "./dist/core.js"
     },
     "./style.css": "./dist/style.css"
   },
@@ -59,6 +68,8 @@
     "echarts": "^5.5.0",
     "exceljs": "^4.4.0",
     "jspdf": "^2.5.0 || ^3.0.0 || ^4.0.0",
+    "react": "^17.0.0 || ^18.0.0 || ^19.0.0",
+    "react-dom": "^17.0.0 || ^18.0.0 || ^19.0.0",
     "vue": "^3.4.0"
   },
   "peerDependenciesMeta": {
@@ -66,6 +77,15 @@
       "optional": true
     },
     "jspdf": {
+      "optional": true
+    },
+    "vue": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
       "optional": true
     }
   },
