@@ -23,7 +23,7 @@ import { GridMetrics, colIndexToLetters } from '@/core/layout/grid-metrics'
 import { anchorRect } from '@/core/overlay/anchor'
 import { chartToOption } from '@/core/overlay/chart-mapper'
 import { loadECharts } from '@/core/overlay/echarts-loader'
-import { ViewerController, type TooltipState } from '@/core/viewer/controller'
+import { ViewerController, type TooltipState, type FindState } from '@/core/viewer/controller'
 import { revokeImages } from '@/core/finalize'
 import {
   canvasToBlob,
@@ -170,16 +170,11 @@ function rebuildRenderer() {
   const s = sheet.value
   const wb = workbook.value
   if (!s || !wb || !controller) return
-  // 先清状态,再重建(rebuild 末尾会以"已清空选区"绘制)
-  controller.clearSelection()
-  findHits.value = []
-  findIndex.value = -1
-  tooltip.value = null
+  // 控制器内部负责清选区/查找命中/tooltip,并在末尾按需重跑当前查找
   controller.rebuild(s, wb, zoom.value, {
     theme: effectiveTheme.value,
     cellStyle: hasCellStyleHook.value ? combinedCellStyle : undefined,
   })
-  if (findQuery.value) recomputeFind() // 新表上重新查找
 }
 
 function onScroll() {
@@ -213,8 +208,9 @@ onMounted(() => {
           fire('hyperlink-click', { url, cell })
           if (props.openLinks) window.open(url, '_blank', 'noopener')
         },
-        onFilterButton: (col) => openFilterPopup(col),
         onTooltip: (tip) => (tooltip.value = tip),
+        onFindChange: () => findVersion.value++,
+        onFilterChange: () => filterVersion.value++,
       },
     )
     view.value = controller.view // 壳与控制器共享同一 view 对象(现有 view.value 读法不变)
@@ -252,10 +248,7 @@ watch(() => props.plugins, () => initPlugins(), { deep: false })
 
 watch(workbook, async (wb) => {
   if (!wb) return
-  // 新工作簿: 旧筛选态作废(模型已换)
-  filterOrigHidden.clear()
-  filterState.clear()
-  filterPopup.value = null
+  controller?.clearFilterState() // 新工作簿: 旧筛选态作废(模型已换)
   activeSheet.value = wb.activeSheet
   await nextTick()
   rebuildRenderer()
@@ -277,7 +270,8 @@ watch(progress, (p) => {
 })
 
 watch(activeSheet, async (_idx, oldIdx) => {
-  resetFilterFor(oldIdx) // 离开旧表: 恢复其筛选隐藏的行
+  // 离开旧表: 恢复其被筛选隐藏的行(oldIdx 此刻仍指向旧表模型)
+  if (oldIdx != null) controller?.resetFilter(workbook.value?.sheets[oldIdx])
   await nextTick()
   rebuildRenderer()
 })
@@ -660,64 +654,21 @@ function reportExportError(e: unknown) {
   if (typeof window !== 'undefined' && window.alert) window.alert(msg)
 }
 
-// ---- 查找 ----
-const findOpen = ref(false)
-const findQuery = ref('')
-const findMatchCase = ref(false)
-const findWholeCell = ref(false)
-const findHits = shallowRef<{ row: number; col: number }[]>([])
-const findIndex = ref(-1)
-
-/** 重新计算命中并应用(query/选项变化时) */
-function recomputeFind() {
-  const r = renderer.value
-  if (!r || !findQuery.value) {
-    findHits.value = []
-    findIndex.value = -1
-    r?.setFind([], -1)
-    doRender()
-    return
-  }
-  const hits = r.searchCells(findQuery.value, { matchCase: findMatchCase.value, wholeCell: findWholeCell.value })
-  findHits.value = hits
-  findIndex.value = hits.length ? 0 : -1
-  applyFind()
-}
-
-/** 把当前命中应用到渲染器 + 移动选区/滚动到视图 */
-function applyFind() {
-  const r = renderer.value
-  if (!r) return
-  r.setFind(findHits.value, findIndex.value)
-  const hit = findHits.value[findIndex.value]
-  if (hit) controller?.selectCell(hit.row, hit.col) // 移动选区 + 滚动到视图 + 重绘
-  else doRender()
-}
-
-function findNext() {
-  if (!findHits.value.length) return
-  findIndex.value = (findIndex.value + 1) % findHits.value.length
-  applyFind()
-}
-function findPrev() {
-  if (!findHits.value.length) return
-  findIndex.value = (findIndex.value - 1 + findHits.value.length) % findHits.value.length
-  applyFind()
-}
+// ---- 查找(状态/逻辑在 ViewerController) ----
+const findOpen = ref(false) // 纯 UI: FindBar 是否展开
+const findVersion = ref(0) // 控制器 onFindChange 回调 +1
+const findState = computed<FindState>(() => {
+  void findVersion.value
+  return controller?.getFindState() ?? { query: '', matchCase: false, wholeCell: false, count: 0, index: -1 }
+})
 function openFind() {
   findOpen.value = true
 }
 function closeFind() {
   findOpen.value = false
-  findQuery.value = ''
-  findHits.value = []
-  findIndex.value = -1
-  renderer.value?.setFind([], -1)
-  doRender()
+  controller?.clearFind()
   scrollerEl.value?.focus()
 }
-watch([findQuery, findMatchCase, findWholeCell], recomputeFind)
-
 /** 根容器捕获 Ctrl/Cmd+F → 打开查找(替代浏览器原生查找) */
 function onRootKeydown(e: KeyboardEvent) {
   if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) {
@@ -726,117 +677,14 @@ function onRootKeydown(e: KeyboardEvent) {
   }
 }
 
-// ---- 自动筛选 ----
-// 列 → 允许值集合(缺省=该列未筛选);仅作用于当前表
-const filterState = new Map<number, Set<string>>()
-// 行 → 原始 hidden(首次筛选前快照,清除时恢复)
-const filterOrigHidden = new Map<number, boolean>()
-const filterPopup = ref<{ col: number; values: string[]; selected: string[]; x: number; y: number } | null>(null)
-
-const BLANK = '(空白)'
-
-/** 筛选数据区底行: 正常用 af.bottom;若 af 只含表头(bottom===top)则延伸到数据末行 */
-function filterDataBottom(): number {
-  const s = sheet.value!
-  const af = s.autoFilterRange!
-  return af.bottom > af.top ? af.bottom : s.dimension.rows - 1
-}
-
-/** 某列(自动筛选数据区)的去重值,数值/中文自然排序 */
-function distinctColumnValues(col: number): string[] {
-  const r = renderer.value
-  const s = sheet.value
-  if (!r || !s?.autoFilterRange) return []
-  const af = s.autoFilterRange
-  const set = new Set<string>()
-  for (let row = af.top + 1; row <= filterDataBottom(); row++) set.add(r.cellText(row, col) || BLANK)
-  return [...set].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
-}
-
-/** 重算筛选导致的隐藏行并应用到模型(行隐藏机制 → 几何归零) */
-function applyFilters() {
-  const r = renderer.value
-  const s = sheet.value
-  if (!r || !s?.autoFilterRange) return
-  const af = s.autoFilterRange
-  const bottom = filterDataBottom()
-  if (!filterOrigHidden.size) {
-    for (let row = af.top + 1; row <= bottom; row++) filterOrigHidden.set(row, s.rows.get(row)?.hidden ?? false)
-  }
-  for (let row = af.top + 1; row <= bottom; row++) {
-    const orig = filterOrigHidden.get(row) ?? false
-    let excluded = false
-    for (const [col, allowed] of filterState) {
-      if (!allowed.has(r.cellText(row, col) || BLANK)) {
-        excluded = true
-        break
-      }
-    }
-    const hidden = orig || excluded
-    const info = s.rows.get(row)
-    if (info) info.hidden = hidden
-    else if (hidden) s.rows.set(row, { height: s.defaultRowHeight, hidden: true })
-  }
-  r.setFilteredCols(new Set(filterState.keys()))
-  r.rebuildMetrics()
-  controller?.refreshContentSize()
-  controller?.clearSelection()
-  doRender()
-}
-
-function openFilterPopup(col: number) {
-  const r = renderer.value
-  const s = sheet.value
-  if (!r || !s?.autoFilterRange) return
-  const rect = r.cellScreenRect(view.value, s.autoFilterRange.top, col)
-  let x = rect.x
-  let y = rect.y + rect.h
-  if (x + 228 > view.value.width) x = Math.max(0, view.value.width - 232)
-  if (y + 320 > view.value.height) y = Math.max(0, rect.y - 320)
-  filterPopup.value = {
-    col,
-    values: distinctColumnValues(col),
-    selected: filterState.has(col) ? [...filterState.get(col)!] : [],
-    x,
-    y,
-  }
-}
-function onFilterApply(checked: string[]) {
-  const pop = filterPopup.value
-  if (!pop) return
-  const all = distinctColumnValues(pop.col)
-  if (checked.length >= all.length) filterState.delete(pop.col) // 全选 = 取消该列筛选
-  else filterState.set(pop.col, new Set(checked)) // 子集(含空集 = 全隐藏)
-  filterPopup.value = null
-  applyFilters()
-}
-function onFilterClear() {
-  const pop = filterPopup.value
-  if (!pop) return
-  filterState.delete(pop.col)
-  filterPopup.value = null
-  applyFilters()
-}
-/** 离开某表时恢复其被筛选隐藏的行,清空筛选态 */
-function resetFilterFor(idx: number | undefined) {
-  if (idx == null) return
-  const s = workbook.value?.sheets[idx]
-  if (s && filterOrigHidden.size) {
-    for (const [row, orig] of filterOrigHidden) {
-      const info = s.rows.get(row)
-      if (info) info.hidden = orig
-    }
-  }
-  filterOrigHidden.clear()
-  filterState.clear()
-  filterPopup.value = null
-}
-
-/** 清除当前表全部筛选 */
-function clearAllFilters() {
-  if (!filterState.size) return
-  filterState.clear()
-  applyFilters()
+// ---- 自动筛选(状态/逻辑在 ViewerController) ----
+const filterVersion = ref(0) // 控制器 onFilterChange 回调 +1
+const filterPopup = computed(() => {
+  void filterVersion.value
+  return controller?.getFilterPopup() ?? null
+})
+function toggleAutoFilter() {
+  controller?.toggleAutoFilter()
 }
 
 /** 在活动单元格处冻结 / 取消冻结 */
@@ -851,27 +699,6 @@ function toggleFreeze() {
     const c = controller?.getActiveCell()
     s.freeze = { frozenRows: c ? c.row : 1, frozenCols: c ? c.col : 0 }
   }
-  r.rebuildMetrics()
-  controller?.refreshContentSize()
-  doRender()
-}
-
-/** 工具栏「筛选」: 切换自动筛选。无则按选区(或整张已用区)新建,使下拉按钮出现。 */
-function toggleAutoFilter() {
-  const s = sheet.value
-  const r = renderer.value
-  if (!s || !r) return
-  if (s.autoFilterRange) {
-    resetFilterFor(activeSheet.value) // 恢复筛选隐藏的行 + 清状态
-    s.autoFilterRange = undefined
-  } else {
-    const sel = selection.value
-    const multi = sel && !(sel.top === sel.bottom && sel.left === sel.right)
-    s.autoFilterRange = multi
-      ? { ...sel! }
-      : { top: 0, left: 0, bottom: Math.max(0, s.dimension.rows - 1), right: Math.max(0, s.dimension.cols - 1) }
-  }
-  r.setFilteredCols(new Set())
   r.rebuildMetrics()
   controller?.refreshContentSize()
   doRender()
@@ -992,8 +819,8 @@ function builtinTool(id: string): ResolvedToolbarItem | null {
         iconSvg: I('clear-filter'),
         label: '清除筛选',
         title: '清除当前表全部筛选',
-        disabled: filterState.size === 0,
-        onClick: clearAllFilters,
+        disabled: !controller?.hasFilters(),
+        onClick: () => controller?.clearAllFilters(),
       })
     case 'copy':
       return bi({
@@ -1063,7 +890,11 @@ function resolveItem(it: ToolbarItem, kind: 'custom' | 'plugin'): ResolvedToolba
 }
 
 const resolvedToolbar = computed<ResolvedToolbarItem[]>(() => {
-  void renderTick.value // 选区/状态变化时重算 active/disabled/label
+  // 选区/查找/筛选/渲染状态变化时重算 active/disabled/label
+  void renderTick.value
+  void selVersion.value
+  void findVersion.value
+  void filterVersion.value
   if (props.toolbar === false) return []
   const entries: Array<string | ToolbarItem> = Array.isArray(props.toolbar) ? props.toolbar : ['find', 'filter']
   const out: ResolvedToolbarItem[] = []
@@ -1190,16 +1021,16 @@ const PluginOverlays = defineComponent({
 
       <FindBar
         v-if="findOpen && workbook"
-        :query="findQuery"
-        :match-count="findHits.length"
-        :current="findIndex"
-        :match-case="findMatchCase"
-        :whole-cell="findWholeCell"
-        @update:query="findQuery = $event"
-        @update:match-case="findMatchCase = $event"
-        @update:whole-cell="findWholeCell = $event"
-        @next="findNext"
-        @prev="findPrev"
+        :query="findState.query"
+        :match-count="findState.count"
+        :current="findState.index"
+        :match-case="findState.matchCase"
+        :whole-cell="findState.wholeCell"
+        @update:query="controller?.setFindQuery($event)"
+        @update:match-case="controller?.setFindMatchCase($event)"
+        @update:whole-cell="controller?.setFindWholeCell($event)"
+        @next="controller?.findNext()"
+        @prev="controller?.findPrev()"
         @close="closeFind"
       />
 
@@ -1209,9 +1040,9 @@ const PluginOverlays = defineComponent({
         :selected="filterPopup.selected"
         :x="filterPopup.x"
         :y="filterPopup.y"
-        @apply="onFilterApply"
-        @clear="onFilterClear"
-        @close="filterPopup = null"
+        @apply="controller?.applyFilterSelection($event)"
+        @clear="controller?.clearFilterColumn()"
+        @close="controller?.closeFilterPopup()"
       />
 
       <!-- 分层 UI: 消费方在格子上叠自己的组件,用 rectOf 定位、tick 触发跟随 -->

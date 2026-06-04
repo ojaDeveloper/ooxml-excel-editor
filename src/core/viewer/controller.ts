@@ -22,6 +22,24 @@ export interface TooltipState {
   kind: 'overflow' | 'comment'
 }
 
+/** 查找状态快照(供壳渲染 FindBar) */
+export interface FindState {
+  query: string
+  matchCase: boolean
+  wholeCell: boolean
+  count: number
+  index: number
+}
+
+/** 自动筛选下拉浮层(列去重值 + 已选 + 屏幕位置) */
+export interface FilterPopupState {
+  col: number
+  values: string[]
+  selected: string[]
+  x: number
+  y: number
+}
+
 export interface ViewerControllerEls {
   canvas: HTMLCanvasElement
   /** 量可视区尺寸用 */
@@ -47,11 +65,15 @@ export interface ViewerControllerHooks {
   onCellDblClick: (row: number, col: number, text: string) => void
   /** 单击超链接(壳 emit 'hyperlink-click' + 按 openLinks 决定是否 window.open) */
   onHyperlink: (url: string, cell: Cell) => void
-  /** 点中自动筛选下拉按钮(壳打开 FilterPopup —— filter 仍在壳里) */
-  onFilterButton: (col: number) => void
   /** 悬停提示变化(壳渲染 tooltip DOM) */
   onTooltip: (tip: TooltipState | null) => void
+  /** 查找状态变化(壳据此 +1 让 FindBar / 工具栏重算) */
+  onFindChange: () => void
+  /** 筛选状态/浮层变化(壳据此 +1 让 FilterPopup / 工具栏重算) */
+  onFilterChange: () => void
 }
+
+const BLANK = '(空白)'
 
 export class ViewerController {
   /** 当前渲染器(壳通过 onRenderer 镜像) */
@@ -77,6 +99,18 @@ export class ViewerController {
   private resizeStartSize = 0 // 起始宽/高(px)
   private dragMoved = false
 
+  // ---- 查找态 ----
+  private findQuery = ''
+  private findMatchCase = false
+  private findWholeCell = false
+  private findHits: Cell[] = []
+  private findIndex = -1
+
+  // ---- 自动筛选态(仅作用于当前表) ----
+  private filterState = new Map<number, Set<string>>() // 列 → 允许值集合(缺省=未筛选)
+  private filterOrigHidden = new Map<number, boolean>() // 行 → 原始 hidden(首次筛选前快照)
+  private filterPopup: FilterPopupState | null = null
+
   constructor(
     private els: ViewerControllerEls,
     private hooks: ViewerControllerHooks,
@@ -84,8 +118,17 @@ export class ViewerController {
     this.overlays = new OverlayManager(els.overlays)
   }
 
-  /** 切表/换簿/主题变化: 重建渲染器,重置滚动,量尺寸,建叠加层,绘制 */
+  /** 切表/换簿/主题变化: 清状态,重建渲染器,重置滚动,量尺寸,建叠加层,绘制,按需重跑查找 */
   rebuild(sheet: SheetModel, workbook: WorkbookModel, zoom: number, opts: RendererOptions): void {
+    // 先清状态(选区作废;查找命中作废但保留 query 以便新表重跑;tooltip 隐藏)
+    this.selAnchor = null
+    this.selActive = null
+    this.selMode = 'range'
+    this.hooks.onSelectionChange()
+    this.findHits = []
+    this.findIndex = -1
+    this.hooks.onTooltip(null)
+
     this.sheet = sheet
     this.renderer = new CanvasRenderer(this.els.canvas, sheet, workbook, zoom, opts)
     this.hooks.onRenderer(this.renderer)
@@ -98,6 +141,7 @@ export class ViewerController {
     this.measure()
     this.overlays.build(sheet, this.renderer, this.view)
     this.render()
+    if (this.findQuery) this.recomputeFind() // 新表上重跑当前查找
   }
 
   /** 立即绘制(取消挂起的 rAF)。绘制 + 定位叠加层 + 通知 tick。 */
@@ -356,7 +400,7 @@ export class ViewerController {
     if (r && p) {
       const fcol = r.filterButtonAt(this.view, p.x, p.y)
       if (fcol != null) {
-        this.hooks.onFilterButton(fcol)
+        this.openFilterPopup(fcol)
         return
       }
     }
@@ -645,6 +689,242 @@ export class ViewerController {
     } catch {
       /* 某些环境无剪贴板权限，静默忽略 */
     }
+  }
+
+  // ====================== 查找 ======================
+
+  /** 查找状态快照(壳渲染 FindBar) */
+  getFindState(): FindState {
+    return {
+      query: this.findQuery,
+      matchCase: this.findMatchCase,
+      wholeCell: this.findWholeCell,
+      count: this.findHits.length,
+      index: this.findIndex,
+    }
+  }
+
+  setFindQuery(q: string): void {
+    this.findQuery = q
+    this.recomputeFind()
+  }
+  setFindMatchCase(b: boolean): void {
+    this.findMatchCase = b
+    this.recomputeFind()
+  }
+  setFindWholeCell(b: boolean): void {
+    this.findWholeCell = b
+    this.recomputeFind()
+  }
+
+  /** 重算命中并应用(query/选项变化时) */
+  private recomputeFind(): void {
+    const r = this.renderer
+    if (!r || !this.findQuery) {
+      this.findHits = []
+      this.findIndex = -1
+      r?.setFind([], -1)
+      this.hooks.onFindChange()
+      this.render()
+      return
+    }
+    this.findHits = r.searchCells(this.findQuery, { matchCase: this.findMatchCase, wholeCell: this.findWholeCell })
+    this.findIndex = this.findHits.length ? 0 : -1
+    this.applyFind()
+  }
+
+  /** 把当前命中应用到渲染器 + 移动选区/滚动到视图 */
+  private applyFind(): void {
+    const r = this.renderer
+    if (!r) return
+    r.setFind(this.findHits, this.findIndex)
+    this.hooks.onFindChange()
+    const hit = this.findHits[this.findIndex]
+    if (hit) this.selectCell(hit.row, hit.col) // 移动选区 + 滚动到视图 + 重绘
+    else this.render()
+  }
+
+  findNext(): void {
+    if (!this.findHits.length) return
+    this.findIndex = (this.findIndex + 1) % this.findHits.length
+    this.applyFind()
+  }
+  findPrev(): void {
+    if (!this.findHits.length) return
+    this.findIndex = (this.findIndex - 1 + this.findHits.length) % this.findHits.length
+    this.applyFind()
+  }
+
+  /** 关闭查找: 清 query + 命中(保留 matchCase/wholeCell 选项),清除高亮 */
+  clearFind(): void {
+    this.findQuery = ''
+    this.findHits = []
+    this.findIndex = -1
+    this.renderer?.setFind([], -1)
+    this.hooks.onFindChange()
+    this.render()
+  }
+
+  // ====================== 自动筛选 ======================
+
+  /** 当前是否有列处于筛选中(工具栏「清除筛选」启用判断) */
+  hasFilters(): boolean {
+    return this.filterState.size > 0
+  }
+
+  /** 当前筛选浮层(壳渲染 FilterPopup) */
+  getFilterPopup(): FilterPopupState | null {
+    return this.filterPopup
+  }
+
+  /** 筛选数据区底行: 正常用 af.bottom;若 af 只含表头(bottom===top)则延伸到数据末行 */
+  private filterDataBottom(): number {
+    const s = this.sheet!
+    const af = s.autoFilterRange!
+    return af.bottom > af.top ? af.bottom : s.dimension.rows - 1
+  }
+
+  /** 某列(自动筛选数据区)的去重值,数值/中文自然排序 */
+  private distinctColumnValues(col: number): string[] {
+    const r = this.renderer
+    const s = this.sheet
+    if (!r || !s?.autoFilterRange) return []
+    const af = s.autoFilterRange
+    const set = new Set<string>()
+    for (let row = af.top + 1; row <= this.filterDataBottom(); row++) set.add(r.cellText(row, col) || BLANK)
+    return [...set].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+  }
+
+  /** 重算筛选导致的隐藏行并应用到模型(行隐藏机制 → 几何归零) */
+  private applyFilters(): void {
+    const r = this.renderer
+    const s = this.sheet
+    if (!r || !s?.autoFilterRange) return
+    const af = s.autoFilterRange
+    const bottom = this.filterDataBottom()
+    if (!this.filterOrigHidden.size) {
+      for (let row = af.top + 1; row <= bottom; row++) this.filterOrigHidden.set(row, s.rows.get(row)?.hidden ?? false)
+    }
+    for (let row = af.top + 1; row <= bottom; row++) {
+      const orig = this.filterOrigHidden.get(row) ?? false
+      let excluded = false
+      for (const [col, allowed] of this.filterState) {
+        if (!allowed.has(r.cellText(row, col) || BLANK)) {
+          excluded = true
+          break
+        }
+      }
+      const hidden = orig || excluded
+      const info = s.rows.get(row)
+      if (info) info.hidden = hidden
+      else if (hidden) s.rows.set(row, { height: s.defaultRowHeight, hidden: true })
+    }
+    r.setFilteredCols(new Set(this.filterState.keys()))
+    r.rebuildMetrics()
+    this.refreshContentSize()
+    this.clearSelection()
+    this.hooks.onFilterChange()
+    this.render()
+  }
+
+  /** 点中下拉按钮 / 命令式: 打开某列筛选浮层(算去重值 + 已选 + 屏幕位置) */
+  openFilterPopup(col: number): void {
+    const r = this.renderer
+    const s = this.sheet
+    if (!r || !s?.autoFilterRange) return
+    const rect = r.cellScreenRect(this.view, s.autoFilterRange.top, col)
+    let x = rect.x
+    let y = rect.y + rect.h
+    if (x + 228 > this.view.width) x = Math.max(0, this.view.width - 232)
+    if (y + 320 > this.view.height) y = Math.max(0, rect.y - 320)
+    this.filterPopup = {
+      col,
+      values: this.distinctColumnValues(col),
+      selected: this.filterState.has(col) ? [...this.filterState.get(col)!] : [],
+      x,
+      y,
+    }
+    this.hooks.onFilterChange()
+  }
+
+  closeFilterPopup(): void {
+    if (!this.filterPopup) return
+    this.filterPopup = null
+    this.hooks.onFilterChange()
+  }
+
+  /** 浮层「确定」: 勾选值落筛选态(全选=取消该列;子集=保留;空集=全隐藏)。 */
+  applyFilterSelection(checked: string[]): void {
+    const pop = this.filterPopup
+    if (!pop) return
+    const all = this.distinctColumnValues(pop.col)
+    if (checked.length >= all.length) this.filterState.delete(pop.col)
+    else this.filterState.set(pop.col, new Set(checked))
+    this.filterPopup = null
+    this.applyFilters()
+  }
+
+  /** 浮层「清除」: 取消该列筛选 */
+  clearFilterColumn(): void {
+    const pop = this.filterPopup
+    if (!pop) return
+    this.filterState.delete(pop.col)
+    this.filterPopup = null
+    this.applyFilters()
+  }
+
+  /** 清除当前表全部筛选 */
+  clearAllFilters(): void {
+    if (!this.filterState.size) return
+    this.filterState.clear()
+    this.applyFilters()
+  }
+
+  /**
+   * 离开某表 / 取消自动筛选: 恢复被筛选隐藏的行,清空筛选态。
+   * 传入要恢复的 sheet(切表时是"旧表",取消筛选时是当前表)。
+   */
+  resetFilter(sheet: SheetModel | null | undefined): void {
+    if (sheet && this.filterOrigHidden.size) {
+      for (const [row, orig] of this.filterOrigHidden) {
+        const info = sheet.rows.get(row)
+        if (info) info.hidden = orig
+      }
+    }
+    this.filterOrigHidden.clear()
+    this.filterState.clear()
+    this.filterPopup = null
+    this.hooks.onFilterChange()
+  }
+
+  /** 换工作簿: 仅清筛选态(旧 sheet 已废,不需恢复行) */
+  clearFilterState(): void {
+    this.filterOrigHidden.clear()
+    this.filterState.clear()
+    this.filterPopup = null
+    this.hooks.onFilterChange()
+  }
+
+  /** 工具栏「筛选」: 切换自动筛选。无则按选区(或整张已用区)新建,使下拉按钮出现。 */
+  toggleAutoFilter(): void {
+    const s = this.sheet
+    const r = this.renderer
+    if (!s || !r) return
+    if (s.autoFilterRange) {
+      this.resetFilter(s) // 恢复筛选隐藏的行 + 清状态
+      s.autoFilterRange = undefined
+    } else {
+      const sel = this.getSelection()
+      const multi = sel && !(sel.top === sel.bottom && sel.left === sel.right)
+      s.autoFilterRange = multi
+        ? { ...sel! }
+        : { top: 0, left: 0, bottom: Math.max(0, s.dimension.rows - 1), right: Math.max(0, s.dimension.cols - 1) }
+    }
+    r.setFilteredCols(new Set())
+    r.rebuildMetrics()
+    this.refreshContentSize()
+    this.hooks.onFilterChange()
+    this.render()
   }
 }
 
