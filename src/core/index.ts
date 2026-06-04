@@ -55,6 +55,20 @@ export type {
 } from './viewer/controller'
 export { OverlayManager } from './viewer/overlay-manager'
 export type { OverlayQuads } from './viewer/overlay-manager'
+export { PluginOverlayHost } from './viewer/plugin-overlay'
+
+// ---- 插件 / 扩展点(框架无关) ----
+export { definePlugin } from './plugin'
+export type {
+  ExcelPlugin,
+  ExcelPluginContext,
+  OverlayContext,
+  OverlayNode,
+  PluginEvent,
+  Rect,
+  ToolbarItem,
+  ViewerApi,
+} from './plugin'
 
 // ---- 布局 / 格式 ----
 export { GridMetrics, colIndexToLetters } from './layout/grid-metrics'

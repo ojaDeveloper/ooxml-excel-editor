@@ -5,12 +5,14 @@
  *     name: 'highlight-negatives',
  *     cellStyle: (c) => typeof c.raw === 'number' && c.raw < 0 ? { font: { color: '#d00' } } : undefined,
  *     events: { 'cell-click': (p) => console.log(p) },
- *     overlay: ({ rectOf }) => rectOf(0,0) ? h('div', ...) : null,
+ *     overlay: ({ rectOf }) => { const r = rectOf(0,0); if (!r) return null
+ *       const el = document.createElement('div'); el.textContent = '⚑'
+ *       Object.assign(el.style, { position:'absolute', left:r.x+'px', top:r.y+'px' }); return el },
  *     setup: ({ viewer, on }) => { on('selection-change', ...); return () => {} },
  *   })
- *   <ExcelViewer :plugins="[myPlugin]" />
+ *   <ExcelViewer :plugins="[myPlugin]" />   // Vue
+ *   <ExcelViewer plugins={[myPlugin]} />    // React —— 同一插件,两框架通用
  */
-import type { VNodeChild } from 'vue'
 import type { CellStyleFn, MergeRange, TransformModelFn, WorkbookModel } from './model/types'
 import type { CellValue, ReadOptions, SheetToJSONOptions } from './model/data-access'
 import type { ViewerTheme } from './render/theme'
@@ -73,6 +75,9 @@ export interface OverlayContext {
   workbook: WorkbookModel | null
 }
 
+/** overlay 钩子返回值:框架无关的 DOM 节点(单个 / 多个 / 无)。Vue 与 React 壳都直接挂载。 */
+export type OverlayNode = HTMLElement | HTMLElement[] | null
+
 export interface ExcelPluginContext {
   viewer: ViewerApi
   /** 订阅交互事件 */
@@ -117,8 +122,8 @@ export interface ExcelPlugin {
   cellStyle?: CellStyleFn
   /** 交互事件处理(简单写法;复杂用 setup 的 on) */
   events?: Partial<Record<PluginEvent, (payload: any) => void>>
-  /** 在网格上叠加 UI(返回 VNode);随 tick 重渲 */
-  overlay?: (ctx: OverlayContext) => VNodeChild
+  /** 在网格上叠加 UI(返回 DOM 节点,框架无关);随 tick 重渲。用 ctx.rectOf 定位单元格。 */
+  overlay?: (ctx: OverlayContext) => OverlayNode
   /** 高级: 拿命令式 API、订阅事件;返回可选清理函数 */
   setup?: (ctx: ExcelPluginContext) => void | (() => void)
 }

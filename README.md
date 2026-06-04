@@ -312,7 +312,11 @@ const highlightNegatives = definePlugin({
   events: { 'cell-click': (p) => console.log('clicked', p) },
   overlay: ({ rectOf }) => {
     const r = rectOf(0, 0)
-    return r ? h('div', { style: { position: 'absolute', left: r.x + 'px', top: r.y + 'px' } }, '⚑') : null
+    if (!r) return null
+    const el = document.createElement('div') // 返回 DOM(框架无关,Vue/React 通用)
+    el.textContent = '⚑'
+    Object.assign(el.style, { position: 'absolute', left: r.x + 'px', top: r.y + 'px' })
+    return el
   },
   setup: ({ viewer, on }) => {
     on('selection-change', (s) => console.log(s))
@@ -324,7 +328,9 @@ const highlightNegatives = definePlugin({
 ```vue
 <ExcelViewer :src="file" :plugins="[highlightNegatives]" />
 ```
-插件字段:`theme` / `transformModel` / `cellStyle` / `events`(事件→处理器) / `overlay`(返回 VNode,随滚动跟随) / `toolbar`(贡献操作栏按钮 `ToolbarItem[]`) / `setup(ctx)`(拿 `viewer` 命令式 API、`on()` 订阅事件,返回可选清理函数)。
+插件字段:`theme` / `transformModel` / `cellStyle` / `events`(事件→处理器) / `overlay`(返回 **DOM 节点**,随滚动跟随) / `toolbar`(贡献操作栏按钮 `ToolbarItem[]`) / `setup(ctx)`(拿 `viewer` 命令式 API、`on()` 订阅事件,返回可选清理函数)。
+
+> **跨框架**:插件全字段框架无关,**同一份 `definePlugin` 在 Vue 和 React 壳通用**(`overlay` 返回 DOM 而非 VNode)。React 用法:`<ExcelViewer plugins={[myPlugin]} />`。
 
 ## 浏览器支持
 

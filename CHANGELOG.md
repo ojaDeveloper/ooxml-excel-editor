@@ -5,6 +5,10 @@
 
 ## [Unreleased]
 
+### 交互 / 插件
+- **列排序**:自动筛选下拉加「升序/降序」,按列重排数据区(整行移动),合并区相交则拒绝。
+- **插件跨框架**:`overlay` 钩子从返回 Vue VNode 改为返回 **DOM 节点**,`core/plugin` 不再 import vue(core 彻底框架无关)。**同一份 `definePlugin` 在 Vue 与 React 壳通用**;React 壳新增 `plugins` prop,支持 theme/transformModel/cellStyle/events/overlay/toolbar/setup 全套。
+
 ### 边框还原(对齐 Excel/WPS)
 - **合并单元格内部不再画网格线**(之前无填充的合并格会透出内部浅灰网格线)。
 - **斜线边框(对角线 ↘/↗)**:parser 解析 `diagonal{up,down,style,color}`,canvas 与矢量 PDF 都绘制。

@@ -2,6 +2,13 @@ import { test, expect } from '@playwright/test'
 import { loadSample } from './helpers'
 
 test.describe('操作工具栏(可配置/可插件/响应式)', () => {
+  test('插件 overlay 返回 DOM(框架无关)→ 徽标挂到网格', async ({ page }) => {
+    await loadSample(page)
+    const badge = page.locator('.plugin-badge')
+    await expect(badge).toBeVisible()
+    await expect(badge).toHaveText('🔌')
+  })
+
   test('查找开关 + 筛选 toggle 自动筛选', async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 800 })
     await loadSample(page)

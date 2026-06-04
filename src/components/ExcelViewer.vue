@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import type { ExcelPlugin, ExcelPluginContext, OverlayContext, PluginEvent, ToolbarItem, ViewerApi } from '@/core/plugin'
+import { PluginOverlayHost } from '@/core/viewer/plugin-overlay'
 import type { ExcelSource } from '@/core/loader'
 import type {
   CellModel,
@@ -195,6 +196,7 @@ onMounted(() => {
     view.value = controller.view // 壳与控制器共享同一 view 对象(现有 view.value 读法不变)
     controller.fileName = props.fileName // 导出默认文件名
   }
+  if (pluginOvEl.value) pluginOverlayHost = new PluginOverlayHost(pluginOvEl.value)
   if (props.src) load(props.src, effectiveTransform)
   resizeObserver = new ResizeObserver(() => {
     measure()
@@ -206,6 +208,7 @@ onMounted(() => {
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
   controller?.dispose()
+  pluginOverlayHost?.dispose()
   pluginCleanups.forEach((fn) => fn())
   if (workbook.value) revokeImages(workbook.value)
 })
@@ -655,21 +658,14 @@ function initPlugins() {
   }
 }
 
-/** 渲染插件 overlay(读 renderTick 以随滚动/缩放重渲) */
-const PluginOverlays = defineComponent({
-  name: 'PluginOverlays',
-  setup() {
-    return () => {
-      const ctx: OverlayContext = {
-        rectOf,
-        rectOfRange,
-        tick: renderTick.value,
-        workbook: workbook.value,
-      }
-      return normalizedPlugins.value.filter((p) => p.overlay).map((p) => p.overlay!(ctx))
-    }
-  },
-})
+// 插件 overlay 用框架无关的 PluginOverlayHost 挂 DOM(随 renderTick 重渲),与 React 壳共用
+const pluginOvEl = ref<HTMLElement | null>(null)
+let pluginOverlayHost: PluginOverlayHost | null = null
+function renderPluginOverlays() {
+  const ctx: OverlayContext = { rectOf, rectOfRange, tick: renderTick.value, workbook: workbook.value }
+  pluginOverlayHost?.render(normalizedPlugins.value, ctx)
+}
+watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
 </script>
 
 <template>
@@ -761,7 +757,8 @@ const PluginOverlays = defineComponent({
       <!-- 分层 UI: 消费方在格子上叠自己的组件,用 rectOf 定位、tick 触发跟随 -->
       <div class="ov-slot">
         <slot name="overlay" :rect-of="rectOf" :rect-of-range="rectOfRange" :tick="renderTick" />
-        <PluginOverlays />
+        <!-- 插件 overlay:框架无关 DOM,由 PluginOverlayHost 挂载 -->
+        <div ref="pluginOvEl" />
       </div>
 
       <div

@@ -1,7 +1,30 @@
 import { useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ExcelViewer, type ExcelViewerHandle } from '@/react'
+import { definePlugin } from '@/core/plugin'
 import type { ExcelSource } from '@/core/loader'
+
+// 跨框架插件:同一份 definePlugin 在 Vue / React 都能用。overlay 返回 DOM(框架无关)。
+const demoPlugin = definePlugin({
+  name: 'react-demo-plugin',
+  cellStyle: (c) => (typeof c.raw === 'number' && c.raw < 0 ? { font: { color: '#d00' } } : undefined),
+  toolbar: [{ id: 'plugin-hello', label: '🔌 插件按钮', onClick: (v) => v.setSelection({ top: 1, left: 0, bottom: 1, right: 0 }) }],
+  overlay: ({ rectOf }) => {
+    const r = rectOf(2, 1) // B3
+    if (!r) return null
+    const el = document.createElement('div')
+    el.className = 'plugin-badge'
+    el.textContent = '🎯'
+    Object.assign(el.style, {
+      position: 'absolute',
+      left: r.x + r.w - 14 + 'px',
+      top: r.y - 2 + 'px',
+      fontSize: '12px',
+      pointerEvents: 'none',
+    })
+    return el
+  },
+})
 
 function Demo() {
   const [src, setSrc] = useState<ExcelSource | undefined>(undefined)
@@ -43,6 +66,7 @@ function Demo() {
           ref={ref}
           src={src}
           fileName={fileName}
+          plugins={[demoPlugin]}
           onRendered={() => {
             // ref.current 此时已就绪,再挂一次保证 e2e 拿到
             if (import.meta.env.DEV) (window as unknown as { __excelViewerReact?: ExcelViewerHandle | null }).__excelViewerReact = ref.current

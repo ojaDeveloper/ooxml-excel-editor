@@ -95,6 +95,16 @@ const negativesPlugin = definePlugin({
         (lastEvent.value = `[插件工具栏] 当前 ${viewer.getWorkbook()?.sheets.length ?? 0} 个工作表`),
     },
   ],
+  // overlay 返回 DOM(框架无关,跟 React 壳同一份写法):A1(row0,col0)叠个徽标
+  overlay: ({ rectOf }) => {
+    const r = rectOf(0, 0)
+    if (!r) return null
+    const el = document.createElement('div')
+    el.className = 'plugin-badge'
+    el.textContent = '🔌'
+    Object.assign(el.style, { position: 'absolute', left: r.x + r.w - 14 + 'px', top: r.y - 2 + 'px', fontSize: '12px', pointerEvents: 'none' })
+    return el
+  },
 })
 const plugins = [negativesPlugin]
 type Rect = { x: number; y: number; w: number; h: number } | null

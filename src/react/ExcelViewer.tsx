@@ -27,6 +27,8 @@ import {
 } from '@/core/model/data-access'
 import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { ViewerController, type Cell, type TooltipState } from '@/core/viewer/controller'
+import { PluginOverlayHost } from '@/core/viewer/plugin-overlay'
+import type { ExcelPlugin, OverlayContext, PluginEvent, ViewerApi } from '@/core/plugin'
 import { useExcelDocument } from './use-excel-document'
 import './excel-viewer.css'
 
@@ -38,6 +40,8 @@ export interface ExcelViewerProps {
   openLinks?: boolean
   transformModel?: TransformModelFn
   cellStyle?: CellStyleFn
+  /** 插件(与 Vue 通用):theme/transformModel/cellStyle/events/overlay/setup 全跨框架可用 */
+  plugins?: ExcelPlugin[]
   className?: string
   style?: CSSProperties
   onRendered?: (wb: WorkbookModel) => void
@@ -96,9 +100,59 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
 
   const controllerRef = useRef<ViewerController | null>(null)
   const tooltipRef = useRef<TooltipState | null>(null)
-  // 最新 props(供 controller 构造时注册的 hook 读到当前回调)
+  const pluginOvRef = useRef<HTMLDivElement>(null)
+  const pluginHostRef = useRef<PluginOverlayHost | null>(null)
+  const pluginHandlersRef = useRef<Map<PluginEvent, Set<(p: unknown) => void>>>(new Map())
+  // 最新 props / 派生量(供 mount 时注册的 hook 读到当前值)
   const propsRef = useRef(props)
   propsRef.current = props
+  const plugins = props.plugins ?? []
+  const pluginsRef = useRef(plugins)
+  pluginsRef.current = plugins
+  const workbookRef = useRef(workbook)
+  workbookRef.current = workbook
+  const activeSheetRef = useRef(activeSheet)
+  activeSheetRef.current = activeSheet
+
+  // 插件 + props 合并:主题 / cellStyle / transformModel(与 Vue 壳同构)
+  function buildRendererOpts() {
+    const ps = pluginsRef.current
+    const theme = Object.assign({}, ...ps.map((p) => p.theme || {}), propsRef.current.theme || {})
+    const fns: CellStyleFn[] = ps.map((p) => p.cellStyle).filter(Boolean) as CellStyleFn[]
+    if (propsRef.current.cellStyle) fns.push(propsRef.current.cellStyle)
+    const cellStyle: CellStyleFn | undefined = fns.length
+      ? (cell, pos) => {
+          let acc: ReturnType<CellStyleFn> | undefined
+          for (const fn of fns) {
+            const o = fn(cell, pos)
+            if (o) acc = { ...(acc || {}), ...o }
+          }
+          return acc
+        }
+      : undefined
+    return { theme, cellStyle }
+  }
+  function effectiveTransform(wb: WorkbookModel): WorkbookModel {
+    let m = wb
+    for (const p of pluginsRef.current) if (p.transformModel) m = p.transformModel(m) ?? m
+    if (propsRef.current.transformModel) m = propsRef.current.transformModel(m) ?? m
+    return m
+  }
+  /** 派发交互事件给插件(props 回调在各 hook 里另外调) */
+  const firePlugin = (event: PluginEvent, payload: unknown) =>
+    pluginHandlersRef.current.get(event)?.forEach((h) => h(payload))
+  function renderPluginOverlays() {
+    const host = pluginHostRef.current
+    const controller = controllerRef.current
+    if (!host || !controller) return
+    const ctx: OverlayContext = {
+      rectOf: (r, c) => controller.rectOf(r, c),
+      rectOfRange: (r) => controller.rectOfRange(r),
+      tick: 0,
+      workbook: workbookRef.current,
+    }
+    host.render(pluginsRef.current, ctx)
+  }
 
   // ---- 实例化控制器(一次)。用 layout effect: 在 paint 前就绪,后续 rebuild 也是 layout,顺序确定。 ----
   useLayoutEffect(() => {
@@ -117,12 +171,21 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       },
       {
         onRenderer: () => force(),
-        onRenderTick: () => {}, // canvas 由 controller 直接画;React 不需每帧重渲
+        onRenderTick: () => renderPluginOverlays(), // 插件 overlay 随每帧重定位(纯 DOM,不触发 React 重渲)
         onSelectionChange: () => force(),
-        onCellClick: (row, col, text) => propsRef.current.onCellClick?.({ row, col, text }),
-        onCellDblClick: (row, col, text) => propsRef.current.onCellDblClick?.({ row, col, text }),
+        onCellClick: (row, col, text) => {
+          const p = { row, col, text }
+          propsRef.current.onCellClick?.(p)
+          firePlugin('cell-click', p)
+        },
+        onCellDblClick: (row, col, text) => {
+          const p = { row, col, text }
+          propsRef.current.onCellDblClick?.(p)
+          firePlugin('cell-dblclick', p)
+        },
         onHyperlink: (url, cell) => {
           propsRef.current.onHyperlinkClick?.({ url, cell })
+          firePlugin('hyperlink-click', { url, cell })
           if (propsRef.current.openLinks !== false) window.open(url, '_blank', 'noopener')
         },
         onTooltip: (tip) => {
@@ -135,6 +198,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     )
     controller.fileName = propsRef.current.fileName
     controllerRef.current = controller
+    if (pluginOvRef.current) pluginHostRef.current = new PluginOverlayHost(pluginOvRef.current)
 
     const ro = new ResizeObserver(() => {
       controller.measure()
@@ -144,6 +208,8 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     return () => {
       ro.disconnect()
       controller.dispose()
+      pluginHostRef.current?.dispose()
+      pluginHostRef.current = null
       controllerRef.current = null
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -151,7 +217,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
 
   // ---- 载入 src ----
   useEffect(() => {
-    if (props.src) load(props.src, props.transformModel)
+    if (props.src) load(props.src, effectiveTransform)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.src])
 
@@ -172,16 +238,19 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     if (error) propsRef.current.onError?.(error)
   }, [error])
 
-  // ---- 重建渲染器(工作簿 / 活动表 / 主题 / cellStyle 变化)。layout effect: 同步绘制,避免被晚到的 rebuild 清掉交互态 ----
+  // ---- 重建渲染器(工作簿 / 活动表 / 主题 / cellStyle / 插件 变化)。layout effect: 同步绘制。----
   useLayoutEffect(() => {
     const controller = controllerRef.current
     if (!controller || !workbook) return
     const sheet: SheetModel | null = workbook.sheets[activeSheet] ?? workbook.sheets[0] ?? null
     if (!sheet) return
-    controller.rebuild(sheet, workbook, zoom, { theme: props.theme, cellStyle: props.cellStyle })
-    propsRef.current.onSheetChange?.({ index: activeSheet, name: sheet.name })
+    controller.rebuild(sheet, workbook, zoom, buildRendererOpts())
+    renderPluginOverlays()
+    const payload = { index: activeSheet, name: sheet.name }
+    propsRef.current.onSheetChange?.(payload)
+    firePlugin('sheet-change', payload)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workbook, activeSheet, props.theme, props.cellStyle])
+  }, [workbook, activeSheet, props.theme, props.cellStyle, props.plugins])
 
   // ---- 缩放 ----
   useEffect(() => {
@@ -198,7 +267,9 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     const key = sel && active ? `${sel.top},${sel.left},${sel.bottom},${sel.right}` : ''
     if (key && key !== lastSelKey.current && active) {
       lastSelKey.current = key
-      propsRef.current.onSelectionChange?.({ range: sel!, active })
+      const payload = { range: sel!, active }
+      propsRef.current.onSelectionChange?.(payload)
+      firePlugin('selection-change', payload)
     }
   })
 
@@ -247,6 +318,72 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [workbook, activeSheet],
   )
+
+  // ---- 给插件 / 工具栏用的稳定命令式 API(读 ref,跨渲染稳定) ----
+  const apiSheet = (si?: number): SheetModel | null => workbookRef.current?.sheets[si ?? activeSheetRef.current] ?? null
+  const apiDate1904 = () => workbookRef.current?.date1904 ?? false
+  const viewerApi = useRef<ViewerApi>({
+    load: (src) => load(src, effectiveTransform),
+    getWorkbook: () => workbookRef.current,
+    getActiveSheet: () => activeSheetRef.current,
+    setActiveSheet: (i) => {
+      if (workbookRef.current?.sheets[i]) setActiveSheet(i)
+    },
+    getSelection: () => controllerRef.current?.getSelection() ?? null,
+    setSelection: (range) => controllerRef.current?.setSelectionRange(range),
+    rectOf: (row, col) => controllerRef.current?.rectOf(row, col) ?? null,
+    rectOfRange: (range) => controllerRef.current?.rectOfRange(range) ?? null,
+    redraw: () => controllerRef.current?.render(),
+    exportImage: (opts) => controllerRef.current!.exportImage(opts),
+    downloadImage: (opts) => controllerRef.current!.downloadImage(opts),
+    exportPdf: (opts) => controllerRef.current!.exportPdf(opts),
+    downloadPdf: (opts) => controllerRef.current!.downloadPdf(opts),
+    print: (opts) => controllerRef.current!.print(opts),
+    getCellValue: (row, col, si) => {
+      const s = apiSheet(si)
+      return s ? getCellValue(s, row, col) : null
+    },
+    getCellText: (row, col, si) => {
+      const s = apiSheet(si)
+      return s ? getCellText(s, row, col, apiDate1904()) : ''
+    },
+    getSheetData: (opts, si) => {
+      const s = apiSheet(si)
+      return s ? getSheetData(s, { ...opts, date1904: apiDate1904() }) : []
+    },
+    getSheetJSON: (opts, si) => {
+      const s = apiSheet(si)
+      return s ? sheetToJSON(s, { ...opts, date1904: apiDate1904() }) : []
+    },
+    getRangeData: (range, opts, si) => {
+      const s = apiSheet(si)
+      return s ? getRangeData(s, range, { ...opts, date1904: apiDate1904() }) : []
+    },
+  }).current
+
+  // ---- 插件 setup / events 注册(plugins 变化时重建) ----
+  useEffect(() => {
+    const handlers = new Map<PluginEvent, Set<(p: unknown) => void>>()
+    const cleanups: Array<() => void> = []
+    const register = (event: PluginEvent, fn: (p: unknown) => void) => {
+      let set = handlers.get(event)
+      if (!set) handlers.set(event, (set = new Set()))
+      set.add(fn)
+    }
+    for (const p of plugins) {
+      if (p.events)
+        for (const [ev, fn] of Object.entries(p.events)) if (fn) register(ev as PluginEvent, fn as (x: unknown) => void)
+      const cleanup = p.setup?.({ viewer: viewerApi, on: register, redraw: () => controllerRef.current?.render() })
+      if (typeof cleanup === 'function') cleanups.push(cleanup)
+    }
+    pluginHandlersRef.current = handlers
+    renderPluginOverlays()
+    return () => {
+      cleanups.forEach((fn) => fn())
+      pluginHandlersRef.current = new Map()
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.plugins])
 
   // ---- 根容器 Ctrl/Cmd+F 打开查找 ----
   const onRootKeyDown = (e: React.KeyboardEvent) => {
@@ -321,6 +458,21 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
               </option>
             ))}
           </select>
+          {/* 插件贡献的工具栏按钮(跨框架同一份插件) */}
+          {plugins
+            .flatMap((p) => p.toolbar ?? [])
+            .filter((it) => it.type !== 'separator')
+            .map((it) => (
+              <button
+                key={it.id}
+                className={it.active?.(viewerApi) ? 'active' : ''}
+                disabled={it.disabled?.(viewerApi)}
+                title={it.title}
+                onClick={() => it.onClick?.(viewerApi)}
+              >
+                {it.label ?? it.icon ?? it.id}
+              </button>
+            ))}
         </div>
       )}
 
@@ -353,6 +505,11 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
           onKeyDown={(e) => controllerRef.current?.onKeyDown(e.nativeEvent)}
         >
           <div className="rxl-spacer" ref={spacerRef} />
+        </div>
+
+        {/* 插件 overlay:框架无关 DOM,由 PluginOverlayHost 挂载(随 tick 跟随滚动/缩放) */}
+        <div className="rxl-ov-slot">
+          <div ref={pluginOvRef} />
         </div>
 
         {findOpen && workbook && (

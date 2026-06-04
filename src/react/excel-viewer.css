@@ -100,6 +100,17 @@
 .rxl-spacer {
   pointer-events: none;
 }
+/* 插件 overlay 层:叠在网格之上,容器穿透、子元素可交互 */
+.rxl-ov-slot {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  overflow: hidden;
+  pointer-events: none;
+}
+.rxl-ov-slot > div > * {
+  pointer-events: auto;
+}
 .rxl-tooltip {
   position: absolute;
   z-index: 6;
