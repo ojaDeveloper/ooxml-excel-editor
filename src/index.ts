@@ -47,6 +47,7 @@ export type {
   OverlayContext,
   PluginEvent,
   Rect,
+  ToolbarItem,
 } from './core/plugin'
 
 // 扩展: 导出 / 打印(选项类型 + beforeRenderPage 钩子)。

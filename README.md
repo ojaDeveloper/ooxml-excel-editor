@@ -189,8 +189,20 @@ await viewer.value.downloadPdf({
 ```
 > 提示:中文表格若不注册字体,矢量模式会产生很多小图、文件偏大且较慢 —— 注册一个子集字体即可全矢量。
 
+### 操作工具栏(可配置 / 可插件)
+顶栏(文件名/导出/缩放)下方有一行**操作工具栏**,内置 `find`(查找)/ `filter`(切换自动筛选)按钮默认显示。用 `:toolbar` 配置:
+```vue
+<ExcelViewer :src="file" />                               <!-- 默认: 显示内置项 -->
+<ExcelViewer :src="file" :toolbar="['find', 'export']" /> <!-- 显式控制项与顺序 -->
+<ExcelViewer :src="file" :toolbar="false" />              <!-- 隐藏整条 -->
+```
+- **内置 id**:`find`(查找)、`filter`(切换自动筛选 —— 文件没设筛选时点一下即给数据区加下拉)、`sort`(规划中)。
+- **自定义项**:数组里直接放 `ToolbarItem`(`{ id, icon?, label?, title?, onClick(viewer), active?(viewer) }`)。
+- **插件贡献**:`ExcelPlugin.toolbar: ToolbarItem[]`,插件加载即追加(opt-in)。
+- `「筛选」按钮`让筛选**看得见**:不必依赖文件自带 autofilter。
+
 ### 分层 UI(slots)
-具名 slot:`toolbar` / `statusbar` / `loading` / `error` / `empty`(缺省用内置)。
+具名 slot:`header`(顶栏)/ `toolbar`(作用域 `{ items }`,替换整条操作栏)/ `statusbar` / `loading` / `error` / `empty`(缺省用内置)。
 **作用域 `overlay` slot** —— 在格子上叠自己的 Vue 组件,随滚动/缩放跟随:
 ```vue
 <ExcelViewer :src="file">
@@ -226,7 +238,7 @@ const highlightNegatives = definePlugin({
 ```vue
 <ExcelViewer :src="file" :plugins="[highlightNegatives]" />
 ```
-插件字段:`theme` / `transformModel` / `cellStyle` / `events`(事件→处理器) / `overlay`(返回 VNode,随滚动跟随) / `setup(ctx)`(拿 `viewer` 命令式 API、`on()` 订阅事件,返回可选清理函数)。
+插件字段:`theme` / `transformModel` / `cellStyle` / `events`(事件→处理器) / `overlay`(返回 VNode,随滚动跟随) / `toolbar`(贡献操作栏按钮 `ToolbarItem[]`) / `setup(ctx)`(拿 `viewer` 命令式 API、`on()` 订阅事件,返回可选清理函数)。
 
 ## 浏览器支持
 

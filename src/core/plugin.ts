@@ -69,10 +69,28 @@ export interface ExcelPluginContext {
   redraw(): void
 }
 
+/** 操作工具栏的一个按钮(插件贡献 / 组件 :toolbar 配置 / 命令式自定义共用) */
+export interface ToolbarItem {
+  /** 唯一 id(内置: 'find' | 'filter' | 'sort';自定义任意) */
+  id: string
+  /** 图标(emoji / 字形) */
+  icon?: string
+  /** 文字 */
+  label?: string
+  /** 悬停提示 */
+  title?: string
+  /** 点击回调(拿到命令式 API) */
+  onClick?: (viewer: ViewerApi) => void
+  /** 是否高亮(激活态),如开关类按钮 */
+  active?: (viewer: ViewerApi) => boolean
+}
+
 export interface ExcelPlugin {
   name: string
   /** 外观主题覆盖(多插件按数组顺序合并,组件 :theme 最后覆盖) */
   theme?: Partial<ViewerTheme>
+  /** 贡献操作工具栏按钮(opt-in: 插件加载即出现) */
+  toolbar?: ToolbarItem[]
   /** 数据钩子: 解析后改模型(多插件 + 组件 prop 链式应用) */
   transformModel?: TransformModelFn
   /** 渲染钩子: 按单元格覆盖样式(多插件 + 组件 prop 合并) */

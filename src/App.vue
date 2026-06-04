@@ -68,7 +68,7 @@ async function exportPdfWithWatermark() {
   }
 }
 
-// 示例插件: 负数标红 + 单击单元格写到 toast(definePlugin 把 cellStyle+events 打包)
+// 示例插件: 负数标红 + 单击 toast + 贡献一个工具栏按钮(definePlugin 打包 cellStyle/events/toolbar)
 const negativesPlugin = definePlugin({
   name: 'demo-highlight-negatives',
   cellStyle: (cell) =>
@@ -76,6 +76,16 @@ const negativesPlugin = definePlugin({
   events: {
     'cell-click': (p) => (lastEvent.value = `[插件] 点击 R${p.row + 1}C${p.col + 1}: ${p.text}`),
   },
+  toolbar: [
+    {
+      id: 'demo-info',
+      icon: '🔔',
+      label: '插件按钮',
+      title: '演示插件贡献的工具栏项',
+      onClick: (viewer) =>
+        (lastEvent.value = `[插件工具栏] 当前 ${viewer.getWorkbook()?.sheets.length ?? 0} 个工作表`),
+    },
+  ],
 })
 const plugins = [negativesPlugin]
 type Rect = { x: number; y: number; w: number; h: number } | null

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, defineComponent, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import type * as EChartsNS from 'echarts'
-import type { ExcelPlugin, ExcelPluginContext, OverlayContext, PluginEvent, ViewerApi } from '@/core/plugin'
+import type { ExcelPlugin, ExcelPluginContext, OverlayContext, PluginEvent, ToolbarItem, ViewerApi } from '@/core/plugin'
 import type { ExcelSource } from '@/core/loader'
 import type {
   CellModel,
@@ -42,7 +42,9 @@ import SheetTabs from './SheetTabs.vue'
 import ExportDialog from './ExportDialog.vue'
 import FindBar from './FindBar.vue'
 import FilterPopup from './FilterPopup.vue'
+import ActionToolbar from './ActionToolbar.vue'
 import type { ExportConfig } from './export-types'
+import type { ResolvedToolbarItem } from './toolbar-types'
 
 const props = withDefaults(
   defineProps<{
@@ -58,8 +60,15 @@ const props = withDefaults(
     openLinks?: boolean
     /** 插件列表(打包主题/钩子/事件/overlay) */
     plugins?: ExcelPlugin[]
+    /**
+     * 操作工具栏(顶栏下一行): 内置 'find'/'filter'/'sort' 默认显示。
+     * false 隐藏整条;数组显式控制项与顺序(内置 id 或自定义 ToolbarItem)。
+     * 插件 ExcelPlugin.toolbar 贡献的项总会追加(opt-in)。
+     */
+    toolbar?: boolean | Array<string | ToolbarItem>
   }>(),
-  { openLinks: true },
+  // toolbar 默认 true(显示内置项);若不显式给默认,Vue 会把布尔型 prop 缺省判成 false
+  { openLinks: true, toolbar: true },
 )
 
 const normalizedPlugins = computed<ExcelPlugin[]>(() => props.plugins ?? [])
@@ -1507,6 +1516,27 @@ function resetFilterFor(idx: number | undefined) {
   filterPopup.value = null
 }
 
+/** 工具栏「筛选」: 切换自动筛选。无则按选区(或整张已用区)新建,使下拉按钮出现。 */
+function toggleAutoFilter() {
+  const s = sheet.value
+  const r = renderer.value
+  if (!s || !r) return
+  if (s.autoFilterRange) {
+    resetFilterFor(activeSheet.value) // 恢复筛选隐藏的行 + 清状态
+    s.autoFilterRange = undefined
+  } else {
+    const sel = selection.value
+    const multi = sel && !(sel.top === sel.bottom && sel.left === sel.right)
+    s.autoFilterRange = multi
+      ? { ...sel! }
+      : { top: 0, left: 0, bottom: Math.max(0, s.dimension.rows - 1), right: Math.max(0, s.dimension.cols - 1) }
+  }
+  r.setFilteredCols(new Set())
+  r.rebuildMetrics()
+  contentSize.value = { w: r.contentWidth, h: r.contentHeight }
+  doRender()
+}
+
 // ---- 导出设置对话框 ----
 const exportDialogOpen = ref(false)
 /** 把对话框配置映射成各导出方法的入参并执行 */
@@ -1564,6 +1594,70 @@ const viewerApi: ViewerApi = {
 }
 defineExpose(viewerApi)
 
+// ---------------- 操作工具栏(可配置 + 可插件) ----------------
+function builtinTool(id: string): ResolvedToolbarItem | null {
+  if (id === 'find')
+    return {
+      id,
+      icon: '🔍',
+      label: '查找',
+      title: '查找 (Ctrl+F)',
+      active: findOpen.value,
+      onClick: () => (findOpen.value ? closeFind() : openFind()),
+      kind: 'builtin',
+    }
+  if (id === 'filter')
+    return {
+      id,
+      icon: '🔽',
+      label: '筛选',
+      title: '切换自动筛选',
+      active: !!sheet.value?.autoFilterRange,
+      onClick: toggleAutoFilter,
+      kind: 'builtin',
+    }
+  // 'sort' 待实现(Phase 3),暂不产出按钮
+  return null
+}
+
+const resolvedToolbar = computed<ResolvedToolbarItem[]>(() => {
+  void renderTick.value // 选区/状态变化时重算 active
+  if (props.toolbar === false) return []
+  const entries: Array<string | ToolbarItem> = Array.isArray(props.toolbar) ? props.toolbar : ['find', 'filter']
+  const out: ResolvedToolbarItem[] = []
+  for (const e of entries) {
+    if (typeof e === 'string') {
+      const b = builtinTool(e)
+      if (b) out.push(b)
+    } else {
+      out.push({
+        id: e.id,
+        icon: e.icon,
+        label: e.label,
+        title: e.title,
+        active: !!e.active?.(viewerApi),
+        onClick: () => e.onClick?.(viewerApi),
+        kind: 'custom',
+      })
+    }
+  }
+  for (const p of normalizedPlugins.value) {
+    for (const it of p.toolbar ?? []) {
+      out.push({
+        id: it.id,
+        icon: it.icon,
+        label: it.label,
+        title: it.title,
+        active: !!it.active?.(viewerApi),
+        onClick: () => it.onClick?.(viewerApi),
+        kind: 'plugin',
+      })
+    }
+  }
+  return out
+})
+const showActionBar = computed(() => props.toolbar !== false && resolvedToolbar.value.length > 0)
+
 // ---------------- 插件运行时 ----------------
 const pluginHandlers = new Map<PluginEvent, Set<(p: any) => void>>()
 let pluginCleanups: Array<() => void> = []
@@ -1613,7 +1707,7 @@ const PluginOverlays = defineComponent({
   <div class="excel-viewer" ref="rootEl" @keydown="onRootKeydown">
     <slot
       v-if="workbook"
-      name="toolbar"
+      name="header"
       :workbook="workbook"
       :zoom="zoom"
       :set-zoom="(z: number) => (zoom = z)"
@@ -1632,6 +1726,11 @@ const PluginOverlays = defineComponent({
         @print="print()"
         @open-settings="exportDialogOpen = true"
       />
+    </slot>
+
+    <!-- 可配置/可插件 操作工具栏(查找/筛选/排序 + 插件项) -->
+    <slot v-if="workbook && showActionBar" name="toolbar" :items="resolvedToolbar">
+      <ActionToolbar :items="resolvedToolbar" />
     </slot>
 
     <div v-if="workbook" class="formula-bar">
