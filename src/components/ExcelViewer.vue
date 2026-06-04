@@ -23,7 +23,7 @@ import { GridMetrics, colIndexToLetters } from '@/core/layout/grid-metrics'
 import { anchorRect } from '@/core/overlay/anchor'
 import { chartToOption } from '@/core/overlay/chart-mapper'
 import { loadECharts } from '@/core/overlay/echarts-loader'
-import { OverlayManager } from '@/core/viewer/overlay-manager'
+import { ViewerController } from '@/core/viewer/controller'
 import { revokeImages } from '@/core/finalize'
 import {
   canvasToBlob,
@@ -153,106 +153,66 @@ const sheet = computed<SheetModel | null>(() => {
   return wb.sheets[activeSheet.value] ?? wb.sheets[0] ?? null
 })
 
-const contentSize = ref({ w: 0, h: 0 })
-
-// ---------------- 叠加层(图片/图表/形状)— 委托框架无关 OverlayManager ----------------
-let overlays: OverlayManager | null = null
-function buildOverlays() {
-  const s = sheet.value
-  const r = renderer.value
-  if (overlays && s && r) overlays.build(s, r, view.value)
-}
-function positionOverlays() {
-  const s = sheet.value
-  const r = renderer.value
-  if (overlays && s && r) overlays.position(s, r, view.value)
-}
-function disposeOverlays() {
-  overlays?.dispose()
-}
-
-// ---------------- 渲染 ----------------
+// ---------------- 渲染引擎: 委托框架无关 ViewerController ----------------
 // overlay slot 用: 每次重绘 +1 → 作用域插槽重算 rectOf 位置(随滚动/缩放/切表跟随)
 const renderTick = ref(0)
-let rafId = 0
-/** 把重绘合并到下一帧(滚动/拖选高频触发时,每帧最多画一次) */
-function scheduleRender() {
-  if (rafId) return
-  rafId = requestAnimationFrame(() => {
-    rafId = 0
-    doRender()
-  })
-}
+const spacerEl = ref<HTMLElement | null>(null)
+let controller: ViewerController | null = null
+
 function doRender() {
-  if (rafId) {
-    cancelAnimationFrame(rafId)
-    rafId = 0
-  }
-  const r = renderer.value
-  if (!r) return
-  view.value.zoom = zoom.value
-  r.setSelection(selection.value)
-  r.render(view.value)
-  positionOverlays()
-  renderTick.value++ // 通知 overlay slot 重算位置
+  controller?.render()
+}
+function scheduleRender() {
+  controller?.scheduleRender()
+}
+function measure() {
+  controller?.measure()
 }
 
 function rebuildRenderer() {
   const s = sheet.value
   const wb = workbook.value
-  const canvas = canvasEl.value
-  if (!s || !wb || !canvas) return
-  renderer.value = new CanvasRenderer(canvas, s, wb, zoom.value, {
+  if (!s || !wb || !controller) return
+  // 先清 Vue 侧状态,再重建(rebuild 末尾会以"已清空选区"绘制)
+  clearSelection()
+  findHits.value = []
+  findIndex.value = -1
+  tooltip.value = null
+  controller.rebuild(s, wb, zoom.value, {
     theme: effectiveTheme.value,
     cellStyle: hasCellStyleHook.value ? combinedCellStyle : undefined,
   })
-  contentSize.value = { w: renderer.value.contentWidth, h: renderer.value.contentHeight }
-  clearSelection() // 切表清空选区
-  // 切表/换簿清空查找命中(列表已失效)
-  findHits.value = []
-  findIndex.value = -1
-  if (findQuery.value) recomputeFind()
-  tooltip.value = null
-  // 重置滚动
-  if (scrollerEl.value) {
-    scrollerEl.value.scrollLeft = 0
-    scrollerEl.value.scrollTop = 0
-  }
-  view.value.scrollX = 0
-  view.value.scrollY = 0
-  measure()
-  buildOverlays()
-  doRender()
-}
-
-function measure() {
-  const area = renderAreaEl.value
-  if (!area) return
-  view.value.width = area.clientWidth
-  view.value.height = area.clientHeight
+  if (findQuery.value) recomputeFind() // 新表上重新查找
 }
 
 function onScroll() {
   const sc = scrollerEl.value
   if (!sc) return
-  view.value.scrollX = sc.scrollLeft
-  view.value.scrollY = sc.scrollTop
   tooltip.value = null
-  scheduleRender()
+  controller?.setScroll(sc.scrollLeft, sc.scrollTop)
 }
 
 let resizeObserver: ResizeObserver | null = null
 
 onMounted(() => {
   initPlugins()
-  // 叠加层四象限容器在模板里,挂载后才有 → 实例化框架无关 OverlayManager
-  if (ovMain.value && ovFRow.value && ovFCol.value && ovCorner.value) {
-    overlays = new OverlayManager({
-      main: ovMain.value,
-      frow: ovFRow.value,
-      fcol: ovFCol.value,
-      corner: ovCorner.value,
-    })
+  // DOM 挂载后实例化框架无关控制器,把 canvas/scroller/spacer/叠加层四象限交给它
+  if (canvasEl.value && renderAreaEl.value && scrollerEl.value && spacerEl.value && ovMain.value && ovFRow.value && ovFCol.value && ovCorner.value) {
+    controller = new ViewerController(
+      {
+        canvas: canvasEl.value,
+        renderArea: renderAreaEl.value,
+        scroller: scrollerEl.value,
+        spacer: spacerEl.value,
+        overlays: { main: ovMain.value, frow: ovFRow.value, fcol: ovFCol.value, corner: ovCorner.value },
+      },
+      {
+        getSelection: () => selection.value,
+        onRenderer: (r) => (renderer.value = r),
+        onRenderTick: () => renderTick.value++,
+      },
+    )
+    view.value = controller.view // 壳与控制器共享同一 view 对象(现有 view.value 读法不变)
   }
   if (props.src) load(props.src, effectiveTransform)
   resizeObserver = new ResizeObserver(() => {
@@ -264,9 +224,8 @@ onMounted(() => {
 
 onBeforeUnmount(() => {
   resizeObserver?.disconnect()
-  if (rafId) cancelAnimationFrame(rafId)
+  controller?.dispose()
   pluginCleanups.forEach((fn) => fn())
-  disposeOverlays()
   if (workbook.value) revokeImages(workbook.value)
 })
 
@@ -318,24 +277,7 @@ watch(activeSheet, async (_idx, oldIdx) => {
   rebuildRenderer()
 })
 
-watch(zoom, async (z) => {
-  const r = renderer.value
-  const sc = scrollerEl.value
-  if (!r) return
-  // 缩放前记录视口中心相对内容的比例，缩放后还原中心，避免"跳到左上角"
-  const ratioX = sc && contentSize.value.w ? (sc.scrollLeft + sc.clientWidth / 2) / contentSize.value.w : 0
-  const ratioY = sc && contentSize.value.h ? (sc.scrollTop + sc.clientHeight / 2) / contentSize.value.h : 0
-  r.setZoom(z)
-  contentSize.value = { w: r.contentWidth, h: r.contentHeight }
-  await nextTick()
-  if (sc) {
-    sc.scrollLeft = Math.max(0, ratioX * contentSize.value.w - sc.clientWidth / 2)
-    sc.scrollTop = Math.max(0, ratioY * contentSize.value.h - sc.clientHeight / 2)
-    view.value.scrollX = sc.scrollLeft
-    view.value.scrollY = sc.scrollTop
-  }
-  doRender()
-})
+watch(zoom, (z) => controller?.setZoom(z))
 
 // ---------------- 交互: 选区 / 超链接 / 悬停 / 复制 ----------------
 type Cell = { row: number; col: number }
@@ -530,15 +472,11 @@ function onMouseMove(e: MouseEvent) {
     if (!r || !p) return
     dragMoved = true
     if (dragMode === 'resize-col') {
-      r.setColWidthPx(resizeTarget, resizeStartSize + (p.x - resizeStartPos))
-      contentSize.value = { w: r.contentWidth, h: r.contentHeight }
-      scheduleRender()
+      controller?.setColWidthPx(resizeTarget, resizeStartSize + (p.x - resizeStartPos))
       return
     }
     if (dragMode === 'resize-row') {
-      r.setRowHeightPx(resizeTarget, resizeStartSize + (p.y - resizeStartPos))
-      contentSize.value = { w: r.contentWidth, h: r.contentHeight }
-      scheduleRender()
+      controller?.setRowHeightPx(resizeTarget, resizeStartSize + (p.y - resizeStartPos))
       return
     }
     if (dragMode === 'cell') {
@@ -647,17 +585,14 @@ function onDblClick(e: MouseEvent) {
   const colHit = nearColBorder(p.x, p.y)
   const rowHit = colHit ? null : nearRowBorder(p.x, p.y)
   if (colHit) {
-    r.autoFitColumn(colHit.col)
+    controller?.autoFitColumn(colHit.col)
   } else if (rowHit) {
-    r.autoFitRow(rowHit.row)
+    controller?.autoFitRow(rowHit.row)
   } else {
     // 非边界 → 双击单元格事件
     const cell = r.cellAtScreen(view.value, p.x, p.y)
     if (cell) fire('cell-dblclick', { row: cell.row, col: cell.col, text: r.cellText(cell.row, cell.col) })
-    return
   }
-  contentSize.value = { w: r.contentWidth, h: r.contentHeight }
-  doRender()
 }
 
 // ---- 键盘 ----
@@ -829,17 +764,11 @@ watch(selection, (sel) => {
 
 /** 单元格当前屏幕矩形(render-area 相对坐标);供 overlay slot / 命令式定位 */
 function rectOf(row: number, col: number): { x: number; y: number; w: number; h: number } | null {
-  const r = renderer.value
-  if (!r) return null
-  return r.screenRectOfCell(view.value, row, col)
+  return controller?.rectOf(row, col) ?? null
 }
 /** 区域当前屏幕矩形(左上到右下的并集) */
 function rectOfRange(range: MergeRange): { x: number; y: number; w: number; h: number } | null {
-  const r = renderer.value
-  if (!r) return null
-  const tl = r.screenRectOfCell(view.value, range.top, range.left)
-  const br = r.screenRectOfCell(view.value, range.bottom, range.right)
-  return { x: tl.x, y: tl.y, w: br.x + br.w - tl.x, h: br.y + br.h - tl.y }
+  return controller?.rectOfRange(range) ?? null
 }
 
 // ---------------- 导出 / 打印 ----------------
@@ -1267,7 +1196,7 @@ function applyFilters() {
   }
   r.setFilteredCols(new Set(filterState.keys()))
   r.rebuildMetrics()
-  contentSize.value = { w: r.contentWidth, h: r.contentHeight }
+  controller?.refreshContentSize()
   clearSelection()
   doRender()
 }
@@ -1340,7 +1269,7 @@ function toggleFreeze() {
     s.freeze = { frozenRows: c ? c.row : 1, frozenCols: c ? c.col : 0 }
   }
   r.rebuildMetrics()
-  contentSize.value = { w: r.contentWidth, h: r.contentHeight }
+  controller?.refreshContentSize()
   doRender()
 }
 
@@ -1361,7 +1290,7 @@ function toggleAutoFilter() {
   }
   r.setFilteredCols(new Set())
   r.rebuildMetrics()
-  contentSize.value = { w: r.contentWidth, h: r.contentHeight }
+  controller?.refreshContentSize()
   doRender()
 }
 
@@ -1676,7 +1605,7 @@ const PluginOverlays = defineComponent({
         @dblclick="onDblClick"
         @keydown="onKeyDown"
       >
-        <div class="spacer" :style="{ width: contentSize.w + 'px', height: contentSize.h + 'px' }" />
+        <div class="spacer" ref="spacerEl" />
       </div>
 
       <FindBar
