@@ -17,6 +17,10 @@ export interface ExportSheetImage {
   sheetName: string
   /** 打印标题: 每页顶部重复的标题行条(同 scale,等宽于 canvas) */
   repeatTop?: { canvas: HTMLCanvasElement; heightCss: number }
+  /** 打印标题: 每页左侧重复的标题列条(同 scale,等高于 canvas) */
+  repeatLeft?: { canvas: HTMLCanvasElement; widthCss: number }
+  /** 标题角(标题列×标题行) */
+  corner?: { canvas: HTMLCanvasElement }
   /** 非 fitToWidth 时的打印缩放(pageSetup.scale/100) */
   zoom?: number
 }
@@ -51,6 +55,8 @@ export async function exportToPdf(sheets: ExportSheetImage[], opts: PdfExportOpt
       fitToWidth,
       zoom: sh.zoom,
       repeatTop: sh.repeatTop,
+      repeatLeft: sh.repeatLeft,
+      corner: sh.corner,
     }),
   }))
   const pageCount = perSheet.reduce((n, s) => n + Math.max(s.pages.length, 0), 0) || 1

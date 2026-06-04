@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { MM_PER_PX, resolveMargins, resolvePageSize } from '../raster'
 import { exportToPdf } from '../pdf'
-import { exportToVectorPdf, hasNonLatin, hexToRgb } from '../vector-pdf'
+import { exportToVectorPdf, hasNonLatin, hexToRgb, packBands } from '../vector-pdf'
+import { makeBands } from '../paginate'
 
 // 注: 测试环境为 node(无 DOM/canvas),只覆盖纯函数与边界;
 // 渲染/切片/合成依赖真实 canvas,放到浏览器/手动验证。
@@ -68,5 +69,28 @@ describe('矢量 PDF 工具', () => {
     expect(hexToRgb('#FF8000')).toEqual([255, 128, 0])
     expect(hexToRgb('00FF00')).toEqual([0, 255, 0])
     expect(hexToRgb('bad')).toEqual([0, 0, 0])
+  })
+})
+
+describe('分页 packBands / makeBands(横向分页核心)', () => {
+  it('packBands: 等宽列按上限分带,每带至少一项', () => {
+    // 每项 50,上限 120 → 每带最多 2 项(100≤120,150>120)
+    expect(packBands([0, 1, 2, 3, 4], () => 50, 120)).toEqual([[0, 1], [2, 3], [4]])
+    // 单项超上限也独占一带(不丢)
+    expect(packBands([0, 1], () => 200, 120)).toEqual([[0], [1]])
+    // 空 → 一个空带
+    expect(packBands([], () => 50, 120)).toEqual([[]])
+  })
+
+  it('makeBands: 像素按带宽切分,长度累计=总量', () => {
+    const bands = makeBands(1000, 300)
+    expect(bands.map((b) => b.len).reduce((a, b) => a + b, 0)).toBe(1000)
+    expect(bands.length).toBe(4) // 300+300+300+100
+    expect(bands[0]).toEqual({ s: 0, len: 300 })
+    expect(bands[3]).toEqual({ s: 900, len: 100 })
+  })
+
+  it('makeBands: 带宽≥总量 → 单带', () => {
+    expect(makeBands(500, 800)).toEqual([{ s: 0, len: 500 }])
   })
 })

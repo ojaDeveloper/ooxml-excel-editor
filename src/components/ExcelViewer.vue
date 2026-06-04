@@ -1094,45 +1094,71 @@ async function buildSheetImage(
   const ps = s.pageSetup
   const dim = s.dimension
   const full: MergeRange = { top: 0, left: 0, bottom: Math.max(0, dim.rows - 1), right: Math.max(0, dim.cols - 1) }
-  let range = opts.range ?? ps?.printArea ?? full
+  const range = opts.range ?? ps?.printArea ?? full
 
-  // 打印标题行: 标题在正文上方时,抽出标题条并把正文起点下移(避免重复)
-  let titleRange: MergeRange | null = null
+  // 打印标题行/列: 标题在正文上方/左侧时,抽出标题条,正文起点相应内移(避免重复)
+  let titleRows: [number, number] | null = null
+  let titleCols: [number, number] | null = null
+  let bodyTop = range.top
+  let bodyLeft = range.left
   if (withTitles && ps?.printTitleRows) {
-    const [tr0, tr1] = ps.printTitleRows
-    if (tr1 >= tr0 && tr0 <= range.top && tr1 < range.bottom) {
-      titleRange = { top: tr0, bottom: tr1, left: range.left, right: range.right }
-      range = { ...range, top: Math.max(range.top, tr1 + 1) }
+    const [a, b] = ps.printTitleRows
+    if (b >= a && a <= range.top && b < range.bottom) {
+      titleRows = [a, b]
+      bodyTop = Math.max(range.top, b + 1)
+    }
+  }
+  if (withTitles && ps?.printTitleCols) {
+    const [a, b] = ps.printTitleCols
+    if (b >= a && a <= range.left && b < range.right) {
+      titleCols = [a, b]
+      bodyLeft = Math.max(range.left, b + 1)
     }
   }
 
-  const base = r.exportToCanvas({
-    range,
-    scale: opts.scale,
-    includeHeaders: opts.includeHeaders,
-    gridlines: opts.gridlines,
-    background: opts.background,
-  })
-  const deco = await collectDecorations(s, base.metrics)
-  compositeOverlays(base, deco)
-
-  // 标题条用与正文相同的 scale/列范围渲染 → 等宽,可逐页堆叠
-  let repeatTop: ExportSheetImage['repeatTop']
-  if (titleRange) {
-    const strip = r.exportToCanvas({
-      range: titleRange,
-      scale: base.scale,
+  const render = (rg: MergeRange, scale?: number) =>
+    r.exportToCanvas({
+      range: rg,
+      scale: scale ?? opts.scale,
       includeHeaders: opts.includeHeaders,
       gridlines: opts.gridlines,
       background: opts.background,
     })
+
+  const base = render({ top: bodyTop, left: bodyLeft, bottom: range.bottom, right: range.right })
+  const deco = await collectDecorations(s, base.metrics)
+  compositeOverlays(base, deco)
+  const S = base.scale // 标题条用同一 scale → 与正文等宽/等高,可逐页拼接
+
+  let repeatTop: ExportSheetImage['repeatTop']
+  let repeatLeft: ExportSheetImage['repeatLeft']
+  let corner: ExportSheetImage['corner']
+  if (titleRows) {
+    const strip = render({ top: titleRows[0], bottom: titleRows[1], left: bodyLeft, right: range.right }, S)
     repeatTop = { canvas: strip.canvas, heightCss: strip.bodyH }
+  }
+  if (titleCols) {
+    const strip = render({ top: bodyTop, bottom: range.bottom, left: titleCols[0], right: titleCols[1] }, S)
+    repeatLeft = { canvas: strip.canvas, widthCss: strip.bodyW }
+  }
+  if (titleRows && titleCols) {
+    const c = render({ top: titleRows[0], bottom: titleRows[1], left: titleCols[0], right: titleCols[1] }, S)
+    corner = { canvas: c.canvas }
   }
 
   // 打印缩放: 非 fitToWidth 时套用 pageSetup.scale
-  const zoom = withTitles && opts.fitToWidth === false && ps?.scale ? ps.scale / 100 : undefined
+  const zoom = opts.fitToWidth === false && ps?.scale ? ps.scale / 100 : undefined
 
-  return { canvas: base.canvas, bodyWcss: base.bodyW, bodyHcss: base.bodyH, sheetName: s.name, repeatTop, zoom }
+  return {
+    canvas: base.canvas,
+    bodyWcss: base.bodyW,
+    bodyHcss: base.bodyH,
+    sheetName: s.name,
+    repeatTop,
+    repeatLeft,
+    corner,
+    zoom,
+  }
 }
 
 /** 为一个工作表生成矢量导出输入(逐格信息 + 兜底底图 + 图片图表 + 标题行) */
@@ -1154,20 +1180,29 @@ async function buildVectorSheet(sheetIdx: number, opts: PdfExportOptions): Promi
   const range = opts.range ?? ps?.printArea ?? full
 
   let titleRows: [number, number] | undefined
+  let titleCols: [number, number] | undefined
   let bodyTop = range.top
-  let rasterTop = range.top
+  let bodyLeft = range.left
   if (ps?.printTitleRows) {
-    const [tr0, tr1] = ps.printTitleRows
-    if (tr1 >= tr0 && tr0 <= range.top && tr1 < range.bottom) {
-      titleRows = [tr0, tr1]
-      bodyTop = Math.max(range.top, tr1 + 1)
-      rasterTop = Math.min(range.top, tr0)
+    const [a, b] = ps.printTitleRows
+    if (b >= a && a <= range.top && b < range.bottom) {
+      titleRows = [a, b]
+      bodyTop = Math.max(range.top, b + 1)
     }
   }
+  if (ps?.printTitleCols) {
+    const [a, b] = ps.printTitleCols
+    if (b >= a && a <= range.left && b < range.right) {
+      titleCols = [a, b]
+      bodyLeft = Math.max(range.left, b + 1)
+    }
+  }
+  // 兜底底图须覆盖 标题行/列 ∪ 正文(标题格无字体中文也要能裁图)
+  const rasterTop = titleRows ? Math.min(range.top, titleRows[0]) : range.top
+  const rasterLeft = titleCols ? Math.min(range.left, titleCols[0]) : range.left
 
-  // 兜底底图: 只画格子(不合成叠加层),覆盖 rasterTop..bottom × left..right
   const base = r.exportToCanvas({
-    range: { top: rasterTop, left: range.left, bottom: range.bottom, right: range.right },
+    range: { top: rasterTop, left: rasterLeft, bottom: range.bottom, right: range.right },
     scale: opts.scale,
     includeHeaders: false,
     gridlines: opts.gridlines,
@@ -1180,11 +1215,12 @@ async function buildVectorSheet(sheetIdx: number, opts: PdfExportOptions): Promi
   return {
     sheetName: s.name,
     metrics,
-    left: range.left,
-    right: range.right,
+    bodyLeft,
+    bodyRight: range.right,
     bodyTop,
     bodyBottom: range.bottom,
     titleRows,
+    titleCols,
     merges: s.merges,
     gridlines: opts.gridlines ?? s.showGridLines,
     zoom,
@@ -1192,6 +1228,7 @@ async function buildVectorSheet(sheetIdx: number, opts: PdfExportOptions): Promi
     rasterCanvas: base.canvas,
     rasterScale: base.scale,
     rasterTop,
+    rasterLeft,
     images,
   }
 }

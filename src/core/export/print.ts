@@ -25,6 +25,8 @@ export function printSheets(sheets: ExportSheetImage[], opts: PrintOptions = {})
       fitToWidth,
       zoom: sh.zoom,
       repeatTop: sh.repeatTop,
+      repeatLeft: sh.repeatLeft,
+      corner: sh.corner,
     })
     for (const pg of slices) {
       pagesHtml.push(

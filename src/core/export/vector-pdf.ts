@@ -17,24 +17,27 @@ import { anchorRect } from '../overlay/anchor'
 export interface VectorSheet {
   sheetName: string
   metrics: GridMetrics
-  /** 列范围(0-based 闭区间) */
-  left: number
-  right: number
+  /** 正文列范围(0-based 闭区间,已剔除标题列) */
+  bodyLeft: number
+  bodyRight: number
   /** 正文行范围(0-based 闭区间,已剔除标题行) */
   bodyTop: number
   bodyBottom: number
   /** 打印标题行 [r0,r1](每页顶部重复) */
   titleRows?: [number, number]
+  /** 打印标题列 [c0,c1](每页左侧重复) */
+  titleCols?: [number, number]
   merges: MergeRange[]
   gridlines: boolean
   /** 非 fitToWidth 时的打印缩放(pageSetup.scale/100) */
   zoom?: number
   /** 取一个格的绘制信息 */
   getCell: (row: number, col: number) => CellDrawInfo | null
-  /** 栅格兜底底图: 覆盖 [rasterTop..bodyBottom] 行 × [left..right] 列,设备像素 */
+  /** 栅格兜底底图: 覆盖 [rasterTop..bodyBottom] 行 × [rasterLeft..bodyRight] 列,设备像素 */
   rasterCanvas: HTMLCanvasElement
   rasterScale: number
   rasterTop: number
+  rasterLeft: number
   /** 图片/图表(已加载源 + 锚点),addImage 贴上 */
   images: { source: CanvasImageSource; anchor: ImageAnchor }[]
 }
@@ -127,117 +130,106 @@ function runBeforeRenderPage(fn: BeforeRenderPage | undefined, ctx: PdfPageConte
 
 interface SheetPlan {
   mmPerCss: number
-  ox: number // range 左上角 css(列)
-  oy: number
-  titleRows: number[]
-  titleHmm: number
-  pages: { rows: number[] }[] // 每页的正文行号列表
+  titleColCols: number[] // 标题列(列号)
+  titleRowRows: number[] // 标题行(行号)
+  titleColWmm: number // 标题列总宽 mm
+  titleRowHmm: number // 标题行总高 mm
+  pages: { cols: number[]; rows: number[] }[] // 每页的正文列/行号
 }
 
-/** 分页: 按行高把正文行打包到各页(每页至少一行) */
-function planSheet(vs: VectorSheet, page: { contentWmm: number; contentHmm: number; fitToWidth: boolean }): SheetPlan {
-  const m = vs.metrics
-  const ox = m.colLeft(vs.left)
-  const oy = m.rowTop(vs.bodyTop)
-  const bodyWcss = m.colLeft(vs.right + 1) - ox
-  const naturalWmm = bodyWcss * MM_PER_PX
-  const zoom = vs.zoom && vs.zoom > 0 ? vs.zoom : 1
-  const drawWmm = page.fitToWidth ? page.contentWmm : Math.min(naturalWmm * zoom, page.contentWmm)
-  const factor = naturalWmm > 0 ? drawWmm / naturalWmm : 1
-  const mmPerCss = MM_PER_PX * factor
-
-  const titleRows: number[] = []
-  if (vs.titleRows) {
-    for (let r = vs.titleRows[0]; r <= vs.titleRows[1]; r++) titleRows.push(r)
-  }
-  const titleHmm = titleRows.reduce((s, r) => s + m.rowHeight(r) * mmPerCss, 0)
-  const availHmm = Math.max(1, page.contentHmm - titleHmm)
-
-  const pages: { rows: number[] }[] = []
+/** 把一串索引按各自尺寸打包成多段(每段累计 ≤ maxMm;每段至少 1 个)。(导出供测) */
+export function packBands(indices: number[], sizeMm: (i: number) => number, maxMm: number): number[][] {
+  const out: number[][] = []
   let cur: number[] = []
   let acc = 0
-  for (let r = vs.bodyTop; r <= vs.bodyBottom; r++) {
-    const hmm = m.rowHeight(r) * mmPerCss
-    if (cur.length && acc + hmm > availHmm) {
-      pages.push({ rows: cur })
+  for (const idx of indices) {
+    const sz = sizeMm(idx)
+    if (cur.length && acc + sz > maxMm) {
+      out.push(cur)
       cur = []
       acc = 0
     }
-    cur.push(r)
-    acc += hmm
+    cur.push(idx)
+    acc += sz
   }
-  if (cur.length) pages.push({ rows: cur })
-  if (!pages.length) pages.push({ rows: [] })
-
-  return { mmPerCss, ox, oy: oy, titleRows, titleHmm, pages }
+  if (cur.length) out.push(cur)
+  if (!out.length) out.push([])
+  return out
 }
 
-/** 渲染一页: 标题行(若有) + 正文行,末尾贴图片/图表 */
+/** 二维分页: 列带 × 行带(先下后右) */
+function planSheet(vs: VectorSheet, page: { contentWmm: number; contentHmm: number; fitToWidth: boolean }): SheetPlan {
+  const m = vs.metrics
+  const bodyWcss = m.colLeft(vs.bodyRight + 1) - m.colLeft(vs.bodyLeft)
+  const titleColCols = vs.titleCols ? rangeArr(vs.titleCols[0], vs.titleCols[1]) : []
+  const titleRowRows = vs.titleRows ? rangeArr(vs.titleRows[0], vs.titleRows[1]) : []
+  const titleColWcss = titleColCols.reduce((s, c) => s + m.colWidth(c), 0)
+
+  const zoom = vs.zoom && vs.zoom > 0 ? vs.zoom : 1
+  const factor = page.fitToWidth
+    ? (bodyWcss + titleColWcss) * MM_PER_PX > 0
+      ? page.contentWmm / ((bodyWcss + titleColWcss) * MM_PER_PX)
+      : 1
+    : zoom
+  const mmPerCss = MM_PER_PX * factor
+
+  const titleColWmm = titleColWcss * mmPerCss
+  const titleRowHmm = titleRowRows.reduce((s, r) => s + m.rowHeight(r) * mmPerCss, 0)
+  const availWmm = Math.max(1, page.contentWmm - titleColWmm)
+  const availHmm = Math.max(1, page.contentHmm - titleRowHmm)
+
+  const bodyCols = rangeArr(vs.bodyLeft, vs.bodyRight)
+  const bodyRows = rangeArr(vs.bodyTop, vs.bodyBottom)
+  // fitToWidth → 列不分页(整宽一带)
+  const colBands = page.fitToWidth ? [bodyCols] : packBands(bodyCols, (c) => m.colWidth(c) * mmPerCss, availWmm)
+  const rowBands = packBands(bodyRows, (r) => m.rowHeight(r) * mmPerCss, availHmm)
+
+  const pages: { cols: number[]; rows: number[] }[] = []
+  for (const cols of colBands) for (const rows of rowBands) pages.push({ cols, rows })
+
+  return { mmPerCss, titleColCols, titleRowRows, titleColWmm, titleRowHmm, pages }
+}
+
+/** 渲染一页: 标题角 + 标题行 + 标题列 + 正文(各区域独立 x/y 映射),末尾贴图片 */
 function renderPage(
   doc: any,
   vs: VectorSheet,
   plan: SheetPlan,
-  pg: { rows: number[] },
+  pg: { cols: number[]; rows: number[] },
   margin: { top: number; left: number },
   baseFont: string,
   customFont: boolean,
 ) {
   const m = vs.metrics
-  const { mmPerCss, ox } = plan
-  const colX = (c: number) => margin.left + (m.colLeft(c) - ox) * mmPerCss
+  const { mmPerCss, titleColCols, titleRowRows, titleColWmm, titleRowHmm } = plan
+  const bodyX0 = margin.left + titleColWmm
+  const bodyY0 = margin.top + titleRowHmm
 
-  // 行号 → 本页 y 起点(mm)。先标题行,再正文行。
-  const rowY = new Map<number, number>()
-  let y = margin.top
-  for (const r of plan.titleRows) {
-    rowY.set(r, y)
-    y += m.rowHeight(r) * mmPerCss
-  }
-  const bodyStartY = y
-  for (const r of pg.rows) {
-    rowY.set(r, y)
-    y += m.rowHeight(r) * mmPerCss
-  }
+  // 各区域的列/行 x/y 映射(mm,格子左上角)
+  const colXbody = (c: number) => bodyX0 + (m.colLeft(c) - m.colLeft(pg.cols[0] ?? vs.bodyLeft)) * mmPerCss
+  const rowYbody = (r: number) => bodyY0 + (m.rowTop(r) - m.rowTop(pg.rows[0] ?? vs.bodyTop)) * mmPerCss
+  const colXtitle = (c: number) => margin.left + (m.colLeft(c) - m.colLeft(titleColCols[0] ?? 0)) * mmPerCss
+  const rowYtitle = (r: number) => margin.top + (m.rowTop(r) - m.rowTop(titleRowRows[0] ?? 0)) * mmPerCss
 
-  const drawnRows = [...plan.titleRows, ...pg.rows]
-  const covered = mergeCoverSet(vs.merges)
-  const anchorOf = mergeAnchorMap(vs.merges)
+  const ctx = { doc, vs, baseFont, customFont, mmPerCss }
+  // 正文
+  drawRegion(ctx, pg.rows, pg.cols, colXbody, rowYbody)
+  // 标题行(× 正文列)
+  if (titleRowRows.length) drawRegion(ctx, titleRowRows, pg.cols, colXbody, rowYtitle)
+  // 标题列(× 正文行)
+  if (titleColCols.length) drawRegion(ctx, pg.rows, titleColCols, colXtitle, rowYbody)
+  // 标题角
+  if (titleRowRows.length && titleColCols.length) drawRegion(ctx, titleRowRows, titleColCols, colXtitle, rowYtitle)
 
-  for (const r of drawnRows) {
-    const yTop = rowY.get(r)!
-    for (let c = vs.left; c <= vs.right; c++) {
-      const key = r + ':' + c
-      if (covered.has(key) && !anchorOf.has(key)) continue
-      const mg = anchorOf.get(key)
-      const spanRight = mg ? mg.right : c
-      const spanBottom = mg ? mg.bottom : r
-      const x = colX(c)
-      const w = colX(spanRight + 1) - x
-      const h = (m.rowTop(spanBottom + 1) - m.rowTop(r)) * mmPerCss
-
-      const info = vs.getCell(r, c)
-      if (!info) continue
-      const fallback = info.complex || (!customFont && hasNonLatin(info.text))
-      if (fallback) {
-        rasterCell(doc, vs, r, c, spanRight, spanBottom, x, yTop, w, h)
-      } else {
-        drawVectorCell(doc, info, x, yTop, w, h, mmPerCss, baseFont, customFont)
-      }
-      if (mg && mg.right > c) c = mg.right // 跳过被合并覆盖的后续列
-    }
-  }
-
-  // 轻网格线(可选;边框已在格上画,这里补无边框格的浅灰线)
-  if (vs.gridlines) drawGridlines(doc, vs, plan, drawnRows, rowY, margin)
-
-  // 图片/图表: 贴到其 from.row 所在页(本页)
+  // 图片/图表: from.row/col 落在本页正文区才贴
+  const rowSet = new Set(pg.rows)
   for (const im of vs.images) {
     const fr = im.anchor.from.row
-    if (!rowY.has(fr)) continue
+    const fc = im.anchor.from.col
+    if (!rowSet.has(fr) || fc < (pg.cols[0] ?? 0) || fc > (pg.cols[pg.cols.length - 1] ?? -1)) continue
     const rect = anchorRect(m, im.anchor)
-    const ix = margin.left + (rect.left - ox) * mmPerCss
-    const iyRow = rowY.get(fr)!
-    const iy = iyRow + (rect.top - m.rowTop(fr)) * mmPerCss
+    const ix = bodyX0 + (rect.left - m.colLeft(pg.cols[0])) * mmPerCss
+    const iy = bodyY0 + (rect.top - m.rowTop(pg.rows[0])) * mmPerCss
     try {
       const url = canvasSourceToDataUrl(im.source)
       if (url) doc.addImage(url, 'PNG', ix, iy, rect.width * mmPerCss, rect.height * mmPerCss, undefined, 'FAST')
@@ -245,7 +237,65 @@ function renderPage(
       /* 跳过 */
     }
   }
-  void bodyStartY
+}
+
+interface RegionCtx {
+  doc: any
+  vs: VectorSheet
+  baseFont: string
+  customFont: boolean
+  mmPerCss: number
+}
+
+/** 画一个区域(行集×列集): 逐格矢量/栅格 + 浅网格线;尊重合并 */
+function drawRegion(
+  ctx: RegionCtx,
+  rows: number[],
+  cols: number[],
+  xOf: (c: number) => number,
+  yOf: (r: number) => number,
+) {
+  const { doc, vs, baseFont, customFont, mmPerCss } = ctx
+  if (!rows.length || !cols.length) return
+  const m = vs.metrics
+  const covered = mergeCoverSet(vs.merges)
+  const anchorOf = mergeAnchorMap(vs.merges)
+  const cMin = cols[0]
+  const cMax = cols[cols.length - 1]
+
+  if (vs.gridlines) drawRegionGrid(doc, m, rows, cols, xOf, yOf, mmPerCss)
+
+  void cMin
+  for (const r of rows) {
+    const yTop = yOf(r)
+    for (let ci = 0; ci < cols.length; ci++) {
+      const c = cols[ci]
+      const key = r + ':' + c
+      if (covered.has(key) && !anchorOf.has(key)) continue
+      const mg = anchorOf.get(key)
+      const spanRight = mg ? Math.min(mg.right, cMax) : c
+      const spanBottom = mg ? mg.bottom : r
+      const x = xOf(c)
+      const w = (m.colLeft(spanRight + 1) - m.colLeft(c)) * mmPerCss
+      const h = (m.rowTop(spanBottom + 1) - m.rowTop(r)) * mmPerCss
+      const info = vs.getCell(r, c)
+      if (info) {
+        const fallback = info.complex || (!customFont && hasNonLatin(info.text))
+        if (fallback) rasterCell(doc, vs, r, c, spanRight, spanBottom, x, yTop, w, h)
+        else drawVectorCell(doc, info, x, yTop, w, h, mmPerCss, baseFont, customFont)
+      }
+      if (mg && mg.right > c) {
+        // 跳到合并块末列(限本区域内)
+        while (ci < cols.length - 1 && cols[ci + 1] <= mg.right) ci++
+      }
+    }
+  }
+}
+
+function rangeArr(a: number, b: number): number[] {
+  const out: number[] = []
+  for (let i = a; i <= b; i++) out.push(i)
+  return out
 }
 
 function drawVectorCell(
@@ -266,11 +316,33 @@ function drawVectorCell(
     doc.setFillColor(r, g, b)
     doc.rect(x, y, w, h, 'F')
   }
+  // 条件格式背景(盖在普通填充之上)
+  const eff = info.effect
+  if (eff?.fillColor) {
+    const [r, g, b] = hexToRgb(eff.fillColor)
+    doc.setFillColor(r, g, b)
+    doc.rect(x, y, w, h, 'F')
+  }
+  // 数据条
+  if (eff?.dataBar) {
+    const barW = Math.max(0, (w - 2 * mmPerCss) * eff.dataBar.ratio)
+    if (barW > 0) {
+      const [r, g, b] = hexToRgb(eff.dataBar.color)
+      doc.setFillColor(r, g, b)
+      doc.rect(x + mmPerCss, y + mmPerCss, barW, h - 2 * mmPerCss, 'F')
+    }
+  }
   // 边框
   drawBorder(doc, s.borders.top, x, y, x + w, y)
   drawBorder(doc, s.borders.bottom, x, y + h, x + w, y + h)
   drawBorder(doc, s.borders.left, x, y, x, y + h)
   drawBorder(doc, s.borders.right, x + w, y, x + w, y + h)
+  // 条件格式图标(画在左侧,文本相应右移)
+  let iconShift = 0
+  if (eff?.icon) {
+    drawVectorIcon(doc, eff.icon, x + 1.5 * mmPerCss, y + h / 2, Math.min(h * 0.32, 2.2 * mmPerCss))
+    iconShift = 5 * mmPerCss
+  }
   // 文本
   const text = info.text
   if (!text) return
@@ -296,7 +368,7 @@ function drawVectorCell(
     tx = x + w - pad
     align = 'right'
   } else {
-    tx = x + pad + (s.indent || 0) * 8 * mmPerCss
+    tx = x + pad + iconShift + (s.indent || 0) * 8 * mmPerCss
   }
   let ty: number
   let baseline: 'top' | 'middle' | 'bottom'
@@ -319,6 +391,47 @@ function drawVectorCell(
   }
 }
 
+/** 条件格式图标(矢量近似): 红黄绿圆点 / 三向箭头 / 色阶圆点 */
+function drawVectorIcon(doc: any, icon: { setName: string; level: number; count: number }, cx: number, cy: number, r: number) {
+  const name = icon.setName || ''
+  if (name.includes('Arrows')) {
+    // 箭头: 低→下(红) 中→平(黄) 高→上(绿)
+    const colors: [number, number, number][] = [
+      [214, 59, 59],
+      [232, 181, 58],
+      [91, 159, 78],
+    ]
+    const idx = icon.level === 0 ? 0 : icon.level >= icon.count - 1 ? 2 : 1
+    const [cr, cg, cb] = colors[idx]
+    doc.setDrawColor(cr, cg, cb)
+    doc.setLineWidth(r * 0.35)
+    if (idx === 1) {
+      doc.line(cx - r, cy, cx + r, cy) // 平
+    } else {
+      const dy = idx === 0 ? r : -r // 下 / 上
+      doc.line(cx, cy - dy, cx, cy + dy)
+      doc.line(cx, cy + dy, cx - r * 0.6, cy + dy - Math.sign(dy) * r * 0.6)
+      doc.line(cx, cy + dy, cx + r * 0.6, cy + dy - Math.sign(dy) * r * 0.6)
+    }
+    return
+  }
+  // 默认: 红/黄/绿圆点(交通灯/符号),或按色阶
+  const palette: [number, number, number][] = [
+    [214, 59, 59],
+    [232, 181, 58],
+    [91, 159, 78],
+  ]
+  const t = icon.count > 1 ? icon.level / (icon.count - 1) : 1
+  let col: [number, number, number]
+  if (name.includes('TrafficLights') || name.includes('Signs') || name.includes('Symbols')) {
+    col = palette[Math.min(icon.level, 2)]
+  } else {
+    col = [Math.round(214 - 123 * t), Math.round(59 + 100 * t), 59]
+  }
+  doc.setFillColor(col[0], col[1], col[2])
+  doc.circle(cx, cy, r, 'F')
+}
+
 function drawBorder(doc: any, edge: any, x1: number, y1: number, x2: number, y2: number) {
   if (!edge || !edge.style || edge.style === 'none') return
   const [r, g, b] = hexToRgb(edge.color || '#000000')
@@ -327,33 +440,30 @@ function drawBorder(doc: any, edge: any, x1: number, y1: number, x2: number, y2:
   doc.line(x1, y1, x2, y2)
 }
 
-/** 浅灰网格线: 给整片正文画 cell 边线(在内容之下视觉上够用,这里画在最后,线很浅) */
-function drawGridlines(
+/** 浅灰网格线: 给一个区域画行/列边线(线很浅,边框会覆盖在其上) */
+function drawRegionGrid(
   doc: any,
-  vs: VectorSheet,
-  plan: SheetPlan,
+  m: GridMetrics,
   rows: number[],
-  rowY: Map<number, number>,
-  margin: { left: number },
+  cols: number[],
+  xOf: (c: number) => number,
+  yOf: (r: number) => number,
+  mmPerCss: number,
 ) {
-  const m = vs.metrics
-  const { mmPerCss, ox } = plan
   doc.setDrawColor(224, 226, 229)
   doc.setLineWidth(0.1)
-  for (const r of rows) {
-    const y = rowY.get(r)!
-    const h = m.rowHeight(r) * mmPerCss
-    const x0 = margin.left + (m.colLeft(vs.left) - ox) * mmPerCss
-    const x1 = margin.left + (m.colLeft(vs.right + 1) - ox) * mmPerCss
-    doc.line(x0, y + h, x1, y + h) // 行底线
-  }
-  for (let c = vs.left; c <= vs.right + 1; c++) {
-    const x = margin.left + (m.colLeft(c) - ox) * mmPerCss
-    const yTop = rowY.get(rows[0])!
-    const lastR = rows[rows.length - 1]
-    const yBot = rowY.get(lastR)! + m.rowHeight(lastR) * mmPerCss
-    doc.line(x, yTop, x, yBot)
-  }
+  const cFirst = cols[0]
+  const cLast = cols[cols.length - 1]
+  const rFirst = rows[0]
+  const rLast = rows[rows.length - 1]
+  const x0 = xOf(cFirst)
+  const x1 = xOf(cLast) + m.colWidth(cLast) * mmPerCss
+  const y0 = yOf(rFirst)
+  const y1 = yOf(rLast) + m.rowHeight(rLast) * mmPerCss
+  for (const r of rows) doc.line(x0, yOf(r), x1, yOf(r)) // 行顶线
+  doc.line(x0, y1, x1, y1) // 末行底线
+  for (const c of cols) doc.line(xOf(c), y0, xOf(c), y1) // 列左线
+  doc.line(x1, y0, x1, y1) // 末列右线
 }
 
 /** 把某格从底图栅格裁出贴上(兜底) */
@@ -370,7 +480,7 @@ function rasterCell(
   h: number,
 ) {
   const m = vs.metrics
-  const sx = (m.colLeft(c) - m.colLeft(vs.left)) * vs.rasterScale
+  const sx = (m.colLeft(c) - m.colLeft(vs.rasterLeft)) * vs.rasterScale
   const sy = (m.rowTop(r) - m.rowTop(vs.rasterTop)) * vs.rasterScale
   const sw = (m.colLeft(spanRight + 1) - m.colLeft(c)) * vs.rasterScale
   const sh = (m.rowTop(spanBottom + 1) - m.rowTop(r)) * vs.rasterScale

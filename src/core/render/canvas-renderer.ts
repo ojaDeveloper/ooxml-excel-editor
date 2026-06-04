@@ -77,7 +77,13 @@ export interface CellDrawInfo {
   /** 有效字色(已并入条件格式/数字格式/超链接色) */
   color: string
   bold: boolean
-  /** 是否含矢量层画不动的效果(条件背景/数据条/图标/迷你图/旋转/富文本)→ 调用方栅格兜底 */
+  /** 条件格式可矢量化的效果(背景色/数据条/图标);无则省略 */
+  effect?: {
+    fillColor?: string
+    dataBar?: { ratio: number; color: string; gradient: boolean }
+    icon?: { setName: string; level: number; count: number }
+  }
+  /** 矢量层仍画不动的效果(迷你图/旋转/富文本)→ 调用方栅格兜底 */
   complex: boolean
 }
 
@@ -304,11 +310,8 @@ export class CanvasRenderer {
     const rotation = style.textRotation
     const sparkline = this.sparklineIndex.has(cellKey(row, col))
     const effect = this.cond.hasRules() ? this.cond.effectsFor(row, col, cell.raw ?? null) : null
-    const complex =
-      isRich ||
-      (!!rotation && rotation !== 0) ||
-      sparkline ||
-      !!(effect && (effect.fillColor || effect.dataBar || effect.icon))
+    // 条件背景/数据条/图标可矢量画;迷你图/旋转/富文本仍需栅格兜底
+    const complex = isRich || (!!rotation && rotation !== 0) || sparkline
 
     let color = style.font.color
     if (!isRich) {
@@ -318,7 +321,11 @@ export class CanvasRenderer {
         formatted.color ||
         (cell.type === 'hyperlink' ? this.workbook.themeColors[10] || '#0563C1' : style.font.color)
     }
-    return { style, text, color, bold: style.font.bold || !!effect?.bold, complex }
+    const vecEffect =
+      effect && (effect.fillColor || effect.dataBar || effect.icon)
+        ? { fillColor: effect.fillColor, dataBar: effect.dataBar, icon: effect.icon }
+        : undefined
+    return { style, text, color, bold: style.font.bold || !!effect?.bold, effect: vecEffect, complex }
   }
 
   /** 单元格的显示文本(套数字格式后);空返回 '' */
