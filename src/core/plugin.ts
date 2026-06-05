@@ -113,6 +113,14 @@ export interface ViewerApi {
   isEditing(): boolean
   /** 给区域套样式覆盖(E5;粗体/对齐/填充等);editable 时入命令栈(可撤销 + 发 cell-change + 记脏) */
   setStyle(range: MergeRange, patch: CellStyleOverride): boolean
+  /** 活动格当前背景填充色(#RRGGBB;无填充→白) —— 工具栏色板回显用 */
+  getActiveFillColor(): string
+  /** 活动格当前字体色(#RRGGBB;缺省黑) */
+  getActiveFontColor(): string
+  /** 给当前选区设背景填充色(null=清除填充);editable 时入命令栈 */
+  setSelectionFill(color: string | null): boolean
+  /** 给当前选区设字体色;editable 时入命令栈 */
+  setSelectionFontColor(color: string): boolean
   /** 合并区域(G1;清空被覆盖格,只留左上锚点);editable 时入命令栈 */
   mergeCells(range: MergeRange): boolean
   /** 拆分区域内的合并(G1);editable 时入命令栈 */

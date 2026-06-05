@@ -896,13 +896,10 @@ export class CanvasRenderer {
     const boxW = Math.max(1, w - pad * 2)
     const boxH = Math.max(1, h - pad * 2)
     const entry = this.workbook.cellImages?.get(id)
-    if (!entry || !entry.src) {
-      this.drawImagePlaceholder(boxX, boxY, boxW, boxH, zoom)
-      return
-    }
-    const el = this.getCellImageEl(entry.src)
+    const el = entry?.src ? this.getCellImageEl(entry.src) : null // 触发异步解码
     if (!el || !el.complete || el.naturalWidth === 0) {
-      this.drawImagePlaceholder(boxX, boxY, boxW, boxH, zoom)
+      // 加载中 / 缺图:**不画灰底**(露出单元格自身填充色,通常是白)。缺图时只画个淡图标提示,不盖底色。
+      if (!entry?.src) this.drawImagePlaceholder(boxX, boxY, boxW, boxH, zoom)
       return
     }
     // 按 fit 模式算目标矩形:fill=铺满变形;contain=等比留白;cover=等比裁剪铺满
@@ -944,22 +941,17 @@ export class CanvasRenderer {
     return el
   }
 
+  /** 缺图提示(仅画淡图标,**不盖底色** — 让单元格自身填充色透出来) */
   private drawImagePlaceholder(x: number, y: number, w: number, h: number, zoom: number): void {
     const ctx = this.ctx
-    ctx.save()
-    ctx.fillStyle = '#f2f4f7'
-    ctx.fillRect(x, y, w, h)
-    ctx.strokeStyle = '#d0d5dd'
-    ctx.lineWidth = 1
-    ctx.strokeRect(x + 0.5, y + 0.5, Math.max(0, w - 1), Math.max(0, h - 1))
     const fs = Math.min(h * 0.5, 14 * zoom)
-    if (fs >= 6) {
-      ctx.fillStyle = '#98a2b3'
-      ctx.font = `${fs}px sans-serif`
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      ctx.fillText('🖼', x + w / 2, y + h / 2)
-    }
+    if (fs < 6) return
+    ctx.save()
+    ctx.fillStyle = '#c0c6cf'
+    ctx.font = `${fs}px sans-serif`
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillText('🖼', x + w / 2, y + h / 2)
     ctx.restore()
   }
 

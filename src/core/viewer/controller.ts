@@ -1433,6 +1433,33 @@ export class ViewerController {
   setStyle(range: MergeRange, patch: CellStyleOverride): boolean {
     return this.edit.setStyle(range, patch)
   }
+
+  // ---- 背景色 / 字体色 回显 + 修改(WPS 风格工具栏用) ----
+  /** 活动格当前背景填充色(#RRGGBB);无填充/非纯色 → 默认白 #FFFFFF。 */
+  getActiveFillColor(): string {
+    const a = this.selActive
+    const snap = a ? this.edit.getCellSnapshot(a.row, a.col) : null
+    const fill = snap?.style?.fill
+    return (fill && fill.type === 'solid' && toHex6(fill.fgColor)) || '#FFFFFF'
+  }
+  /** 活动格当前字体色(#RRGGBB);缺省黑 #000000。 */
+  getActiveFontColor(): string {
+    const a = this.selActive
+    const snap = a ? this.edit.getCellSnapshot(a.row, a.col) : null
+    return toHex6(snap?.style?.font?.color) || '#000000'
+  }
+  /** 给当前选区设背景填充色(null = 清除填充);editable 时入命令栈。 */
+  setSelectionFill(color: string | null): boolean {
+    const sel = this.getSelection()
+    if (!sel) return false
+    return this.setStyle(sel, { fill: color ? { type: 'solid', fgColor: color } : { type: 'none' } })
+  }
+  /** 给当前选区设字体色;editable 时入命令栈。 */
+  setSelectionFontColor(color: string): boolean {
+    const sel = this.getSelection()
+    if (!sel) return false
+    return this.setStyle(sel, { font: { color } })
+  }
   /** 合并区域(G1;清空被覆盖格,只留左上锚点);editable 时入命令栈 */
   mergeCells(range: MergeRange): boolean {
     return this.edit.mergeCells(range)
@@ -1701,6 +1728,22 @@ type Hit =
 
 function cellRange(c: Cell): MergeRange {
   return { top: c.row, left: c.col, bottom: c.row, right: c.col }
+}
+
+/** css 颜色 → #RRGGBB(供 <input type=color> 回显);#RRGGBB[AA] 取前 6 位,rgb(a)(...) 转十六进制;识别不了返 ''。 */
+function toHex6(css: string | undefined): string {
+  if (!css) return ''
+  const m = /^#([0-9a-f]{6})(?:[0-9a-f]{2})?$/i.exec(css)
+  if (m) return '#' + m[1].toUpperCase()
+  const rgb = /rgba?\(([^)]+)\)/i.exec(css)
+  if (rgb) {
+    const p = rgb[1].split(',').map((s) => parseInt(s.trim(), 10))
+    if (p.length >= 3 && p.slice(0, 3).every((n) => Number.isFinite(n))) {
+      const h = (n: number) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, '0')
+      return ('#' + h(p[0]) + h(p[1]) + h(p[2])).toUpperCase()
+    }
+  }
+  return ''
 }
 
 function escapeHtml(s: string): string {

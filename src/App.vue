@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue'
+import { computed, ref, watch } from 'vue'
 import ExcelViewer from './components/ExcelViewer.vue'
 import { definePlugin } from './core/plugin'
 import type { ViewerApi } from './core/plugin'
@@ -40,6 +40,7 @@ const viewerRef = ref<ViewerApi | null>(null)
 // 编辑变更:记录到状态栏 + (DEV)挂 window 供 e2e 校验前后快照
 function onCellChange(p: { before: { text: string }; after: { text: string }; source: string }) {
   lastEvent.value = `[${p.source}] R?C? "${p.before.text}" → "${p.after.text}"`
+  selTick.value++ // 内容/样式变 → 颜色回显重算
   if (import.meta.env.DEV) (window as unknown as { __lastCellChange?: unknown }).__lastCellChange = p
 }
 // E3.5: 列宽/行高 + 脏状态变更(DEV 挂 window 供 e2e 校验)
@@ -95,6 +96,28 @@ function cellToFloat() {
   if (v && sel) v.convertCellImageToFloat(sel.top, sel.left)
 }
 const cellImageFit = ref<'fill' | 'contain' | 'cover'>('contain')
+// 背景色 / 字体色:回显当前活动格 + 改选区(WPS 风格)
+const selTick = ref(0)
+const activeFill = computed(() => {
+  void selTick.value
+  return viewerRef.value?.getActiveFillColor() ?? '#FFFFFF'
+})
+const activeFont = computed(() => {
+  void selTick.value
+  return viewerRef.value?.getActiveFontColor() ?? '#000000'
+})
+function setFill(e: Event) {
+  viewerRef.value?.setSelectionFill((e.target as HTMLInputElement).value)
+  selTick.value++
+}
+function setFont(e: Event) {
+  viewerRef.value?.setSelectionFontColor((e.target as HTMLInputElement).value)
+  selTick.value++
+}
+function clearFill() {
+  viewerRef.value?.setSelectionFill(null)
+  selTick.value++
+}
 
 // 开发环境把命令式 API 挂到 window,便于 e2e 计算 canvas 上的几何(如筛选按钮位置)
 if (import.meta.env.DEV) {
@@ -213,6 +236,13 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
       </button>
       <button v-if="src && editMode" class="sample-btn" @click="mergeSelection" title="合并选区(G1)">合并</button>
       <button v-if="src && editMode" class="sample-btn" @click="unmergeSelection" title="拆分选区(G1)">拆分</button>
+      <label v-if="src && editMode" class="sample-label" title="背景填充色(回显当前格 + 改选区,WPS 风格)">背景
+        <input type="color" :value="activeFill" @input="setFill" />
+      </label>
+      <label v-if="src && editMode" class="sample-label" title="字体颜色(回显当前格 + 改选区)">字体
+        <input type="color" :value="activeFont" @input="setFont" />
+      </label>
+      <button v-if="src && editMode" class="sample-btn" @click="clearFill" title="清除背景填充(还原无填充/白)">清除填充</button>
       <button v-if="src && editMode" class="sample-btn" @click="embedAll" title="整表浮动图就近嵌入各自单元格(WPS 浮动→嵌入/DISPIMG)">整表嵌入</button>
       <button v-if="src && editMode" class="sample-btn" @click="cellToFloat" title="把选中格的内嵌图拎成浮动图(WPS 嵌入→浮动)">格→图</button>
       <label v-if="src" class="sample-label" title="WPS 内嵌图贴合方式">贴合
@@ -237,7 +267,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         :read-only-ranges="[{ top: 1, left: 0, bottom: 1, right: 4 }]"
         :editor="demoSelectEditor"
         :toolbar="['find', 'filter', 'clear-filter', 'separator', 'copy', 'freeze', 'separator', 'zoom', 'export']"
-        @selection-change="(s) => (lastEvent = `选区 ${s.range.top + 1},${s.range.left + 1} → ${s.range.bottom + 1},${s.range.right + 1}`)"
+        @selection-change="(s) => { lastEvent = `选区 ${s.range.top + 1},${s.range.left + 1} → ${s.range.bottom + 1},${s.range.right + 1}`; selTick++ }"
         @cell-change="onCellChange"
         @dim-change="onDimChange"
         @dirty-change="onDirtyChange"

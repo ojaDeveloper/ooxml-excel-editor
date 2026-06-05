@@ -258,6 +258,7 @@ viewer.value.getRangeData(viewer.value.getSelection())  // 取"我选中的"区�
 |---|---|
 | 值 | `editCell(row,col,value)` · `editRange(range,values[][])` · `clearRange(range)` |
 | 样式 | `setStyle(range, patch)`(`patch` = `CellStyleOverride`:font/fill/borders/对齐/numFmt) |
+| 背景/字体色 | `getActiveFillColor()` · `getActiveFontColor()`(回显活动格当前色 #RRGGBB) · `setSelectionFill(color\|null)`(null=清除填充) · `setSelectionFontColor(color)` |
 | 列宽行高 | `setColumnWidth(col,px)` · `setRowHeight(row,px)` |
 | 行列结构 | `insertRows(at,count?)` · `deleteRows(at,count?)` · `insertCols(at,count?)` · `deleteCols(at,count?)` |
 | 图片 | `getImages()` · `addImage(anchor)` · `removeImage(i)` · `moveImage(i,dxPx,dyPx)` · `resizeImage(i,wPx,hPx)` |

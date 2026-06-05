@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useMemo, useReducer, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
 import { ExcelViewer, type ExcelViewerHandle } from '@/react'
 import { definePlugin } from '@/core/plugin'
@@ -32,6 +32,10 @@ function Demo() {
   const [fileName, setFileName] = useState('')
   const [editMode, setEditMode] = useState(false) // E0: 编辑模式闸门
   const [fit, setFit] = useState<'fill' | 'contain' | 'cover'>('contain') // WPS 内嵌图贴合方式(默认 contain 同 WPS)
+  const [, bumpSel] = useReducer((x: number) => x + 1, 0) // 选区/内容变 → 重渲(颜色回显)
+  // 稳定引用:demo 因 bumpSel 频繁重渲,这些 prop 若每次新建数组会让壳的 effect 反复重跑(清掉选区)
+  const readOnlyRanges = useMemo(() => [{ top: 1, left: 0, bottom: 1, right: 4 }], [])
+  const plugins = useMemo(() => [demoPlugin], [])
   const ref = useRef<ExcelViewerHandle>(null)
 
   // 开发期把命令式句柄挂 window,供 e2e 取几何/读数据(与 Vue demo 的 __excelViewer 对齐)
@@ -85,6 +89,31 @@ function Demo() {
         {editMode && (
           <button onClick={() => { const s = ref.current?.getSelection(); if (s) ref.current?.unmergeCells(s) }} title="拆分选区(G1)">
             拆分
+          </button>
+        )}
+        {editMode && (
+          <label style={{ fontSize: 13 }} title="背景填充色(回显当前格 + 改选区)">
+            背景
+            <input
+              type="color"
+              value={ref.current?.getActiveFillColor() ?? '#FFFFFF'}
+              onChange={(e) => { ref.current?.setSelectionFill(e.target.value); bumpSel() }}
+            />
+          </label>
+        )}
+        {editMode && (
+          <label style={{ fontSize: 13 }} title="字体颜色(回显当前格 + 改选区)">
+            字体
+            <input
+              type="color"
+              value={ref.current?.getActiveFontColor() ?? '#000000'}
+              onChange={(e) => { ref.current?.setSelectionFontColor(e.target.value); bumpSel() }}
+            />
+          </label>
+        )}
+        {editMode && (
+          <button onClick={() => { ref.current?.setSelectionFill(null); bumpSel() }} title="清除背景填充(还原无填充/白)">
+            清除填充
           </button>
         )}
         {editMode && (
@@ -148,13 +177,15 @@ function Demo() {
           ref={ref}
           src={src}
           fileName={fileName}
-          plugins={[demoPlugin]}
+          plugins={plugins}
           editable={editMode}
           cellImageFit={fit}
           recalc={editMode}
-          readOnlyRanges={[{ top: 1, left: 0, bottom: 1, right: 4 }]}
+          readOnlyRanges={readOnlyRanges}
           editor={demoSelectEditor}
+          onSelectionChange={() => bumpSel()}
           onCellChange={(p) => {
+            bumpSel() // 颜色回显随内容/样式变更刷新
             if (import.meta.env.DEV) (window as unknown as { __lastCellChange?: unknown }).__lastCellChange = p
           }}
           onDimChange={(p) => {
