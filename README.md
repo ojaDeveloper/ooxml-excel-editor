@@ -1,4 +1,4 @@
-# ooxml-excel-preview
+# ooxml-excel-editor
 
 > Vue 3 + React 高保真 **.xlsx 预览 / 编辑组件** —— Canvas 渲染,**默认只读预览,可选开启编辑**。从零实现解析与渲染,尽量还原微软 Excel 打开工作簿的观感。
 
@@ -28,13 +28,13 @@
 
 ```bash
 # Vue 项目
-npm i ooxml-excel-preview vue exceljs
+npm i ooxml-excel-editor vue exceljs
 
 # React 项目
-npm i ooxml-excel-preview react react-dom exceljs
+npm i ooxml-excel-editor react react-dom exceljs
 
 # 只解析 / 读数据 / 导出(不渲染 UI)
-npm i ooxml-excel-preview exceljs
+npm i ooxml-excel-editor exceljs
 
 # echarts 可选:仅渲染图表时需要;jspdf 可选:仅导出 PDF 时需要
 npm i echarts jspdf
@@ -46,9 +46,9 @@ npm i hyperformula
 
 | import | 内容 | 需要的 peer |
 |---|---|---|
-| `ooxml-excel-preview` | Vue 3 组件 `<ExcelViewer>` | `vue` + `exceljs` |
-| `ooxml-excel-preview/react` | React 组件 `<ExcelViewer>` | `react` + `react-dom` + `exceljs` |
-| `ooxml-excel-preview/core` | 框架无关引擎(解析/渲染/控制器/导出/读数据) | `exceljs` |
+| `ooxml-excel-editor` | Vue 3 组件 `<ExcelViewer>` | `vue` + `exceljs` |
+| `ooxml-excel-editor/react` | React 组件 `<ExcelViewer>` | `react` + `react-dom` + `exceljs` |
+| `ooxml-excel-editor/core` | 框架无关引擎(解析/渲染/控制器/导出/读数据) | `exceljs` |
 
 `exceljs` 必需;`vue` / `react` / `react-dom` 按框架二选一(均为可选 peer);`echarts` / `jspdf` / `hyperformula` 为**可选** peer —— 未装分别只影响"图表渲染""PDF 导出""公式重算",其余正常,且**绝不打包进你的产物**(运行时才动态加载)。
 
@@ -61,8 +61,8 @@ npm i hyperformula
 ```vue
 <script setup lang="ts">
 import { ref } from 'vue'
-import { ExcelViewer } from 'ooxml-excel-preview'
-import 'ooxml-excel-preview/style.css'
+import { ExcelViewer } from 'ooxml-excel-editor'
+import 'ooxml-excel-editor/style.css'
 
 const file = ref<File>()
 </script>
@@ -84,7 +84,7 @@ const file = ref<File>()
 
 ```tsx
 import { useRef, useState } from 'react'
-import { ExcelViewer, type ExcelViewerHandle } from 'ooxml-excel-preview/react'
+import { ExcelViewer, type ExcelViewerHandle } from 'ooxml-excel-editor/react'
 
 export function Preview() {
   const [file, setFile] = useState<File>()
@@ -109,14 +109,14 @@ export function Preview() {
 
 ```ts
 // 解析 + 读数据 + 导出,全程不依赖任何框架
-import { parseWorkbook, loadArrayBuffer, getSheetData, WorkbookExporter } from 'ooxml-excel-preview/core'
+import { parseWorkbook, loadArrayBuffer, getSheetData, WorkbookExporter } from 'ooxml-excel-editor/core'
 ```
 
 ### 全局注册(Vue 插件)
 
 ```ts
-import OoxmlExcelPreview from 'ooxml-excel-preview'
-import 'ooxml-excel-preview/style.css'
+import OoxmlExcelPreview from 'ooxml-excel-editor'
+import 'ooxml-excel-editor/style.css'
 
 app.use(OoxmlExcelPreview) // 注册全局组件 <ExcelViewer />
 ```
@@ -127,7 +127,7 @@ app.use(OoxmlExcelPreview) // 注册全局组件 <ExcelViewer />
 
 **A. 独立函数**(配 `parseWorkbook`,不渲染也能用):
 ```ts
-import { parseWorkbook, loadArrayBuffer, getSheetData, sheetToJSON, getCellText, getWorkbookJSON } from 'ooxml-excel-preview'
+import { parseWorkbook, loadArrayBuffer, getSheetData, sheetToJSON, getCellText, getWorkbookJSON } from 'ooxml-excel-editor'
 
 const wb = await parseWorkbook(await loadArrayBuffer(file))
 const sheet = wb.sheets[0]
@@ -397,7 +397,7 @@ await viewer.value.downloadPdf({
 ### 插件 `definePlugin`
 把上面所有扩展点(主题/数据钩子/渲染钩子/事件/overlay/命令式 API)打包成一个插件,`:plugins` 分发;多个插件按数组顺序合并,组件自身 props 最后覆盖。
 ```ts
-import { definePlugin } from 'ooxml-excel-preview'
+import { definePlugin } from 'ooxml-excel-editor'
 
 const highlightNegatives = definePlugin({
   name: 'highlight-negatives',
@@ -477,12 +477,12 @@ MIT
 A **Vue 3 + React high-fidelity `.xlsx` preview & edit component** with a from-scratch parser and canvas renderer. Renders cells, number formats, merges, conditional formatting, images, charts (via ECharts), sparklines, comments, data validation, frozen panes, and supports selection / copy / hyperlinks. **Read-only by default**; set `editable` to enable editing — cell values / styles / column-row sizes / floating images / insert-delete rows-cols, with undo-redo, before/after full-snapshot events, dirty tracking + reset-to-original, swappable formula recalc engine, custom cell editors, and **export back to .xlsx / JSON / CSV**. Parsing runs in a Web Worker (with main-thread fallback). `vue` / `react` / `exceljs` are peer dependencies; `echarts` / `jspdf` / `hyperformula` are optional peers (charts / PDF / formula recalc).
 
 ```bash
-npm i ooxml-excel-preview vue exceljs
+npm i ooxml-excel-editor vue exceljs
 ```
 
 ```ts
-import { ExcelViewer } from 'ooxml-excel-preview'
-import 'ooxml-excel-preview/style.css'
+import { ExcelViewer } from 'ooxml-excel-editor'
+import 'ooxml-excel-editor/style.css'
 ```
 
 See the API table above. MIT licensed.

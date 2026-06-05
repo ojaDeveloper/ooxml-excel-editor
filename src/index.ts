@@ -1,9 +1,9 @@
 /**
  * 组件库入口。其它项目这样用:
- *   import { ExcelViewer } from 'ooxml-excel-preview'
- *   import 'ooxml-excel-preview/style.css'
+ *   import { ExcelViewer } from 'ooxml-excel-editor'
+ *   import 'ooxml-excel-editor/style.css'
  * 或全局注册:
- *   import OoxmlExcelPreview from 'ooxml-excel-preview'
+ *   import OoxmlExcelPreview from 'ooxml-excel-editor'
  *   app.use(OoxmlExcelPreview)
  */
 import type { App, Plugin } from 'vue'

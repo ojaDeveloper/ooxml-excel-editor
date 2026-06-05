@@ -1,7 +1,7 @@
 /**
  * React 入口。其它 React 项目这样用:
- *   import { ExcelViewer } from 'ooxml-excel-preview/react'
- *   import 'ooxml-excel-preview/react/style.css'   // (打包后)
+ *   import { ExcelViewer } from 'ooxml-excel-editor/react'
+ *   import 'ooxml-excel-editor/react/style.css'   // (打包后)
  *
  * 与 Vue 版共用同一套 core 引擎(ViewerController + 解析/渲染/导出)。
  */

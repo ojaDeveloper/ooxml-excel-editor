@@ -1,4 +1,4 @@
-# ooxml-excel-preview — 项目开发准则(AI 与贡献者必读)
+# ooxml-excel-editor — 项目开发准则(AI 与贡献者必读)
 
 > Vue3(将来 + React)高保真 .xlsx 预览组件。从零实现解析与 Canvas 渲染,只读。
 
@@ -7,7 +7,7 @@
 1. **好文档** —— 同时服务**调用方**(怎么用)和**二开者**(怎么改/扩展)。改公开 API/扩展点/导出,必须同步更新 README + 相关文档(ARCHITECTURE/CONTRIBUTING/各包 README + CHANGELOG)。README 的 props 表 / 导出表 / 选项表要与代码一致。
 2. **可发布** —— 始终保持能 `npm publish` 的状态:exports/main/module/types 对、`.d.ts` 完整、peer 依赖(vue/react/exceljs 必需,echarts/jspdf 可选)**绝不打包进产物**、占位元数据要清。
 3. **Vue + React 共存** —— `core` 框架无关,Vue/React 各是薄壳共享同一 `core`。**禁止在 `core` 里 import vue/react**。新功能优先做进 `core`(框架无关),壳只做桥接。
-4. **包名清晰** —— 现状: **单包三子入口**(`ooxml-excel-preview` = Vue 壳 / `/react` = React 壳 / `/core` = 框架无关引擎),三者共享同一 `dist/core.js`。后续生态大了可平滑拆成真正的 workspace 三包(`@scope/core`+`/vue`+`/react`);现阶段单包多入口已满足"按框架各取所需",不过度拆包。
+4. **包名清晰** —— 现状: **单包三子入口**(`ooxml-excel-editor` = Vue 壳 / `/react` = React 壳 / `/core` = 框架无关引擎),三者共享同一 `dist/core.js`。后续生态大了可平滑拆成真正的 workspace 三包(`@scope/core`+`/vue`+`/react`);现阶段单包多入口已满足"按框架各取所需",不过度拆包。
 5. **扩展点** —— 保留并尊重已有扩展点:`:theme` / `transformModel` / `cellStyle` / 事件 / `overlay` slot / `rectOf` 命令式 API。新增能力优先做成可配置/可覆盖,而非写死。跨框架时把 Vue 特定扩展点(如 `overlay` 返回 VNode)做成框架无关(返回 DOM/描述)。
 6. **插件机制** —— `definePlugin` 打包 theme/transformModel/cellStyle/events/overlay/toolbar/setup;多插件按数组合并、组件 props 最后覆盖。改动不得破坏此契约;插件应跨框架可用。
 

@@ -13,9 +13,9 @@
 
 | import 路径 | 产物 | 内容 | peer |
 |---|---|---|---|
-| `ooxml-excel-preview` | `dist/index.js` | Vue 3 壳 `<ExcelViewer>` | `vue` + `exceljs` |
-| `ooxml-excel-preview/react` | `dist/react.js` | React 壳 `<ExcelViewer>` | `react`+`react-dom`+`exceljs` |
-| `ooxml-excel-preview/core` | `dist/core.js` | 框架无关引擎 | `exceljs` |
+| `ooxml-excel-editor` | `dist/index.js` | Vue 3 壳 `<ExcelViewer>` | `vue` + `exceljs` |
+| `ooxml-excel-editor/react` | `dist/react.js` | React 壳 `<ExcelViewer>` | `react`+`react-dom`+`exceljs` |
+| `ooxml-excel-editor/core` | `dist/core.js` | 框架无关引擎 | `exceljs` |
 
 `index.js` / `react.js` 都 `import './core.js'`。`vue`/`react`/`react-dom`/`exceljs`/`echarts`/`jspdf` 全 external,不打进产物。生态变大时可平滑拆成真正的 workspace 三包,**无需改源码结构**(壳早已只依赖 `core/` 的公共导出)。
 

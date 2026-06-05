@@ -7,7 +7,7 @@
 [package.json](./package.json) 这几项发布前改成真实值:
 
 - `author`:目前为空 → 你的名字 / 邮箱
-- `repository.url` / `homepage` / `bugs.url`:目前是 `your-org/ooxml-excel-preview` → 真实 GitHub 仓库
+- `repository.url` / `homepage` / `bugs.url`:目前是 `your-org/ooxml-excel-editor` → 真实 GitHub 仓库
 - [LICENSE](./LICENSE) 版权人:可改成你的名字
 
 > 这些是**对外发布的身份信息**,需你本人确认;占位值发布出去会留下死链。
@@ -15,9 +15,9 @@
 ## 2. 包名可用性
 
 ```bash
-npm view ooxml-excel-preview version   # 报 404 = 名字可用;有版本号 = 已被占
+npm view ooxml-excel-editor version   # 报 404 = 名字可用;有版本号 = 已被占
 ```
-被占就改名,或加 scope:`@你的用户名/ooxml-excel-preview`(scope 包发布要 `--access public`)。
+被占就改名,或加 scope:`@你的用户名/ooxml-excel-editor`(scope 包发布要 `--access public`)。
 
 ## 3. 发布
 

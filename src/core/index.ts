@@ -1,5 +1,5 @@
 /**
- * 框架无关 core 入口(供 'ooxml-excel-preview/core' 及 Vue / React 壳复用)。
+ * 框架无关 core 入口(供 'ooxml-excel-editor/core' 及 Vue / React 壳复用)。
  * 这里只暴露引擎 + 解析 + 数据 + 类型,零框架依赖 —— Vue/React 各自的壳在上层包。
  */
 
