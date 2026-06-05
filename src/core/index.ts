@@ -68,8 +68,9 @@ export type {
   CellChangePayload,
   DimChangePayload,
   DirtyChangePayload,
+  ImageChangePayload,
 } from './edit/edit-controller'
-export { isDimCommand } from './edit/commands'
+export { isDimCommand, isImageCommand } from './edit/commands'
 export type { EditCommand, CellPos, DimAxis } from './edit/commands'
 export { buildCellSnapshot, cloneCell } from './model/snapshot'
 export type { CellSnapshot } from './model/snapshot'
@@ -84,6 +85,10 @@ export {
   restoreDimension,
   applyStyleOverride,
   mergeStyleOverride,
+  addImage,
+  removeImage,
+  setImageRect,
+  cloneImageAnchor,
 } from './model/mutations'
 export { cloneWorkbook, restoreWorkbookInto } from './model/clone'
 // ---- 公式重算(E4;可换引擎,HyperFormula 默认 + 可选 peer) ----

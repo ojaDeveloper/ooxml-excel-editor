@@ -21,7 +21,7 @@ import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { ViewerController, type TooltipState, type FindState } from '@/core/viewer/controller'
 import type { EditConfig } from '@/core/edit/types'
 import type { FormulaEngineFactory } from '@/core/formula/engine'
-import type { CellChangePayload, DimChangePayload, DirtyChangePayload } from '@/core/edit/edit-controller'
+import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload } from '@/core/edit/edit-controller'
 import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
 import { revokeImages } from '@/core/finalize'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '@/core/export'
@@ -141,6 +141,8 @@ const emit = defineEmits<{
   (e: 'dim-change', payload: DimChangePayload): void
   /** 脏状态变更(有/无未保存修改) */
   (e: 'dirty-change', payload: DirtyChangePayload): void
+  /** 图片增删移改(前后 ImageAnchor) */
+  (e: 'image-change', payload: ImageChangePayload): void
 }>()
 
 const { loading, error, workbook, load, progress } = useExcelDocument()
@@ -521,6 +523,11 @@ const viewerApi: ViewerApi = {
   editRange: (range, values) => controller?.editRange(range, values) ?? false,
   clearRange: (range) => controller?.clearRange(range) ?? false,
   setStyle: (range, patch) => controller?.setStyle(range, patch) ?? false,
+  getImages: () => controller?.getImages() ?? [],
+  addImage: (a) => controller?.addImage(a) ?? -1,
+  removeImage: (i) => controller?.removeImage(i) ?? false,
+  moveImage: (i, dx, dy) => controller?.moveImage(i, dx, dy) ?? false,
+  resizeImage: (i, w, h) => controller?.resizeImage(i, w, h) ?? false,
   undo: () => controller?.undo(),
   redo: () => controller?.redo(),
   canUndo: () => controller?.canUndo() ?? false,

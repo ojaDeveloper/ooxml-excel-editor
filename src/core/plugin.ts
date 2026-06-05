@@ -13,7 +13,7 @@
  *   <ExcelViewer :plugins="[myPlugin]" />   // Vue
  *   <ExcelViewer plugins={[myPlugin]} />    // React —— 同一插件,两框架通用
  */
-import type { CellStyleFn, CellStyleOverride, MergeRange, TransformModelFn, WorkbookModel } from './model/types'
+import type { CellStyleFn, CellStyleOverride, ImageAnchor, MergeRange, TransformModelFn, WorkbookModel } from './model/types'
 import type { CellValue, ReadOptions, SheetToJSONOptions } from './model/data-access'
 import type { CellSnapshot } from './model/snapshot'
 import type { EditorResolver } from './edit/editor-context'
@@ -39,6 +39,7 @@ export type PluginEvent =
   | 'edit-commit'
   | 'dim-change'
   | 'dirty-change'
+  | 'image-change'
 
 /** 命令式 API(组件 ref 与插件 ctx 共用) */
 export interface ViewerApi {
@@ -97,6 +98,16 @@ export interface ViewerApi {
   isEditing(): boolean
   /** 给区域套样式覆盖(E5;粗体/对齐/填充等);editable 时入命令栈(可撤销 + 发 cell-change + 记脏) */
   setStyle(range: MergeRange, patch: CellStyleOverride): boolean
+  /** 读当前表全部图片锚点(克隆;E6) */
+  getImages(): ImageAnchor[]
+  /** 加一张图(无 src 但有 bytes+mime 时自动生成 blob url);返回插入索引 */
+  addImage(anchor: ImageAnchor): number
+  /** 删一张图 */
+  removeImage(index: number): boolean
+  /** 移动图片(屏幕像素增量);editable 时入命令栈 + 发 image-change */
+  moveImage(index: number, dxPx: number, dyPx: number): boolean
+  /** 缩放图片(目标屏幕像素宽高);editable 时入命令栈 + 发 image-change */
+  resizeImage(index: number, widthPx: number, heightPx: number): boolean
   /** 程序化设列宽(px,模型单位);editable 时入命令栈(可撤销 + 发 dim-change + 记脏) */
   setColumnWidth(col: number, width: number): boolean
   /** 程序化设行高(px,模型单位);editable 时入命令栈 */

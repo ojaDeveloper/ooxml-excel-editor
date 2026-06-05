@@ -3,16 +3,25 @@
  * 发"前后完整快照"事件、暴露命令式编辑 API + 查询 API。组合进 ViewerController(非继承)。
  * 这是要求 5("一切都有 API/事件")的承重墙:UI/公式/导出都建在它上面。
  */
-import type { CellStyleOverride, ColumnInfo, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
+import type { CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import type { CellValue } from '../model/data-access'
 import { buildCellSnapshot, type CellSnapshot } from '../model/snapshot'
 import { cloneWorkbook, restoreWorkbookInto } from '../model/clone'
-import { applyCommand, affectedOf, isDimCommand, type CellPos, type DimAxis, type EditCommand } from './commands'
+import { cloneImageAnchor } from '../model/mutations'
+import { applyCommand, affectedOf, isDimCommand, isImageCommand, type CellPos, type DimAxis, type EditCommand } from './commands'
 import type { FormulaEngine, FormulaEngineFactory } from '../formula/engine'
 import { collectDirty, writeDirty, dependentsOnSheet } from '../formula/recalc'
 
-export type EditEventName = 'cell-change' | 'edit-start' | 'edit-commit' | 'dim-change' | 'dirty-change'
+export type EditEventName = 'cell-change' | 'edit-start' | 'edit-commit' | 'dim-change' | 'dirty-change' | 'image-change'
 export type EditSource = 'api' | 'ui' | 'undo' | 'redo'
+
+/** 图片变更事件载荷(before/after = ImageAnchor 克隆;add → before=null;remove → after=null) */
+export interface ImageChangePayload {
+  index: number
+  before: ImageAnchor | null
+  after: ImageAnchor | null
+  source: EditSource
+}
 
 export interface CellChangePayload {
   before: CellSnapshot
@@ -51,6 +60,8 @@ export interface EditControllerHost {
   getEngineFactory(): FormulaEngineFactory | null
   /** 模型变更后回调:重建几何 + 重绘 */
   onModelChange(): void
+  /** 图片结构变化(增删)→ 重建叠加层(重绘不够,要新建/移除 DOM)。移动只需 onModelChange 重定位。 */
+  rebuildOverlays(): void
   /** 发编辑事件(壳转 emit + 插件派发) */
   emit(event: EditEventName, payload: unknown): void
 }
@@ -202,6 +213,47 @@ export class EditController {
     return !!inv
   }
 
+  // ---- 图片编辑(浮动/嵌入;E6) ----
+  /** 读当前表全部图片锚点(克隆,防外部改)。 */
+  getImages(): ImageAnchor[] {
+    const s = this.host.getSheet()
+    return s ? s.images.map(cloneImageAnchor) : []
+  }
+  /** 加一张图,返回插入索引(失败 -1)。 */
+  addImage(anchor: ImageAnchor): number {
+    if (!this.host.isEditingEnabled()) return -1
+    this.ensureBaseline()
+    const inv = this.exec({ kind: 'image-add', anchor }, 'api')
+    if (inv && inv.kind === 'image-remove') {
+      this.pushUndo(inv)
+      this.markDirty()
+      return inv.index
+    }
+    return -1
+  }
+  /** 删一张图。 */
+  removeImage(index: number): boolean {
+    if (!this.host.isEditingEnabled()) return false
+    const s = this.host.getSheet()
+    if (!s || !s.images[index]) return false
+    this.ensureBaseline()
+    const inv = this.exec({ kind: 'image-remove', index }, 'api')
+    if (inv) {
+      this.pushUndo(inv)
+      this.markDirty()
+    }
+    return !!inv
+  }
+  /**
+   * 补登一次图片移动/缩放(拖拽/programmatic:模型已被 setImageRect 改完,这里只补 undo + 发 image-change)。
+   * baseline 须在变更前由调用方 ensureBaseline() 捕获。
+   */
+  recordImageEdit(index: number, before: ImageAnchor, after: ImageAnchor): void {
+    this.pushUndo({ kind: 'image-set', index, anchor: before })
+    this.markDirty()
+    this.host.emit('image-change', { index, before, after, source: 'ui' } satisfies ImageChangePayload)
+  }
+
   // ---- 维度编辑(列宽/行高;E3.5:resize 入命令栈) ----
   /** 程序化设列宽/行高(API 路径:apply-via-command)。返回是否生效。 */
   setDimension(axis: DimAxis, index: number, size: number): boolean {
@@ -310,6 +362,17 @@ export class EditController {
       this.host.onModelChange()
       const after = currentDimSize(sheet, cmd.axis, cmd.index)
       this.host.emit('dim-change', { axis: cmd.axis, index: cmd.index, before, after, source } satisfies DimChangePayload)
+      return inverse
+    }
+    // 图片族:发 image-change(增删重建叠加层 / 移动重定位)
+    if (isImageCommand(cmd)) {
+      const index = cmd.kind === 'image-add' ? (cmd.index ?? sheet.images.length) : cmd.index
+      const before = cmd.kind === 'image-add' ? null : (sheet.images[cmd.index] ? cloneImageAnchor(sheet.images[cmd.index]) : null)
+      const { inverse } = applyCommand(sheet, cmd)
+      const after = cmd.kind === 'image-remove' ? null : (sheet.images[index] ? cloneImageAnchor(sheet.images[index]) : null)
+      if (cmd.kind === 'image-set') this.host.onModelChange()
+      else this.host.rebuildOverlays()
+      this.host.emit('image-change', { index, before, after, source } satisfies ImageChangePayload)
       return inverse
     }
     // 单元格族:逐格发前后完整快照

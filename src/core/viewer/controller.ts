@@ -10,8 +10,10 @@
  * onSelectionChange(壳据此 +1 让选区相关计算属性重算)、onCellClick/onCellDblClick/onHyperlink/onFilterButton/onTooltip
  * (交互回调,壳决定 emit / 插件派发 / 策略)。壳不需镜像 contentSize/selection —— 直接读控制器。
  */
-import type { CellModel, CellStyleOverride, ColumnInfo, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
+import type { CellModel, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
+import { setImageRect, cloneImageAnchor } from '../model/mutations'
+import { anchorRect } from '../overlay/anchor'
 import type { EditConfig } from '../edit/types'
 import { resolveEditable } from '../edit/permissions'
 import { EditController, type EditControllerHost, type EditEventName } from '../edit/edit-controller'
@@ -119,8 +121,13 @@ export class ViewerController {
   private selMode: 'range' | 'rows' | 'cols' = 'range'
 
   // ---- 拖拽态 ----
-  private dragMode: 'none' | 'cell' | 'row' | 'col' | 'resize-col' | 'resize-row' = 'none'
+  private dragMode: 'none' | 'cell' | 'row' | 'col' | 'resize-col' | 'resize-row' | 'image' = 'none'
   private resizeTarget = -1 // 正在拖拽改宽高的列/行索引
+  // 图片拖拽态(E6)
+  private imageDragIdx = -1
+  private imageDragStartRect: { left: number; top: number; width: number; height: number } | null = null
+  private imageDragStartMouse = { x: 0, y: 0 }
+  private imageDragBefore: ImageAnchor | null = null
   private resizeStartPos = 0 // 起始鼠标坐标(px)
   private resizeStartSize = 0 // 起始宽/高(px,zoom 后)
   private resizeStartInfo: ColumnInfo | RowInfo | null = null // 拖拽起始的列/行维度信息(克隆,供 undo)
@@ -182,6 +189,9 @@ export class ViewerController {
         this.renderer?.rebuildMetrics()
         this.refreshContentSize()
         this.render()
+      },
+      rebuildOverlays: () => {
+        if (this.sheet && this.renderer) void this.overlays.build(this.sheet, this.renderer, this.view)
       },
       emit: (event, payload) => this.hooks.onEditEvent(event, payload),
     }
@@ -516,6 +526,19 @@ export class ViewerController {
         return
       }
     }
+    // 图片拖拽移动(editable;命中浮动图 → 进入 image 拖拽,优先于选区)
+    if (r && p && this.editCfg.editable && this.sheet) {
+      const imgIdx = this.imageHitAt(p)
+      if (imgIdx >= 0) {
+        this.dragMode = 'image'
+        this.imageDragIdx = imgIdx
+        this.imageDragStartRect = anchorRect(r.metrics, this.sheet.images[imgIdx])
+        this.imageDragStartMouse = { x: p.x, y: p.y }
+        this.imageDragBefore = cloneImageAnchor(this.sheet.images[imgIdx])
+        this.edit.ensureBaseline()
+        return
+      }
+    }
     // 表头边界拖拽改宽高(优先于选择)
     if (r && p) {
       if (p.y < r.metrics.colHeaderHeight) {
@@ -566,6 +589,23 @@ export class ViewerController {
       const p = this.localXY(e)
       if (!r || !p) return
       this.dragMoved = true
+      if (this.dragMode === 'image' && this.imageDragStartRect && this.sheet) {
+        const dx = p.x - this.imageDragStartMouse.x
+        const dy = p.y - this.imageDragStartMouse.y
+        setImageRect(
+          this.sheet,
+          this.imageDragIdx,
+          {
+            left: this.imageDragStartRect.left + dx,
+            top: this.imageDragStartRect.top + dy,
+            width: this.imageDragStartRect.width,
+            height: this.imageDragStartRect.height,
+          },
+          this.view.zoom,
+        )
+        this.render() // 重定位叠加层(图片 el 按 index 重读锚点)
+        return
+      }
       if (this.dragMode === 'resize-col') {
         this.setColWidthPx(this.resizeTarget, this.resizeStartSize + (p.x - this.resizeStartPos))
         return
@@ -614,8 +654,33 @@ export class ViewerController {
       this.endResizeRecord('col', this.resizeTarget)
     } else if (this.dragMode === 'resize-row') {
       this.endResizeRecord('row', this.resizeTarget)
+    } else if (this.dragMode === 'image') {
+      if (this.dragMoved && this.imageDragBefore && this.sheet) {
+        const after = cloneImageAnchor(this.sheet.images[this.imageDragIdx])
+        this.edit.recordImageEdit(this.imageDragIdx, this.imageDragBefore, after)
+      }
+      this.imageDragBefore = null
+      this.imageDragStartRect = null
+      this.imageDragIdx = -1
     }
     this.dragMode = 'none'
+  }
+
+  /** 命中最上层浮动图(editable;p 为 render-area 坐标含表头);返回 index 或 -1。 */
+  private imageHitAt(p: { x: number; y: number }): number {
+    const r = this.renderer
+    const s = this.sheet
+    if (!r || !s) return -1
+    const hw = r.metrics.rowHeaderWidth
+    const hh = r.metrics.colHeaderHeight
+    if (p.x < hw || p.y < hh) return -1 // 表头区不算
+    for (let i = s.images.length - 1; i >= 0; i--) {
+      const rect = anchorRect(r.metrics, s.images[i])
+      const x = hw + rect.left - this.view.scrollX
+      const y = hh + rect.top - this.view.scrollY
+      if (p.x >= x && p.x <= x + rect.width && p.y >= y && p.y <= y + rect.height) return i
+    }
+    return -1
   }
 
   // ---- resize → 命令栈记账(仅 editable;E3.5) ----
@@ -1213,6 +1278,47 @@ export class ViewerController {
   /** 给区域套样式覆盖(E5;粗体/对齐/填充等);editable 时走命令栈(可撤销 + 发 cell-change + 记脏) */
   setStyle(range: MergeRange, patch: CellStyleOverride): boolean {
     return this.edit.setStyle(range, patch)
+  }
+
+  // ---- 图片编辑(E6;浮动/嵌入 增删移改) ----
+  /** 读当前表全部图片锚点(克隆)。 */
+  getImages(): ImageAnchor[] {
+    return this.edit.getImages()
+  }
+  /** 加一张图(无 src 但有 bytes+mime 时自动生成 blob url);返回插入索引(失败 -1)。 */
+  addImage(anchor: ImageAnchor): number {
+    let a = anchor
+    if (!a.src && a.bytes && a.mime) {
+      a = { ...a, src: URL.createObjectURL(new Blob([a.bytes as BlobPart], { type: a.mime })) }
+    }
+    return this.edit.addImage(a)
+  }
+  /** 删一张图。 */
+  removeImage(index: number): boolean {
+    return this.edit.removeImage(index)
+  }
+  /** 移动图片(屏幕像素增量);editable 时入命令栈 + 发 image-change。 */
+  moveImage(index: number, dxPx: number, dyPx: number): boolean {
+    return this.editImageRect(index, (rect) => ({ ...rect, left: rect.left + dxPx, top: rect.top + dyPx }))
+  }
+  /** 缩放图片(目标屏幕像素宽高);editable 时入命令栈 + 发 image-change。 */
+  resizeImage(index: number, widthPx: number, heightPx: number): boolean {
+    return this.editImageRect(index, (rect) => ({ ...rect, width: Math.max(8, widthPx), height: Math.max(8, heightPx) }))
+  }
+  /** 移动/缩放公共路径:算当前矩形 → 变换 → setImageRect → 重定位 → 补登命令。 */
+  private editImageRect(
+    index: number,
+    fn: (rect: { left: number; top: number; width: number; height: number }) => { left: number; top: number; width: number; height: number },
+  ): boolean {
+    if (!this.editCfg.editable || !this.sheet || !this.renderer) return false
+    const img = this.sheet.images[index]
+    if (!img) return false
+    this.edit.ensureBaseline()
+    const before = cloneImageAnchor(img)
+    setImageRect(this.sheet, index, fn(anchorRect(this.renderer.metrics, img)), this.view.zoom)
+    this.render()
+    this.edit.recordImageEdit(index, before, cloneImageAnchor(this.sheet.images[index]))
+    return true
   }
   undo(): void {
     this.edit.undo()

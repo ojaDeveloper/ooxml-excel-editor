@@ -30,3 +30,7 @@ export function rowHeightToPx(pt: number): number {
 export function emuToPx(emu: number): number {
   return emu / EMU_PER_PX
 }
+
+export function pxToEmu(px: number): number {
+  return Math.round(px * EMU_PER_PX)
+}

@@ -96,6 +96,9 @@ function Demo() {
           onDirtyChange={(p) => {
             if (import.meta.env.DEV) (window as unknown as { __lastDirtyChange?: unknown }).__lastDirtyChange = p
           }}
+          onImageChange={(p) => {
+            if (import.meta.env.DEV) (window as unknown as { __lastImageChange?: unknown }).__lastImageChange = p
+          }}
           onRendered={() => {
             // ref.current 此时已就绪,再挂一次保证 e2e 拿到
             if (import.meta.env.DEV) (window as unknown as { __excelViewerReact?: ExcelViewerHandle | null }).__excelViewerReact = ref.current

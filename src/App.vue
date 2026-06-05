@@ -50,6 +50,9 @@ function onDimChange(p: { axis: string; index: number; before: number; after: nu
 function onDirtyChange(p: { dirty: boolean }) {
   if (import.meta.env.DEV) (window as unknown as { __lastDirtyChange?: unknown }).__lastDirtyChange = p
 }
+function onImageChange(p: unknown) {
+  if (import.meta.env.DEV) (window as unknown as { __lastImageChange?: unknown }).__lastImageChange = p
+}
 // E5: 给当前选区加粗(样式编辑演示)
 function boldSelection() {
   const v = viewerRef.value
@@ -189,6 +192,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         @cell-change="onCellChange"
         @dim-change="onDimChange"
         @dirty-change="onDirtyChange"
+        @image-change="onImageChange"
       >
         <!-- 分层 UI 演示: B3 上叠一个可点徽标,随滚动跟随 -->
         <template #overlay="{ rectOf, tick }">

@@ -13,10 +13,10 @@ import {
   useState,
   type CSSProperties,
 } from 'react'
-import type { CellModel, CellStyleFn, CellStyleOverride, MergeRange, SheetModel, TransformModelFn, WorkbookModel } from '@/core/model/types'
+import type { CellModel, CellStyleFn, CellStyleOverride, ImageAnchor, MergeRange, SheetModel, TransformModelFn, WorkbookModel } from '@/core/model/types'
 import type { EditConfig } from '@/core/edit/types'
 import type { FormulaEngineFactory } from '@/core/formula/engine'
-import type { CellChangePayload, DimChangePayload, DirtyChangePayload } from '@/core/edit/edit-controller'
+import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload } from '@/core/edit/edit-controller'
 import type { CellSnapshot } from '@/core/model/snapshot'
 import type { CellValue } from '@/core/model/data-access'
 import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
@@ -77,6 +77,8 @@ export interface ExcelViewerProps {
   onDimChange?: (p: DimChangePayload) => void
   /** 脏状态变更(有/无未保存修改) */
   onDirtyChange?: (p: DirtyChangePayload) => void
+  /** 图片增删移改(前后 ImageAnchor) */
+  onImageChange?: (p: ImageChangePayload) => void
 }
 
 /** 命令式句柄(与 Vue ref / ViewerApi 对齐) */
@@ -95,6 +97,11 @@ export interface ExcelViewerHandle {
   editRange: (range: MergeRange, values: CellValue[][]) => boolean
   clearRange: (range: MergeRange) => boolean
   setStyle: (range: MergeRange, patch: CellStyleOverride) => boolean
+  getImages: () => ImageAnchor[]
+  addImage: (anchor: ImageAnchor) => number
+  removeImage: (index: number) => boolean
+  moveImage: (index: number, dxPx: number, dyPx: number) => boolean
+  resizeImage: (index: number, widthPx: number, heightPx: number) => boolean
   undo: () => void
   redo: () => void
   canUndo: () => boolean
@@ -270,6 +277,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
           else if (event === 'edit-commit') propsRef.current.onEditCommit?.(payload)
           else if (event === 'dim-change') propsRef.current.onDimChange?.(payload as DimChangePayload)
           else if (event === 'dirty-change') propsRef.current.onDirtyChange?.(payload as DirtyChangePayload)
+          else if (event === 'image-change') propsRef.current.onImageChange?.(payload as ImageChangePayload)
           firePlugin(event, payload)
         },
       },
@@ -386,6 +394,11 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
       clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
       setStyle: (range, patch) => controllerRef.current?.setStyle(range, patch) ?? false,
+      getImages: () => controllerRef.current?.getImages() ?? [],
+      addImage: (a) => controllerRef.current?.addImage(a) ?? -1,
+      removeImage: (i) => controllerRef.current?.removeImage(i) ?? false,
+      moveImage: (i, dx, dy) => controllerRef.current?.moveImage(i, dx, dy) ?? false,
+      resizeImage: (i, w, h) => controllerRef.current?.resizeImage(i, w, h) ?? false,
       undo: () => controllerRef.current?.undo(),
       redo: () => controllerRef.current?.redo(),
       canUndo: () => controllerRef.current?.canUndo() ?? false,
@@ -450,6 +463,11 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
     clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
     setStyle: (range, patch) => controllerRef.current?.setStyle(range, patch) ?? false,
+    getImages: () => controllerRef.current?.getImages() ?? [],
+    addImage: (a) => controllerRef.current?.addImage(a) ?? -1,
+    removeImage: (i) => controllerRef.current?.removeImage(i) ?? false,
+    moveImage: (i, dx, dy) => controllerRef.current?.moveImage(i, dx, dy) ?? false,
+    resizeImage: (i, w, h) => controllerRef.current?.resizeImage(i, w, h) ?? false,
     undo: () => controllerRef.current?.undo(),
     redo: () => controllerRef.current?.redo(),
     canUndo: () => controllerRef.current?.canUndo() ?? false,

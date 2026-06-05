@@ -10,8 +10,12 @@ import {
   restoreDimension,
   applyStyleOverride,
   mergeStyleOverride,
+  addImage,
+  removeImage,
+  setImageRect,
+  cloneImageAnchor,
 } from '../mutations'
-import type { CellStyle, SheetModel } from '../types'
+import type { CellStyle, ImageAnchor, SheetModel } from '../types'
 import { cellKey } from '../types'
 
 const styleA = { font: {}, fill: { type: 'none' }, numFmt: 'General' } as unknown as CellStyle
@@ -21,8 +25,12 @@ function sheet(): SheetModel {
     styles: [styleA],
     columns: new Map(),
     rows: new Map(),
+    images: [],
     dimension: { rows: 0, cols: 0 },
   } as unknown as SheetModel
+}
+function img(src = 'data:x'): ImageAnchor {
+  return { src, from: { col: 1, colOffEmu: 0, row: 1, rowOffEmu: 0 }, extWidthEmu: 952500, extHeightEmu: 952500 }
 }
 
 describe('mutations.setCellValue(类型推断 + dimension)', () => {
@@ -147,5 +155,47 @@ describe('mutations 样式编辑(E5)', () => {
     expect(cell.type).toBe('empty')
     expect((s.styles[cell.styleId].fill as { fgColor?: string }).fgColor).toBe('#ff0')
     expect(s.dimension).toMatchObject({ rows: 6, cols: 6 })
+  })
+})
+
+describe('mutations 图片(E6)', () => {
+  it('addImage/removeImage:数组增删 + 返回索引', () => {
+    const s = sheet()
+    expect(addImage(s, img())).toBe(0)
+    expect(addImage(s, img())).toBe(1)
+    expect(s.images).toHaveLength(2)
+    addImage(s, img('data:mid'), 1) // 指定位置插入
+    expect(s.images[1].src).toBe('data:mid')
+    removeImage(s, 1)
+    expect(s.images).toHaveLength(2)
+    expect(s.images[1].src).not.toBe('data:mid')
+  })
+
+  it('cloneImageAnchor:浅克隆(from 新对象,bytes 共享)', () => {
+    const bytes = new Uint8Array([1, 2, 3])
+    const a: ImageAnchor = { src: 'x', bytes, from: { col: 0, colOffEmu: 0, row: 0, rowOffEmu: 0 } }
+    const c = cloneImageAnchor(a)
+    expect(c).not.toBe(a)
+    expect(c.from).not.toBe(a.from) // from 深一层
+    expect(c.bytes).toBe(bytes) // bytes 共享(不可变)
+  })
+
+  it('setImageRect:像素矩形 → 原点相对 oneCellAnchor(zoom=1:px*9525=EMU)', () => {
+    const s = sheet()
+    addImage(s, img())
+    setImageRect(s, 0, { left: 100, top: 50, width: 200, height: 80 }, 1)
+    const a = s.images[0]
+    expect(a.to).toBeUndefined()
+    expect(a.from).toMatchObject({ col: 0, row: 0, colOffEmu: 100 * 9525, rowOffEmu: 50 * 9525 })
+    expect(a.extWidthEmu).toBe(200 * 9525)
+    expect(a.extHeightEmu).toBe(80 * 9525)
+  })
+
+  it('setImageRect:zoom=2 → 像素除以 zoom 再换 EMU', () => {
+    const s = sheet()
+    addImage(s, img())
+    setImageRect(s, 0, { left: 200, top: 0, width: 400, height: 0 }, 2)
+    expect(s.images[0].from.colOffEmu).toBe(100 * 9525) // 200/2=100px
+    expect(s.images[0].extWidthEmu).toBe(200 * 9525) // 400/2=200px
   })
 })

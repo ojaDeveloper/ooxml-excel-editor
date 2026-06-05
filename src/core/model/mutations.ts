@@ -3,9 +3,10 @@
  * 只改 SheetModel,不碰渲染;调用方负责重绘(同 sortColumn 的"改完重绘")。
  * 全部以"前态可逆"为原则:返回旧值供命令栈做 undo。
  */
-import type { CellModel, CellStyle, CellStyleOverride, ColumnInfo, MergeRange, RowInfo, SheetModel } from './types'
+import type { CellModel, CellStyle, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, SheetModel } from './types'
 import { cellKey } from './types'
 import type { CellValue } from './data-access'
+import { pxToEmu } from '../layout/units'
 
 /** 由输入值推断单元格类型 + 组装 CellModel(轻量 Excel 式输入:= 开头 → 公式,纯数字串 → 数字)。 */
 function inferCell(row: number, col: number, value: CellValue, styleId: number): CellModel | null {
@@ -89,6 +90,46 @@ export function setColumnWidth(sheet: SheetModel, col: number, width: number): v
 export function setRowHeight(sheet: SheetModel, row: number, height: number): void {
   const info = sheet.rows.get(row)
   sheet.rows.set(row, { height: Math.max(6, height), hidden: info?.hidden ?? false })
+}
+
+// ====================== 图片(浮动/嵌入)写 ======================
+// 作用 SheetModel.images: ImageAnchor[]。移动/缩放统一规整成"原点相对"oneCellAnchor
+// (from.col/row=0 + colOff/rowOff EMU = 距原点偏移,ext = 尺寸),避免跨列/行进位的换算。
+
+/** 浅克隆 ImageAnchor(共享不可变的 bytes/src,省内存;命令逆向 / 拖拽起始态用)。 */
+export function cloneImageAnchor(a: ImageAnchor): ImageAnchor {
+  return { ...a, from: { ...a.from }, to: a.to ? { ...a.to } : undefined }
+}
+
+/** 加一张图(index 缺省追加到末尾),返回插入位置。 */
+export function addImage(sheet: SheetModel, anchor: ImageAnchor, index?: number): number {
+  const at = index ?? sheet.images.length
+  sheet.images.splice(at, 0, anchor)
+  return at
+}
+
+/** 删一张图(调用方负责为 undo 捕获前态)。 */
+export function removeImage(sheet: SheetModel, index: number): void {
+  sheet.images.splice(index, 1)
+}
+
+/**
+ * 设图片的内容矩形(zoom 后像素,content 坐标)→ 规整为原点相对 oneCellAnchor。
+ * 像素↔EMU:left_px = emuToPx(colOffEmu)*zoom ⇒ colOffEmu = pxToEmu(left/zoom)。不依赖列/行几何。
+ */
+export function setImageRect(
+  sheet: SheetModel,
+  index: number,
+  rect: { left: number; top: number; width: number; height: number },
+  zoom: number,
+): void {
+  const img = sheet.images[index]
+  if (!img) return
+  const toEmu = (px: number) => pxToEmu(px / zoom)
+  img.from = { col: 0, row: 0, colOffEmu: toEmu(rect.left), rowOffEmu: toEmu(rect.top) }
+  img.to = undefined
+  img.extWidthEmu = toEmu(rect.width)
+  img.extHeightEmu = toEmu(rect.height)
 }
 
 /** 直接写回/删除一个列/行的维度信息(命令逆向用:精确还原前态;null=删 Map 项回落默认宽高)。 */

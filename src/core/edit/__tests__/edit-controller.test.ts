@@ -15,7 +15,7 @@ function setup(readOnly: Set<string> = new Set(), editingEnabled = true, engine:
     columns: new Map(),
     rows: new Map(),
     merges: [],
-    images: [],
+    images: [] as any[],
     defaultColWidth: 64,
     defaultRowHeight: 20,
     dimension: { rows: 0, cols: 0 },
@@ -33,6 +33,9 @@ function setup(readOnly: Set<string> = new Set(), editingEnabled = true, engine:
     isRecalcEnabled: () => !!engine,
     getEngineFactory: () => (engine ? async () => engine : null),
     onModelChange: () => {
+      renders++
+    },
+    rebuildOverlays: () => {
       renders++
     },
     emit: (event, payload) => events.push({ event, payload }),
@@ -207,6 +210,54 @@ describe('EditController — 脏状态 + 还原原件(E3.5)', () => {
     ec.resetDirtyBaseline() // 模拟换新工作簿
     expect(ec.isDirty()).toBe(false)
     expect(ec.resetToOriginal()).toBe(false) // 无 baseline
+  })
+})
+
+describe('EditController — 图片编辑(E6)', () => {
+  const anchor = () => ({ src: 'data:x', from: { col: 1, colOffEmu: 0, row: 1, rowOffEmu: 0 }, extWidthEmu: 100, extHeightEmu: 100 }) as any
+
+  it('addImage:加图 + 发 image-change(before null→after)+ undo 删除', () => {
+    const { sheet, ec, events } = setup()
+    const idx = ec.addImage(anchor())
+    expect(idx).toBe(0)
+    expect(sheet.images).toHaveLength(1)
+    const ev = events.find((e) => e.event === 'image-change')!
+    expect(ev.payload.before).toBeNull()
+    expect(ev.payload.after.src).toBe('data:x')
+    expect(ec.isDirty()).toBe(true)
+    ec.undo()
+    expect(sheet.images).toHaveLength(0) // 加图的逆=删图
+  })
+
+  it('removeImage:删图 + 发 image-change(before→after null)+ undo 复原', () => {
+    const { sheet, ec, events } = setup()
+    sheet.images.push(anchor())
+    expect(ec.removeImage(0)).toBe(true)
+    expect(sheet.images).toHaveLength(0)
+    const ev = events.filter((e) => e.event === 'image-change').at(-1)!
+    expect(ev.payload.before.src).toBe('data:x')
+    expect(ev.payload.after).toBeNull()
+    ec.undo()
+    expect(sheet.images).toHaveLength(1) // 删图的逆=按原位加回
+    expect(sheet.images[0].src).toBe('data:x')
+  })
+
+  it('image-set(recordImageEdit):移动后 undo 还原前态锚点', () => {
+    const { sheet, ec } = setup()
+    sheet.images.push(anchor())
+    const before = { ...sheet.images[0], from: { ...sheet.images[0].from } }
+    sheet.images[0].from.colOffEmu = 999999 // 模拟拖拽已改完
+    ec.recordImageEdit(0, before as any, { ...sheet.images[0], from: { ...sheet.images[0].from } } as any)
+    ec.undo()
+    expect(sheet.images[0].from.colOffEmu).toBe(0) // 还原前态
+  })
+
+  it('getImages:返回克隆(改返回值不影响模型)', () => {
+    const { sheet, ec } = setup()
+    sheet.images.push(anchor())
+    const imgs = ec.getImages()
+    imgs[0].from.colOffEmu = 123
+    expect(sheet.images[0].from.colOffEmu).toBe(0) // 模型未受影响
   })
 })
 
