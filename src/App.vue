@@ -8,6 +8,7 @@ import type { PdfPageContext } from './core/export/types'
 const src = ref<File | string | undefined>(undefined)
 const fileName = ref<string>('')
 const dragOver = ref(false)
+const editMode = ref(false) // E0: 编辑模式闸门(默认只读)
 
 function onFile(file: File | undefined) {
   if (!file) return
@@ -144,6 +145,9 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
       <button v-if="src" class="sample-btn" @click="showSheetJSON" title="演示数据读取 API getSheetJSON">
         数据→JSON
       </button>
+      <label v-if="src" class="edit-toggle" title="开启编辑模式(E0:闸门)">
+        <input type="checkbox" v-model="editMode" /> 编辑模式
+      </label>
     </header>
 
     <main class="app-body">
@@ -152,6 +156,8 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         :src="src"
         :file-name="fileName"
         :plugins="plugins"
+        :editable="editMode"
+        :read-only-ranges="[{ top: 1, left: 0, bottom: 1, right: 4 }]"
         :toolbar="['find', 'filter', 'clear-filter', 'separator', 'copy', 'freeze', 'separator', 'zoom', 'export']"
         @selection-change="(s) => (lastEvent = `选区 ${s.range.top + 1},${s.range.left + 1} → ${s.range.bottom + 1},${s.range.right + 1}`)"
       >

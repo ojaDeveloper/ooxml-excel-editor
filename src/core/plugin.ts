@@ -44,6 +44,8 @@ export interface ViewerApi {
   rectOf(row: number, col: number): Rect | null
   rectOfRange(range: MergeRange): Rect | null
   redraw(): void
+  /** 该格当前是否可编辑(综合 editable + readOnlyRanges + cellReadOnly) */
+  isCellEditable(row: number, col: number): boolean
   /** 导出当前/指定表为图片 Blob(默认 png) */
   exportImage(opts?: ImageExportOptions): Promise<Blob>
   /** 导出为图片并触发下载 */

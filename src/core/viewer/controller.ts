@@ -12,6 +12,8 @@
  */
 import type { CellModel, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
+import type { EditConfig } from '../edit/types'
+import { resolveEditable } from '../edit/permissions'
 import { CanvasRenderer, type RendererOptions, type ViewState } from '../render/canvas-renderer'
 import { OverlayManager, type OverlayQuads } from './overlay-manager'
 import { WorkbookExporter, type ExporterHost } from '../export/exporter'
@@ -127,6 +129,9 @@ export class ViewerController {
   // ---- 排序态(仅作用于当前表;rebuild 时重置) ----
   private sortCol = -1
   private sortDir: 'asc' | 'desc' | null = null
+
+  // ---- 编辑配置(默认只读;E0 只做闸门,后续阶段在此扩展) ----
+  private editCfg: EditConfig = {}
 
   constructor(
     private els: ViewerControllerEls,
@@ -1037,6 +1042,18 @@ export class ViewerController {
     this.clearSelection()
     this.hooks.onFilterChange() // 浮层/工具栏据此重算排序指示
     this.render()
+  }
+
+  // ====================== 编辑配置(E0:闸门) ======================
+
+  /** 设置编辑配置(默认只读;壳在挂载 + props 变化时调) */
+  setEditConfig(cfg: EditConfig): void {
+    this.editCfg = cfg ?? {}
+  }
+
+  /** 该格当前是否可编辑(综合 editable + readOnlyRanges + cellReadOnly) */
+  isCellEditable(row: number, col: number): boolean {
+    return this.sheet ? resolveEditable(this.sheet, row, col, this.editCfg) : false
   }
 
   // ====================== 导出 / 打印(委托 WorkbookExporter) ======================

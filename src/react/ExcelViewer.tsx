@@ -13,7 +13,8 @@ import {
   useState,
   type CSSProperties,
 } from 'react'
-import type { CellStyleFn, MergeRange, SheetModel, TransformModelFn, WorkbookModel } from '@/core/model/types'
+import type { CellModel, CellStyleFn, MergeRange, SheetModel, TransformModelFn, WorkbookModel } from '@/core/model/types'
+import type { EditConfig } from '@/core/edit/types'
 import type { ViewerTheme } from '@/core/render/theme'
 import type { ExcelSource } from '@/core/loader'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '@/core/export'
@@ -42,6 +43,12 @@ export interface ExcelViewerProps {
   cellStyle?: CellStyleFn
   /** 插件(与 Vue 通用):theme/transformModel/cellStyle/events/overlay/setup 全跨框架可用 */
   plugins?: ExcelPlugin[]
+  /** 编辑总开关:默认 false = 只读(行为不变)。开启后才能进入编辑(E0:闸门) */
+  editable?: boolean
+  /** 按格只读判定:返回 true = 只读(cell 为空格时传 null) */
+  cellReadOnly?: (cell: CellModel | null, pos: { row: number; col: number }) => boolean | void
+  /** 只读区域(0-based 闭区间);命中即只读 */
+  readOnlyRanges?: MergeRange[]
   className?: string
   style?: CSSProperties
   onRendered?: (wb: WorkbookModel) => void
@@ -64,6 +71,7 @@ export interface ExcelViewerHandle {
   rectOf: (row: number, col: number) => { x: number; y: number; w: number; h: number } | null
   rectOfRange: (range: MergeRange) => { x: number; y: number; w: number; h: number } | null
   redraw: () => void
+  isCellEditable: (row: number, col: number) => boolean
   exportImage: (opts?: ImageExportOptions) => Promise<Blob>
   downloadImage: (opts?: ImageExportOptions) => Promise<void>
   exportPdf: (opts?: PdfExportOptions) => Promise<Blob>
@@ -138,6 +146,10 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     if (propsRef.current.transformModel) m = propsRef.current.transformModel(m) ?? m
     return m
   }
+  function buildEditConfig(): EditConfig {
+    const p = propsRef.current
+    return { editable: p.editable, cellReadOnly: p.cellReadOnly, readOnlyRanges: p.readOnlyRanges }
+  }
   /** 派发交互事件给插件(props 回调在各 hook 里另外调) */
   const firePlugin = (event: PluginEvent, payload: unknown) =>
     pluginHandlersRef.current.get(event)?.forEach((h) => h(payload))
@@ -197,6 +209,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       },
     )
     controller.fileName = propsRef.current.fileName
+    controller.setEditConfig(buildEditConfig())
     controllerRef.current = controller
     if (pluginOvRef.current) pluginHostRef.current = new PluginOverlayHost(pluginOvRef.current)
 
@@ -225,6 +238,12 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   useEffect(() => {
     if (controllerRef.current) controllerRef.current.fileName = props.fileName
   }, [props.fileName])
+
+  // ---- 编辑配置同步(E0) ----
+  useEffect(() => {
+    controllerRef.current?.setEditConfig(buildEditConfig())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.editable, props.cellReadOnly, props.readOnlyRanges])
 
   // ---- 新工作簿 → 选活动表 + onRendered ----
   useEffect(() => {
@@ -289,6 +308,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       rectOf: (row, col) => controllerRef.current?.rectOf(row, col) ?? null,
       rectOfRange: (range) => controllerRef.current?.rectOfRange(range) ?? null,
       redraw: () => controllerRef.current?.render(),
+      isCellEditable: (row, col) => controllerRef.current?.isCellEditable(row, col) ?? false,
       exportImage: (opts) => controllerRef.current!.exportImage(opts),
       downloadImage: (opts) => controllerRef.current!.downloadImage(opts),
       exportPdf: (opts) => controllerRef.current!.exportPdf(opts),
@@ -334,6 +354,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     rectOf: (row, col) => controllerRef.current?.rectOf(row, col) ?? null,
     rectOfRange: (range) => controllerRef.current?.rectOfRange(range) ?? null,
     redraw: () => controllerRef.current?.render(),
+    isCellEditable: (row, col) => controllerRef.current?.isCellEditable(row, col) ?? false,
     exportImage: (opts) => controllerRef.current!.exportImage(opts),
     downloadImage: (opts) => controllerRef.current!.downloadImage(opts),
     exportPdf: (opts) => controllerRef.current!.exportPdf(opts),

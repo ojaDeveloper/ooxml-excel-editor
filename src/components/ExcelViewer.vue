@@ -19,6 +19,7 @@ import { useExcelDocument } from '@/composables/useExcelDocument'
 import { CanvasRenderer, type ViewState } from '@/core/render/canvas-renderer'
 import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { ViewerController, type TooltipState, type FindState } from '@/core/viewer/controller'
+import type { EditConfig } from '@/core/edit/types'
 import { revokeImages } from '@/core/finalize'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '@/core/export'
 import ViewerToolbar from './ViewerToolbar.vue'
@@ -51,6 +52,12 @@ const props = withDefaults(
      * 插件 ExcelPlugin.toolbar 贡献的项总会追加(opt-in)。
      */
     toolbar?: boolean | Array<string | ToolbarItem>
+    /** 编辑总开关:默认 false = 只读(行为不变)。开启后才能进入编辑(E0:闸门) */
+    editable?: boolean
+    /** 按格只读判定:返回 true = 只读(cell 为空格时传 null) */
+    cellReadOnly?: (cell: CellModel | null, pos: { row: number; col: number }) => boolean | void
+    /** 只读区域(0-based 闭区间);命中即只读 */
+    readOnlyRanges?: MergeRange[]
   }>(),
   // toolbar 默认 true(显示内置项);若不显式给默认,Vue 会把布尔型 prop 缺省判成 false
   { openLinks: true, toolbar: true },
@@ -79,6 +86,12 @@ function effectiveTransform(wb: WorkbookModel): WorkbookModel {
   if (props.transformModel) m = props.transformModel(m) ?? m
   return m
 }
+// 编辑配置(E0:默认只读;开 editable + 可按格/区域只读)
+const effectiveEditConfig = computed<EditConfig>(() => ({
+  editable: props.editable,
+  cellReadOnly: props.cellReadOnly,
+  readOnlyRanges: props.readOnlyRanges,
+}))
 
 const emit = defineEmits<{
   /** 工作簿解析并首次渲染完成 */
@@ -195,6 +208,7 @@ onMounted(() => {
     )
     view.value = controller.view // 壳与控制器共享同一 view 对象(现有 view.value 读法不变)
     controller.fileName = props.fileName // 导出默认文件名
+    controller.setEditConfig(effectiveEditConfig.value) // 编辑配置(默认只读)
   }
   if (pluginOvEl.value) pluginOverlayHost = new PluginOverlayHost(pluginOvEl.value)
   if (props.src) load(props.src, effectiveTransform)
@@ -220,6 +234,8 @@ watch(() => props.src, (s) => {
 watch(() => props.fileName, (f) => {
   if (controller) controller.fileName = f
 })
+
+watch(effectiveEditConfig, (cfg) => controller?.setEditConfig(cfg))
 
 // 主题 / cellStyle / 插件 变化 → 重建渲染器(它们在构造时注入)
 watch(
@@ -464,6 +480,7 @@ const viewerApi: ViewerApi = {
   rectOf,
   rectOfRange,
   redraw: () => doRender(),
+  isCellEditable: (row, col) => controller?.isCellEditable(row, col) ?? false,
   exportImage,
   downloadImage,
   exportPdf,

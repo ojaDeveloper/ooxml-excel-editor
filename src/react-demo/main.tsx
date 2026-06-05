@@ -29,6 +29,7 @@ const demoPlugin = definePlugin({
 function Demo() {
   const [src, setSrc] = useState<ExcelSource | undefined>(undefined)
   const [fileName, setFileName] = useState('')
+  const [editMode, setEditMode] = useState(false) // E0: 编辑模式闸门
   const ref = useRef<ExcelViewerHandle>(null)
 
   // 开发期把命令式句柄挂 window,供 e2e 取几何/读数据(与 Vue demo 的 __excelViewer 对齐)
@@ -60,6 +61,9 @@ function Demo() {
           }}
         />
         <span style={{ color: '#888', fontSize: 13 }}>{fileName}</span>
+        <label style={{ fontSize: 13 }} title="开启编辑模式(E0:闸门)">
+          <input type="checkbox" checked={editMode} onChange={(e) => setEditMode(e.target.checked)} /> 编辑模式
+        </label>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
         <ExcelViewer
@@ -67,6 +71,8 @@ function Demo() {
           src={src}
           fileName={fileName}
           plugins={[demoPlugin]}
+          editable={editMode}
+          readOnlyRanges={[{ top: 1, left: 0, bottom: 1, right: 4 }]}
           onRendered={() => {
             // ref.current 此时已就绪,再挂一次保证 e2e 拿到
             if (import.meta.env.DEV) (window as unknown as { __excelViewerReact?: ExcelViewerHandle | null }).__excelViewerReact = ref.current

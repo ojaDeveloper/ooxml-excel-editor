@@ -57,6 +57,10 @@ export { OverlayManager } from './viewer/overlay-manager'
 export type { OverlayQuads } from './viewer/overlay-manager'
 export { PluginOverlayHost } from './viewer/plugin-overlay'
 
+// ---- 编辑(配置 + 只读判定;E0,后续阶段扩展) ----
+export { resolveEditable } from './edit/permissions'
+export type { EditConfig, EditPermission } from './edit/types'
+
 // ---- 插件 / 扩展点(框架无关) ----
 export { definePlugin } from './plugin'
 export type {
