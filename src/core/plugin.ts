@@ -16,6 +16,7 @@
 import type { CellStyleFn, MergeRange, TransformModelFn, WorkbookModel } from './model/types'
 import type { CellValue, ReadOptions, SheetToJSONOptions } from './model/data-access'
 import type { CellSnapshot } from './model/snapshot'
+import type { EditorResolver } from './edit/editor-context'
 import type { ViewerTheme } from './render/theme'
 import type { ExcelSource } from './loader'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from './export/types'
@@ -86,6 +87,12 @@ export interface ViewerApi {
   getEditingCell(): { row: number; col: number } | null
   /** 查询任意格的完整快照(底层结构 + raw/computed/text/style) */
   getCellSnapshot(row: number, col: number): CellSnapshot | null
+  /** 进入编辑(需有 editor 工厂 + 可编辑);返回是否进入 */
+  beginEdit(row: number, col: number): boolean
+  /** 取消当前编辑(不改模型) */
+  cancelEdit(): void
+  /** 当前是否有活动编辑器 */
+  isEditing(): boolean
 }
 
 /** overlay 渲染上下文(随滚动/缩放,tick 变即重渲) */
@@ -145,6 +152,8 @@ export interface ExcelPlugin {
   events?: Partial<Record<PluginEvent, (payload: any) => void>>
   /** 在网格上叠加 UI(返回 DOM 节点,框架无关);随 tick 重渲。用 ctx.rectOf 定位单元格。 */
   overlay?: (ctx: OverlayContext) => OverlayNode
+  /** 按格自定义编辑控件(返回工厂;多插件数组序首个非空胜,组件 editor prop 覆盖);需 editable 开启。 */
+  editor?: EditorResolver
   /** 高级: 拿命令式 API、订阅事件;返回可选清理函数 */
   setup?: (ctx: ExcelPluginContext) => void | (() => void)
 }

@@ -17,6 +17,8 @@ import { resolveEditable } from '../edit/permissions'
 import { EditController, type EditControllerHost, type EditEventName } from '../edit/edit-controller'
 import type { CellValue } from '../model/data-access'
 import type { CellSnapshot } from '../model/snapshot'
+import { CellEditorHost } from '../edit/editor-host'
+import type { CellEditorContext, EditorCommitValue, EditorResolver } from '../edit/editor-context'
 import { CanvasRenderer, type RendererOptions, type ViewState } from '../render/canvas-renderer'
 import { OverlayManager, type OverlayQuads } from './overlay-manager'
 import { WorkbookExporter, type ExporterHost } from '../export/exporter'
@@ -60,6 +62,8 @@ export interface ViewerControllerEls {
   spacer: HTMLElement
   /** 叠加层四象限 */
   overlays: OverlayQuads
+  /** 单元格编辑器挂载层(在格 + overlay 之上;E2) */
+  editorSlot: HTMLElement
 }
 
 export interface ViewerControllerHooks {
@@ -139,6 +143,10 @@ export class ViewerController {
   private editCfg: EditConfig = {}
   /** 编辑底座(命令栈/快照/事件;E1) */
   readonly edit: EditController
+  /** 单元格编辑器宿主(E2) */
+  private editorHost: CellEditorHost
+  /** 按格解析编辑器(壳合并 plugin.editor + prop.editor 后注入;E2) */
+  private editorResolver?: EditorResolver
 
   constructor(
     private els: ViewerControllerEls,
@@ -166,6 +174,7 @@ export class ViewerController {
       emit: (event, payload) => this.hooks.onEditEvent(event, payload),
     }
     this.edit = new EditController(editHost)
+    this.editorHost = new CellEditorHost(els.editorSlot, (row, col) => this.rectOf(row, col))
   }
 
   /** 切表/换簿/主题变化: 清状态,重建渲染器,重置滚动,量尺寸,建叠加层,绘制,按需重跑查找 */
@@ -180,6 +189,7 @@ export class ViewerController {
     this.hooks.onTooltip(null)
     this.sortCol = -1
     this.sortDir = null
+    this.editorHost.unmount() // 卸掉活动编辑器
     this.edit.reset() // 切表/换簿:命令栈 + 编辑态作废
 
     this.sheet = sheet
@@ -211,6 +221,7 @@ export class ViewerController {
     r.setSelection(this.getSelection())
     r.render(this.view)
     if (this.sheet) this.overlays.position(this.sheet, r, this.view)
+    this.editorHost.position() // 活动编辑器随滚动/缩放跟随(无则 no-op)
     this.hooks.onRenderTick()
   }
 
@@ -296,6 +307,7 @@ export class ViewerController {
     if (this.rafId) cancelAnimationFrame(this.rafId)
     this.rafId = 0
     this.overlays.dispose()
+    this.editorHost.dispose()
   }
 
   /** 内容总尺寸变化 → 量 + 直接撑 spacer(滚动范围由它决定) */
@@ -1116,6 +1128,63 @@ export class ViewerController {
   }
   getCellSnapshot(row: number, col: number): CellSnapshot | null {
     return this.edit.getCellSnapshot(row, col)
+  }
+
+  // ---- 编辑器宿主(E2) ----
+  /** 壳注入合并后的编辑器解析器(plugin.editor + prop.editor) */
+  setEditorResolver(fn?: EditorResolver): void {
+    this.editorResolver = fn
+  }
+
+  /** 进入编辑:解析编辑器工厂 → 挂载。无工厂(如未提供 editor)或只读则不进入。返回是否进入。 */
+  beginEdit(row: number, col: number): boolean {
+    if (!this.sheet || !this.workbook) return false
+    if (!this.isCellEditable(row, col)) return false
+    const cell = this.sheet.cells.get(cellKey(row, col)) ?? null
+    const factory = this.editorResolver?.(cell, { row, col })
+    if (!factory) return false
+    const rect = this.rectOf(row, col)
+    const snapshot = this.edit.getCellSnapshot(row, col)
+    if (!rect || !snapshot) return false
+    const ctx: CellEditorContext = {
+      snapshot,
+      rect,
+      sheet: this.sheet,
+      workbook: this.workbook,
+      permission: 'editable',
+      commit: (v) => this.commitEdit(v),
+      cancel: () => this.cancelEdit(),
+    }
+    if (!this.editorHost.mount(row, col, factory, ctx)) return false
+    this.edit.setEditing({ row, col })
+    this.hooks.onEditEvent('edit-start', { cell: { row, col }, snapshot })
+    return true
+  }
+
+  /** 提交当前编辑(取值 → 命令栈 → 卸编辑器)。value 可为裸值或 {value,style}(样式 E5 起生效)。 */
+  commitEdit(value: EditorCommitValue): void {
+    const editing = this.edit.getEditingCell()
+    if (!editing) return
+    const val: CellValue =
+      value !== null && typeof value === 'object' && !(value instanceof Date) && 'value' in value
+        ? (value as { value: CellValue }).value
+        : (value as CellValue)
+    this.edit.editCell(editing.row, editing.col, val)
+    this.hooks.onEditEvent('edit-commit', { cell: editing, value: val })
+    this.editorHost.unmount()
+    this.edit.setEditing(null)
+  }
+
+  /** 取消当前编辑(不改模型) */
+  cancelEdit(): void {
+    if (!this.editorHost.isActive()) return
+    this.editorHost.unmount()
+    this.edit.setEditing(null)
+  }
+
+  /** 当前是否有活动编辑器 */
+  isEditing(): boolean {
+    return this.editorHost.isActive()
   }
 
   // ====================== 导出 / 打印(委托 WorkbookExporter) ======================

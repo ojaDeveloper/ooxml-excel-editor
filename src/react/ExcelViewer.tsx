@@ -18,6 +18,7 @@ import type { EditConfig } from '@/core/edit/types'
 import type { CellChangePayload } from '@/core/edit/edit-controller'
 import type { CellSnapshot } from '@/core/model/snapshot'
 import type { CellValue } from '@/core/model/data-access'
+import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
 import type { ViewerTheme } from '@/core/render/theme'
 import type { ExcelSource } from '@/core/loader'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '@/core/export'
@@ -52,6 +53,8 @@ export interface ExcelViewerProps {
   cellReadOnly?: (cell: CellModel | null, pos: { row: number; col: number }) => boolean | void
   /** 只读区域(0-based 闭区间);命中即只读 */
   readOnlyRanges?: MergeRange[]
+  /** 自定义单元格编辑器(按格返回工厂;覆盖插件 editor)。需 editable 开启 */
+  editor?: EditorResolver
   className?: string
   style?: CSSProperties
   onRendered?: (wb: WorkbookModel) => void
@@ -88,6 +91,9 @@ export interface ExcelViewerHandle {
   canRedo: () => boolean
   getEditingCell: () => { row: number; col: number } | null
   getCellSnapshot: (row: number, col: number) => CellSnapshot | null
+  beginEdit: (row: number, col: number) => boolean
+  cancelEdit: () => void
+  isEditing: () => boolean
   exportImage: (opts?: ImageExportOptions) => Promise<Blob>
   downloadImage: (opts?: ImageExportOptions) => Promise<void>
   exportPdf: (opts?: PdfExportOptions) => Promise<Blob>
@@ -125,6 +131,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   const controllerRef = useRef<ViewerController | null>(null)
   const tooltipRef = useRef<TooltipState | null>(null)
   const pluginOvRef = useRef<HTMLDivElement>(null)
+  const editorSlotRef = useRef<HTMLDivElement>(null)
   const pluginHostRef = useRef<PluginOverlayHost | null>(null)
   const pluginHandlersRef = useRef<Map<PluginEvent, Set<(p: unknown) => void>>>(new Map())
   // 最新 props / 派生量(供 mount 时注册的 hook 读到当前值)
@@ -166,6 +173,19 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     const p = propsRef.current
     return { editable: p.editable, cellReadOnly: p.cellReadOnly, readOnlyRanges: p.readOnlyRanges }
   }
+  // E2: 合并编辑器解析器(prop 优先,其次插件数组序首个非空)。无任何 editor → undefined
+  function editorResolver(): EditorResolver | undefined {
+    const hasAny = !!propsRef.current.editor || pluginsRef.current.some((p) => p.editor)
+    if (!hasAny) return undefined
+    return (cell, pos) => {
+      const fromProp = propsRef.current.editor?.(cell, pos)
+      if (fromProp) return fromProp as CellEditorFactory
+      for (const p of pluginsRef.current) {
+        const f = p.editor?.(cell, pos)
+        if (f) return f
+      }
+    }
+  }
   /** 派发交互事件给插件(props 回调在各 hook 里另外调) */
   const firePlugin = (event: PluginEvent, payload: unknown) =>
     pluginHandlersRef.current.get(event)?.forEach((h) => h(payload))
@@ -188,7 +208,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     const ra = renderAreaRef.current
     const sc = scrollerRef.current
     const sp = spacerRef.current
-    if (!c || !ra || !sc || !sp || !ovMain.current || !ovFRow.current || !ovFCol.current || !ovCorner.current) return
+    if (!c || !ra || !sc || !sp || !editorSlotRef.current || !ovMain.current || !ovFRow.current || !ovFCol.current || !ovCorner.current) return
     const controller = new ViewerController(
       {
         canvas: c,
@@ -196,6 +216,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
         scroller: sc,
         spacer: sp,
         overlays: { main: ovMain.current, frow: ovFRow.current, fcol: ovFCol.current, corner: ovCorner.current },
+        editorSlot: editorSlotRef.current,
       },
       {
         onRenderer: () => force(),
@@ -232,6 +253,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     )
     controller.fileName = propsRef.current.fileName
     controller.setEditConfig(buildEditConfig())
+    controller.setEditorResolver(editorResolver())
     controllerRef.current = controller
     if (pluginOvRef.current) pluginHostRef.current = new PluginOverlayHost(pluginOvRef.current)
 
@@ -266,6 +288,12 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     controllerRef.current?.setEditConfig(buildEditConfig())
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.editable, props.cellReadOnly, props.readOnlyRanges])
+
+  // ---- 编辑器解析器同步(E2) ----
+  useEffect(() => {
+    controllerRef.current?.setEditorResolver(editorResolver())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.editor, props.plugins])
 
   // ---- 新工作簿 → 选活动表 + onRendered ----
   useEffect(() => {
@@ -340,6 +368,9 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       canRedo: () => controllerRef.current?.canRedo() ?? false,
       getEditingCell: () => controllerRef.current?.getEditingCell() ?? null,
       getCellSnapshot: (row, col) => controllerRef.current?.getCellSnapshot(row, col) ?? null,
+      beginEdit: (row, col) => controllerRef.current?.beginEdit(row, col) ?? false,
+      cancelEdit: () => controllerRef.current?.cancelEdit(),
+      isEditing: () => controllerRef.current?.isEditing() ?? false,
       exportImage: (opts) => controllerRef.current!.exportImage(opts),
       downloadImage: (opts) => controllerRef.current!.downloadImage(opts),
       exportPdf: (opts) => controllerRef.current!.exportPdf(opts),
@@ -395,6 +426,9 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     canRedo: () => controllerRef.current?.canRedo() ?? false,
     getEditingCell: () => controllerRef.current?.getEditingCell() ?? null,
     getCellSnapshot: (row, col) => controllerRef.current?.getCellSnapshot(row, col) ?? null,
+    beginEdit: (row, col) => controllerRef.current?.beginEdit(row, col) ?? false,
+    cancelEdit: () => controllerRef.current?.cancelEdit(),
+    isEditing: () => controllerRef.current?.isEditing() ?? false,
     exportImage: (opts) => controllerRef.current!.exportImage(opts),
     downloadImage: (opts) => controllerRef.current!.downloadImage(opts),
     exportPdf: (opts) => controllerRef.current!.exportPdf(opts),
@@ -572,6 +606,8 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
         <div className="rxl-ov-slot">
           <div ref={pluginOvRef} />
         </div>
+        {/* 单元格编辑器层(E2):CellEditorHost 挂载 */}
+        <div className="rxl-editor-slot" ref={editorSlotRef} />
 
         {findOpen && workbook && (
           <div className="rxl-findbar">

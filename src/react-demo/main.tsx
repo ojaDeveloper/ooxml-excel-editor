@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { ExcelViewer, type ExcelViewerHandle } from '@/react'
 import { definePlugin } from '@/core/plugin'
 import type { ExcelSource } from '@/core/loader'
+import { demoSelectEditor } from '@/demo-shared/demo-editor'
 
 // 跨框架插件:同一份 definePlugin 在 Vue / React 都能用。overlay 返回 DOM(框架无关)。
 const demoPlugin = definePlugin({
@@ -73,6 +74,7 @@ function Demo() {
           plugins={[demoPlugin]}
           editable={editMode}
           readOnlyRanges={[{ top: 1, left: 0, bottom: 1, right: 4 }]}
+          editor={demoSelectEditor}
           onCellChange={(p) => {
             if (import.meta.env.DEV) (window as unknown as { __lastCellChange?: unknown }).__lastCellChange = p
           }}

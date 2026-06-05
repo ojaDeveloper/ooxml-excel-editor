@@ -66,6 +66,8 @@ export type { EditCommand, CellPos } from './edit/commands'
 export { buildCellSnapshot, cloneCell } from './model/snapshot'
 export type { CellSnapshot } from './model/snapshot'
 export { setCellValue, clearCell, setRangeValues, restoreCell, internStyle } from './model/mutations'
+export { CellEditorHost } from './edit/editor-host'
+export type { CellEditorContext, CellEditorFactory, EditorResolver, EditorCommitValue } from './edit/editor-context'
 
 // ---- 插件 / 扩展点(框架无关) ----
 export { definePlugin } from './plugin'

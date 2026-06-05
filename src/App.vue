@@ -4,6 +4,7 @@ import ExcelViewer from './components/ExcelViewer.vue'
 import { definePlugin } from './core/plugin'
 import type { ViewerApi } from './core/plugin'
 import type { PdfPageContext } from './core/export/types'
+import { demoSelectEditor } from './demo-shared/demo-editor'
 
 const src = ref<File | string | undefined>(undefined)
 const fileName = ref<string>('')
@@ -164,6 +165,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         :plugins="plugins"
         :editable="editMode"
         :read-only-ranges="[{ top: 1, left: 0, bottom: 1, right: 4 }]"
+        :editor="demoSelectEditor"
         :toolbar="['find', 'filter', 'clear-filter', 'separator', 'copy', 'freeze', 'separator', 'zoom', 'export']"
         @selection-change="(s) => (lastEvent = `选区 ${s.range.top + 1},${s.range.left + 1} → ${s.range.bottom + 1},${s.range.right + 1}`)"
         @cell-change="onCellChange"

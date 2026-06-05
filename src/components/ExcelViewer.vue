@@ -21,6 +21,7 @@ import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { ViewerController, type TooltipState, type FindState } from '@/core/viewer/controller'
 import type { EditConfig } from '@/core/edit/types'
 import type { CellChangePayload } from '@/core/edit/edit-controller'
+import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
 import { revokeImages } from '@/core/finalize'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '@/core/export'
 import ViewerToolbar from './ViewerToolbar.vue'
@@ -59,6 +60,8 @@ const props = withDefaults(
     cellReadOnly?: (cell: CellModel | null, pos: { row: number; col: number }) => boolean | void
     /** 只读区域(0-based 闭区间);命中即只读 */
     readOnlyRanges?: MergeRange[]
+    /** 自定义单元格编辑器(按格返回工厂;覆盖插件 editor)。需 editable 开启 */
+    editor?: EditorResolver
   }>(),
   // toolbar 默认 true(显示内置项);若不显式给默认,Vue 会把布尔型 prop 缺省判成 false
   { openLinks: true, toolbar: true },
@@ -93,6 +96,16 @@ const effectiveEditConfig = computed<EditConfig>(() => ({
   cellReadOnly: props.cellReadOnly,
   readOnlyRanges: props.readOnlyRanges,
 }))
+// 合并编辑器解析器(E2:组件 editor prop 优先,其次插件 editor 数组序首个非空)
+function resolveEditor(cell: CellModel | null, pos: { row: number; col: number }): CellEditorFactory | void {
+  const fromProp = props.editor?.(cell, pos)
+  if (fromProp) return fromProp
+  for (const p of normalizedPlugins.value) {
+    const f = p.editor?.(cell, pos)
+    if (f) return f
+  }
+}
+const hasEditor = computed(() => !!props.editor || normalizedPlugins.value.some((p) => p.editor))
 
 const emit = defineEmits<{
   /** 工作簿解析并首次渲染完成 */
@@ -157,6 +170,7 @@ const sheet = computed<SheetModel | null>(() => {
 // overlay slot 用: 每次重绘 +1 → 作用域插槽重算 rectOf 位置(随滚动/缩放/切表跟随)
 const renderTick = ref(0)
 const spacerEl = ref<HTMLElement | null>(null)
+const editorSlotEl = ref<HTMLElement | null>(null) // E2: 单元格编辑器挂载层
 let controller: ViewerController | null = null
 
 function doRender() {
@@ -189,7 +203,7 @@ let resizeObserver: ResizeObserver | null = null
 onMounted(() => {
   initPlugins()
   // DOM 挂载后实例化框架无关控制器,把 canvas/scroller/spacer/叠加层四象限交给它
-  if (canvasEl.value && renderAreaEl.value && scrollerEl.value && spacerEl.value && ovMain.value && ovFRow.value && ovFCol.value && ovCorner.value) {
+  if (canvasEl.value && renderAreaEl.value && scrollerEl.value && spacerEl.value && editorSlotEl.value && ovMain.value && ovFRow.value && ovFCol.value && ovCorner.value) {
     controller = new ViewerController(
       {
         canvas: canvasEl.value,
@@ -197,6 +211,7 @@ onMounted(() => {
         scroller: scrollerEl.value,
         spacer: spacerEl.value,
         overlays: { main: ovMain.value, frow: ovFRow.value, fcol: ovFCol.value, corner: ovCorner.value },
+        editorSlot: editorSlotEl.value,
       },
       {
         onRenderer: (r) => (renderer.value = r),
@@ -217,6 +232,7 @@ onMounted(() => {
     view.value = controller.view // 壳与控制器共享同一 view 对象(现有 view.value 读法不变)
     controller.fileName = props.fileName // 导出默认文件名
     controller.setEditConfig(effectiveEditConfig.value) // 编辑配置(默认只读)
+    controller.setEditorResolver(hasEditor.value ? resolveEditor : undefined) // E2: 编辑器解析
   }
   if (pluginOvEl.value) pluginOverlayHost = new PluginOverlayHost(pluginOvEl.value)
   if (props.src) load(props.src, effectiveTransform)
@@ -244,6 +260,7 @@ watch(() => props.fileName, (f) => {
 })
 
 watch(effectiveEditConfig, (cfg) => controller?.setEditConfig(cfg))
+watch([() => props.editor, normalizedPlugins], () => controller?.setEditorResolver(hasEditor.value ? resolveEditor : undefined))
 
 // 主题 / cellStyle / 插件 变化 → 重建渲染器(它们在构造时注入)
 watch(
@@ -498,6 +515,9 @@ const viewerApi: ViewerApi = {
   canRedo: () => controller?.canRedo() ?? false,
   getEditingCell: () => controller?.getEditingCell() ?? null,
   getCellSnapshot: (row, col) => controller?.getCellSnapshot(row, col) ?? null,
+  beginEdit: (row, col) => controller?.beginEdit(row, col) ?? false,
+  cancelEdit: () => controller?.cancelEdit(),
+  isEditing: () => controller?.isEditing() ?? false,
   exportImage,
   downloadImage,
   exportPdf,
@@ -794,6 +814,8 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
         <!-- 插件 overlay:框架无关 DOM,由 PluginOverlayHost 挂载 -->
         <div ref="pluginOvEl" />
       </div>
+      <!-- 单元格编辑器层(E2):在格 + overlay 之上,CellEditorHost 挂载 -->
+      <div class="editor-slot" ref="editorSlotEl" />
 
       <div
         v-if="tooltip"
@@ -897,6 +919,17 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
   pointer-events: none;
 }
 .ov-slot :deep(*) {
+  pointer-events: auto;
+}
+/* 单元格编辑器层(E2): 在最上,容器穿透,编辑器本身接收交互 */
+.editor-slot {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  overflow: hidden;
+  pointer-events: none;
+}
+.editor-slot :deep(*) {
   pointer-events: auto;
 }
 /* 滚动条层: 透明、置顶、提供原生滚动条 + 接收鼠标交互 */
