@@ -22,6 +22,7 @@ import { defaultFormulaEngineFactory } from '../formula/hyperformula-adapter'
 import type { CellValue, SheetToJSONOptions } from '../model/data-access'
 import type { CellSnapshot } from '../model/snapshot'
 import { CellEditorHost } from '../edit/editor-host'
+import { ContextMenuHost, type MenuItem } from '../edit/context-menu'
 import type { CellEditorContext, EditorCommitValue, EditorResolver } from '../edit/editor-context'
 import { defaultCellEditor } from '../edit/default-editor'
 import { CanvasRenderer, type RendererOptions, type ViewState } from '../render/canvas-renderer'
@@ -115,6 +116,8 @@ export class ViewerController {
   private rendererOpts: RendererOptions = {}
   /** 下载默认文件名(壳可随 props 更新) */
   fileName: string | undefined = undefined
+  /** 右键上下文菜单宿主(G3;body 级 DOM,框架无关) */
+  private menuHost = new ContextMenuHost()
   /** 原始 .xlsx 字节(壳加载时注入;供高保真 overlay 导出重载原件) */
   private sourceBuffer: ArrayBuffer | null = null
   /** 壳在加载后注入原始字节(供 exportXlsx({fidelity:'overlay'}) 重载原件叠加编辑) */
@@ -370,6 +373,7 @@ export class ViewerController {
     this.rafId = 0
     this.overlays.dispose()
     this.editorHost.dispose()
+    this.menuHost.dispose()
     this.edit.disposeEngine()
   }
 
@@ -720,6 +724,43 @@ export class ViewerController {
 
   onMouseLeave(): void {
     this.hooks.onTooltip(null)
+  }
+
+  /** 右键上下文菜单(G3;仅 editable;只读用浏览器默认菜单)。壳把 contextmenu 事件转给它。 */
+  onContextMenu(e: MouseEvent): void {
+    if (!this.editCfg.editable) return
+    const r = this.renderer
+    const p = this.localXY(e)
+    if (!r || !p) return
+    // 右键点在内容格上且不在当前选区 → 先选中该格(仿 Excel)
+    const hit = r.cellAtScreen(this.view, p.x, p.y)
+    let sel = this.getSelection()
+    if (hit && (!sel || hit.row < sel.top || hit.row > sel.bottom || hit.col < sel.left || hit.col > sel.right)) {
+      this.selectCell(hit.row, hit.col)
+      this.render()
+      sel = this.getSelection()
+    }
+    if (!sel) return
+    const range = { ...sel }
+    const rows = range.bottom - range.top + 1
+    const cols = range.right - range.left + 1
+    const single = range.top === range.bottom && range.left === range.right
+    const items: MenuItem[] = [
+      { label: '复制', action: () => void this.copySelection() },
+      { label: '粘贴', action: () => void this.pasteFromClipboard() },
+      { separator: true },
+      { label: `在上方插入 ${rows} 行`, action: () => this.insertRows(range.top, rows) },
+      { label: `在左侧插入 ${cols} 列`, action: () => this.insertCols(range.left, cols) },
+      { label: `删除 ${rows} 行`, action: () => this.deleteRows(range.top, rows) },
+      { label: `删除 ${cols} 列`, action: () => this.deleteCols(range.left, cols) },
+      { separator: true },
+      { label: '合并单元格', disabled: single, action: () => this.mergeCells(range) },
+      { label: '拆分单元格', action: () => this.unmergeCells(range) },
+      { separator: true },
+      { label: '清除内容', action: () => this.clearRange(range) },
+    ]
+    e.preventDefault()
+    this.menuHost.show(e.clientX, e.clientY, items)
   }
 
   private updateHover(e: MouseEvent): void {

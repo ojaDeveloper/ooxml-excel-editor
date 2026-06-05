@@ -696,6 +696,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
           onMouseLeave={() => controllerRef.current?.onMouseLeave()}
           onDoubleClick={(e) => controllerRef.current?.onDblClick(e.nativeEvent)}
           onKeyDown={(e) => controllerRef.current?.onKeyDown(e.nativeEvent)}
+          onContextMenu={(e) => controllerRef.current?.onContextMenu(e.nativeEvent)}
         >
           <div className="rxl-spacer" ref={spacerRef} />
         </div>

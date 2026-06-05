@@ -366,6 +366,9 @@ function fmtNum(n: number): string {
 function onMouseDown(e: MouseEvent) {
   controller?.onMouseDown(e)
 }
+function onContextMenu(e: MouseEvent) {
+  controller?.onContextMenu(e)
+}
 function onMouseMove(e: MouseEvent) {
   controller?.onMouseMove(e)
 }
@@ -816,6 +819,7 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
         @mouseleave="onMouseLeave"
         @dblclick="onDblClick"
         @keydown="onKeyDown"
+        @contextmenu="onContextMenu"
       >
         <div class="spacer" ref="spacerEl" />
       </div>
