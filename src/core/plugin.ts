@@ -37,6 +37,8 @@ export type PluginEvent =
   | 'cell-change'
   | 'edit-start'
   | 'edit-commit'
+  | 'dim-change'
+  | 'dirty-change'
 
 /** 命令式 API(组件 ref 与插件 ctx 共用) */
 export interface ViewerApi {
@@ -93,6 +95,14 @@ export interface ViewerApi {
   cancelEdit(): void
   /** 当前是否有活动编辑器 */
   isEditing(): boolean
+  /** 程序化设列宽(px,模型单位);editable 时入命令栈(可撤销 + 发 dim-change + 记脏) */
+  setColumnWidth(col: number, width: number): boolean
+  /** 程序化设行高(px,模型单位);editable 时入命令栈 */
+  setRowHeight(row: number, height: number): boolean
+  /** 当前是否有未保存修改(自加载/还原以来发生过编辑或 resize) */
+  isDirty(): boolean
+  /** 放弃全部修改,还原到刚加载的原件;返回是否还原 */
+  resetToOriginal(): boolean
 }
 
 /** overlay 渲染上下文(随滚动/缩放,tick 变即重渲) */

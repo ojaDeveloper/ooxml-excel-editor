@@ -42,6 +42,14 @@ function onCellChange(p: { before: { text: string }; after: { text: string }; so
   lastEvent.value = `[${p.source}] R?C? "${p.before.text}" → "${p.after.text}"`
   if (import.meta.env.DEV) (window as unknown as { __lastCellChange?: unknown }).__lastCellChange = p
 }
+// E3.5: 列宽/行高 + 脏状态变更(DEV 挂 window 供 e2e 校验)
+function onDimChange(p: { axis: string; index: number; before: number; after: number; source: string }) {
+  lastEvent.value = `[${p.source}] ${p.axis}${p.index} ${Math.round(p.before)}→${Math.round(p.after)}px`
+  if (import.meta.env.DEV) (window as unknown as { __lastDimChange?: unknown }).__lastDimChange = p
+}
+function onDirtyChange(p: { dirty: boolean }) {
+  if (import.meta.env.DEV) (window as unknown as { __lastDirtyChange?: unknown }).__lastDirtyChange = p
+}
 
 // 开发环境把命令式 API 挂到 window,便于 e2e 计算 canvas 上的几何(如筛选按钮位置)
 if (import.meta.env.DEV) {
@@ -169,6 +177,8 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         :toolbar="['find', 'filter', 'clear-filter', 'separator', 'copy', 'freeze', 'separator', 'zoom', 'export']"
         @selection-change="(s) => (lastEvent = `选区 ${s.range.top + 1},${s.range.left + 1} → ${s.range.bottom + 1},${s.range.right + 1}`)"
         @cell-change="onCellChange"
+        @dim-change="onDimChange"
+        @dirty-change="onDirtyChange"
       >
         <!-- 分层 UI 演示: B3 上叠一个可点徽标,随滚动跟随 -->
         <template #overlay="{ rectOf, tick }">

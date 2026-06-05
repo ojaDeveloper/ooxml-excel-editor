@@ -1,24 +1,38 @@
 import { describe, it, expect } from 'vitest'
-import { EditController, type EditControllerHost, type CellChangePayload } from '../edit-controller'
-import type { CellStyle, SheetModel } from '../../model/types'
+import { EditController, type EditControllerHost } from '../edit-controller'
+import type { CellStyle, SheetModel, WorkbookModel } from '../../model/types'
 import { cellKey } from '../../model/types'
 
 const styleA = { font: {}, fill: { type: 'none' }, numFmt: 'General' } as unknown as CellStyle
 
-function setup(readOnly: Set<string> = new Set()) {
-  const sheet = { cells: new Map(), styles: [styleA], dimension: { rows: 0, cols: 0 } } as unknown as SheetModel
-  const events: { event: string; payload: CellChangePayload }[] = []
+function setup(readOnly: Set<string> = new Set(), editingEnabled = true) {
+  const sheet = {
+    name: 'S1',
+    cells: new Map(),
+    styles: [styleA],
+    columns: new Map(),
+    rows: new Map(),
+    merges: [],
+    images: [],
+    defaultColWidth: 64,
+    defaultRowHeight: 20,
+    dimension: { rows: 0, cols: 0 },
+  } as unknown as SheetModel
+  const workbook = { sheets: [sheet], activeSheet: 0, themeColors: [], date1904: false } as unknown as WorkbookModel
+  const events: { event: string; payload: any }[] = []
   let renders = 0
   const host: EditControllerHost = {
     getSheet: () => sheet,
+    getWorkbook: () => workbook,
     getDate1904: () => false,
-    isEditable: (r, c) => !readOnly.has(`${r}:${c}`),
+    isEditable: (r, c) => editingEnabled && !readOnly.has(`${r}:${c}`),
+    isEditingEnabled: () => editingEnabled,
     onModelChange: () => {
       renders++
     },
-    emit: (event, payload) => events.push({ event, payload: payload as CellChangePayload }),
+    emit: (event, payload) => events.push({ event, payload }),
   }
-  return { sheet, ec: new EditController(host), events, renders: () => renders }
+  return { sheet, workbook, ec: new EditController(host), events, renders: () => renders }
 }
 
 describe('EditController(命令式编辑 + 前后快照事件 + undo/redo)', () => {
@@ -28,12 +42,12 @@ describe('EditController(命令式编辑 + 前后快照事件 + undo/redo)', () 
     expect(ok).toBe(true)
     expect(sheet.cells.get(cellKey(0, 0))).toMatchObject({ type: 'number', raw: 42 })
     expect(renders()).toBe(1)
-    expect(events).toHaveLength(1)
-    expect(events[0].event).toBe('cell-change')
-    expect(events[0].payload.source).toBe('api')
-    expect(events[0].payload.before.cell).toBeNull() // 前态空
-    expect(events[0].payload.after.raw).toBe(42) // 后态值
-    expect(events[0].payload.after.text).toBe('42') // 显示文本一致
+    const cc = events.filter((e) => e.event === 'cell-change')
+    expect(cc).toHaveLength(1)
+    expect(cc[0].payload.source).toBe('api')
+    expect(cc[0].payload.before.cell).toBeNull() // 前态空
+    expect(cc[0].payload.after.raw).toBe(42) // 后态值
+    expect(cc[0].payload.after.text).toBe('42') // 显示文本一致
   })
 
   it('只读格:editCell 不生效、无事件', () => {
@@ -91,5 +105,81 @@ describe('EditController(命令式编辑 + 前后快照事件 + undo/redo)', () 
     expect(snap.computed).toBe(7)
     expect(snap.text).toBe('7')
     expect(snap.cell).toMatchObject({ type: 'number', raw: 7 })
+  })
+})
+
+describe('EditController — 维度编辑(resize 入命令栈;E3.5)', () => {
+  it('setDimension:写模型 + 发 dim-change(before 默认→after)+ 可撤销', () => {
+    const { sheet, ec, events, renders } = setup()
+    const ok = ec.setDimension('col', 2, 120)
+    expect(ok).toBe(true)
+    expect(sheet.columns.get(2)).toMatchObject({ width: 120, hidden: false })
+    expect(renders()).toBe(1)
+    const dim = events.find((e) => e.event === 'dim-change')!
+    expect(dim.payload).toMatchObject({ axis: 'col', index: 2, before: 64, after: 120, source: 'api' })
+    // undo → 回落默认(删 Map 项)
+    ec.undo()
+    expect(sheet.columns.has(2)).toBe(false)
+    expect(ec.canRedo()).toBe(true)
+    ec.redo()
+    expect(sheet.columns.get(2)).toMatchObject({ width: 120 })
+  })
+
+  it('recordDimEdit:模型已改(模拟拖拽),补登 undo 还原前态 + 发 dim-change', () => {
+    const { sheet, ec, events } = setup()
+    sheet.columns.set(1, { width: 200, hidden: false }) // 模拟 renderer 拖拽已改完
+    ec.recordDimEdit('col', 1, null, 64, 200) // 前态无项(null)
+    expect(events.some((e) => e.event === 'dim-change')).toBe(true)
+    expect(ec.canUndo()).toBe(true)
+    ec.undo() // 还原到前态 null → 删项回落默认
+    expect(sheet.columns.has(1)).toBe(false)
+  })
+
+  it('行高同理:setDimension(row) 改 rows Map', () => {
+    const { sheet, ec } = setup()
+    ec.setDimension('row', 0, 40)
+    expect(sheet.rows.get(0)).toMatchObject({ height: 40 })
+  })
+
+  it('非编辑模式:setDimension 不生效', () => {
+    const { sheet, ec } = setup(new Set(), false)
+    expect(ec.setDimension('col', 0, 99)).toBe(false)
+    expect(sheet.columns.has(0)).toBe(false)
+  })
+})
+
+describe('EditController — 脏状态 + 还原原件(E3.5)', () => {
+  it('编辑 → dirty=true + 发 dirty-change;首次才发', () => {
+    const { ec, events } = setup()
+    expect(ec.isDirty()).toBe(false)
+    ec.editCell(0, 0, 1)
+    expect(ec.isDirty()).toBe(true)
+    const dirtyEvts = events.filter((e) => e.event === 'dirty-change')
+    expect(dirtyEvts).toHaveLength(1)
+    expect(dirtyEvts[0].payload).toEqual({ dirty: true })
+    ec.editCell(0, 1, 2) // 第二次编辑不再发 dirty-change
+    expect(events.filter((e) => e.event === 'dirty-change')).toHaveLength(1)
+  })
+
+  it('resetToOriginal:还原值 + 列宽 + 清脏 + 清命令栈', () => {
+    const { sheet, ec, events } = setup()
+    ec.editCell(0, 0, 'edited') // 触发懒捕获 baseline(此刻 sheet 为空)
+    ec.setDimension('col', 0, 150)
+    expect(ec.isDirty()).toBe(true)
+    const ok = ec.resetToOriginal()
+    expect(ok).toBe(true)
+    expect(sheet.cells.has(cellKey(0, 0))).toBe(false) // 值还原(原本空)
+    expect(sheet.columns.has(0)).toBe(false) // 列宽还原(原本默认)
+    expect(ec.isDirty()).toBe(false)
+    expect(ec.canUndo()).toBe(false)
+    expect(events.some((e) => e.event === 'dirty-change' && e.payload.dirty === false)).toBe(true)
+  })
+
+  it('resetDirtyBaseline:换新簿作废 baseline,reset 不再还原', () => {
+    const { ec } = setup()
+    ec.editCell(0, 0, 1)
+    ec.resetDirtyBaseline() // 模拟换新工作簿
+    expect(ec.isDirty()).toBe(false)
+    expect(ec.resetToOriginal()).toBe(false) // 无 baseline
   })
 })

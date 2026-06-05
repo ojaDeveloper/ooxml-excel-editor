@@ -61,11 +61,29 @@ export { PluginOverlayHost } from './viewer/plugin-overlay'
 export { resolveEditable } from './edit/permissions'
 export type { EditConfig, EditPermission } from './edit/types'
 export { EditController } from './edit/edit-controller'
-export type { EditControllerHost, EditEventName, EditSource, CellChangePayload } from './edit/edit-controller'
-export type { EditCommand, CellPos } from './edit/commands'
+export type {
+  EditControllerHost,
+  EditEventName,
+  EditSource,
+  CellChangePayload,
+  DimChangePayload,
+  DirtyChangePayload,
+} from './edit/edit-controller'
+export { isDimCommand } from './edit/commands'
+export type { EditCommand, CellPos, DimAxis } from './edit/commands'
 export { buildCellSnapshot, cloneCell } from './model/snapshot'
 export type { CellSnapshot } from './model/snapshot'
-export { setCellValue, clearCell, setRangeValues, restoreCell, internStyle } from './model/mutations'
+export {
+  setCellValue,
+  clearCell,
+  setRangeValues,
+  restoreCell,
+  internStyle,
+  setColumnWidth,
+  setRowHeight,
+  restoreDimension,
+} from './model/mutations'
+export { cloneWorkbook, restoreWorkbookInto } from './model/clone'
 export { CellEditorHost } from './edit/editor-host'
 export type { CellEditorContext, CellEditorFactory, EditorResolver, EditorCommitValue } from './edit/editor-context'
 

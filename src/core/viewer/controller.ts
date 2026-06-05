@@ -10,7 +10,7 @@
  * onSelectionChange(壳据此 +1 让选区相关计算属性重算)、onCellClick/onCellDblClick/onHyperlink/onFilterButton/onTooltip
  * (交互回调,壳决定 emit / 插件派发 / 策略)。壳不需镜像 contentSize/selection —— 直接读控制器。
  */
-import type { CellModel, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
+import type { CellModel, ColumnInfo, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
 import type { EditConfig } from '../edit/types'
 import { resolveEditable } from '../edit/permissions'
@@ -121,7 +121,9 @@ export class ViewerController {
   private dragMode: 'none' | 'cell' | 'row' | 'col' | 'resize-col' | 'resize-row' = 'none'
   private resizeTarget = -1 // 正在拖拽改宽高的列/行索引
   private resizeStartPos = 0 // 起始鼠标坐标(px)
-  private resizeStartSize = 0 // 起始宽/高(px)
+  private resizeStartSize = 0 // 起始宽/高(px,zoom 后)
+  private resizeStartInfo: ColumnInfo | RowInfo | null = null // 拖拽起始的列/行维度信息(克隆,供 undo)
+  private resizeStartModelSize = 0 // 拖拽起始的模型 px 尺寸(非缩放,dim-change 事件用)
   private dragMoved = false
 
   // ---- 查找态 ----
@@ -165,8 +167,10 @@ export class ViewerController {
 
     const editHost: EditControllerHost = {
       getSheet: () => this.sheet,
+      getWorkbook: () => this.workbook,
       getDate1904: () => this.workbook?.date1904 ?? false,
       isEditable: (row, col) => this.isCellEditable(row, col),
+      isEditingEnabled: () => !!this.editCfg.editable,
       onModelChange: () => {
         this.renderer?.rebuildMetrics()
         this.refreshContentSize()
@@ -192,9 +196,11 @@ export class ViewerController {
     this.sortDir = null
     this.editorHost.unmount() // 卸掉活动编辑器
     this.edit.reset() // 切表/换簿:命令栈 + 编辑态作废
+    const freshWorkbook = this.workbook !== workbook // 换新簿 vs 仅切表
 
     this.sheet = sheet
     this.workbook = workbook
+    if (freshWorkbook) this.edit.resetDirtyBaseline() // 换新簿:作废 baseline + 清脏(切表保留)
     this.activeIndex = Math.max(0, workbook.sheets.indexOf(sheet))
     this.rendererOpts = opts
     this.renderer = new CanvasRenderer(this.els.canvas, sheet, workbook, zoom, opts)
@@ -277,17 +283,39 @@ export class ViewerController {
     this.refreshContentSize()
     this.scheduleRender()
   }
-  /** 双击列边界: 自适应列宽 */
+  /** 双击列边界: 自适应列宽(editable 时入命令栈/发事件/记脏) */
   autoFitColumn(col: number): void {
+    if (this.editCfg.editable) this.beginResizeRecord('col', col)
     this.renderer?.autoFitColumn(col)
     this.refreshContentSize()
     this.render()
+    if (this.editCfg.editable) this.endResizeRecord('col', col)
   }
-  /** 双击行边界: 自适应行高 */
+  /** 双击行边界: 自适应行高(editable 时入命令栈/发事件/记脏) */
   autoFitRow(row: number): void {
+    if (this.editCfg.editable) this.beginResizeRecord('row', row)
     this.renderer?.autoFitRow(row)
     this.refreshContentSize()
     this.render()
+    if (this.editCfg.editable) this.endResizeRecord('row', row)
+  }
+
+  // ---- 维度 / 脏状态 命令式 API(E3.5) ----
+  /** 程序化设列宽(px,模型单位/非缩放);editable 时走命令栈(可撤销+发 dim-change+记脏)。 */
+  setColumnWidth(col: number, width: number): boolean {
+    return this.edit.setDimension('col', col, width)
+  }
+  /** 程序化设行高(px,模型单位/非缩放);editable 时走命令栈。 */
+  setRowHeight(row: number, height: number): boolean {
+    return this.edit.setDimension('row', row, height)
+  }
+  /** 当前是否有未保存修改(自加载/还原以来发生过编辑或 resize)。 */
+  isDirty(): boolean {
+    return this.edit.isDirty()
+  }
+  /** 放弃全部修改,还原到刚加载的原件;返回是否还原(无 baseline → false)。 */
+  resetToOriginal(): boolean {
+    return this.edit.resetToOriginal()
   }
 
   /** 单元格当前屏幕矩形(render-area 相对) */
@@ -482,6 +510,7 @@ export class ViewerController {
           this.resizeTarget = b.col
           this.resizeStartPos = p.x
           this.resizeStartSize = r.metrics.colWidth(b.col)
+          this.beginResizeRecord('col', b.col)
           return
         }
       } else if (p.x < r.metrics.rowHeaderWidth) {
@@ -491,6 +520,7 @@ export class ViewerController {
           this.resizeTarget = b.row
           this.resizeStartPos = p.y
           this.resizeStartSize = r.metrics.rowHeight(b.row)
+          this.beginResizeRecord('row', b.row)
           return
         }
       }
@@ -565,8 +595,38 @@ export class ViewerController {
         const link = r.cellHyperlink(hit.row, hit.col)
         if (link) this.hooks.onHyperlink(link, { row: hit.row, col: hit.col })
       }
+    } else if (this.dragMode === 'resize-col') {
+      this.endResizeRecord('col', this.resizeTarget)
+    } else if (this.dragMode === 'resize-row') {
+      this.endResizeRecord('row', this.resizeTarget)
     }
     this.dragMode = 'none'
+  }
+
+  // ---- resize → 命令栈记账(仅 editable;E3.5) ----
+  /** 拖拽起始:editable 时捕获 baseline + 起始维度信息(供 undo / dim-change)。 */
+  private beginResizeRecord(axis: 'col' | 'row', index: number): void {
+    if (!this.editCfg.editable || !this.sheet) return
+    this.edit.ensureBaseline()
+    if (axis === 'col') {
+      const info = this.sheet.columns.get(index)
+      this.resizeStartInfo = info ? { ...info } : null
+      this.resizeStartModelSize = info?.width ?? this.sheet.defaultColWidth
+    } else {
+      const info = this.sheet.rows.get(index)
+      this.resizeStartInfo = info ? { ...info } : null
+      this.resizeStartModelSize = info?.height ?? this.sheet.defaultRowHeight
+    }
+  }
+  /** 拖拽结束:模型已被 renderer 改完,补登一条 undo 项 + 发 dim-change。 */
+  private endResizeRecord(axis: 'col' | 'row', index: number): void {
+    if (!this.editCfg.editable || !this.sheet) return
+    const after =
+      axis === 'col'
+        ? (this.sheet.columns.get(index)?.width ?? this.sheet.defaultColWidth)
+        : (this.sheet.rows.get(index)?.height ?? this.sheet.defaultRowHeight)
+    this.edit.recordDimEdit(axis, index, this.resizeStartInfo, this.resizeStartModelSize, after)
+    this.resizeStartInfo = null
   }
 
   onMouseLeave(): void {

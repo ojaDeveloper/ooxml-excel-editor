@@ -78,6 +78,12 @@ function Demo() {
           onCellChange={(p) => {
             if (import.meta.env.DEV) (window as unknown as { __lastCellChange?: unknown }).__lastCellChange = p
           }}
+          onDimChange={(p) => {
+            if (import.meta.env.DEV) (window as unknown as { __lastDimChange?: unknown }).__lastDimChange = p
+          }}
+          onDirtyChange={(p) => {
+            if (import.meta.env.DEV) (window as unknown as { __lastDirtyChange?: unknown }).__lastDirtyChange = p
+          }}
           onRendered={() => {
             // ref.current 此时已就绪,再挂一次保证 e2e 拿到
             if (import.meta.env.DEV) (window as unknown as { __excelViewerReact?: ExcelViewerHandle | null }).__excelViewerReact = ref.current

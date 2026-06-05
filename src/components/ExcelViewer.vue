@@ -20,7 +20,7 @@ import { CanvasRenderer, type ViewState } from '@/core/render/canvas-renderer'
 import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { ViewerController, type TooltipState, type FindState } from '@/core/viewer/controller'
 import type { EditConfig } from '@/core/edit/types'
-import type { CellChangePayload } from '@/core/edit/edit-controller'
+import type { CellChangePayload, DimChangePayload, DirtyChangePayload } from '@/core/edit/edit-controller'
 import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
 import { revokeImages } from '@/core/finalize'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '@/core/export'
@@ -130,6 +130,10 @@ const emit = defineEmits<{
   (e: 'edit-start', payload: unknown): void
   /** 提交编辑 */
   (e: 'edit-commit', payload: unknown): void
+  /** 列宽/行高变更(拖拽/autofit/API/撤销重做;前后 px 尺寸) */
+  (e: 'dim-change', payload: DimChangePayload): void
+  /** 脏状态变更(有/无未保存修改) */
+  (e: 'dirty-change', payload: DirtyChangePayload): void
 }>()
 
 const { loading, error, workbook, load, progress } = useExcelDocument()
@@ -518,6 +522,10 @@ const viewerApi: ViewerApi = {
   beginEdit: (row, col) => controller?.beginEdit(row, col) ?? false,
   cancelEdit: () => controller?.cancelEdit(),
   isEditing: () => controller?.isEditing() ?? false,
+  setColumnWidth: (col, width) => controller?.setColumnWidth(col, width) ?? false,
+  setRowHeight: (row, height) => controller?.setRowHeight(row, height) ?? false,
+  isDirty: () => controller?.isDirty() ?? false,
+  resetToOriginal: () => controller?.resetToOriginal() ?? false,
   exportImage,
   downloadImage,
   exportPdf,

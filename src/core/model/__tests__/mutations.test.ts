@@ -1,11 +1,26 @@
 import { describe, it, expect } from 'vitest'
-import { setCellValue, clearCell, setRangeValues, restoreCell, internStyle } from '../mutations'
+import {
+  setCellValue,
+  clearCell,
+  setRangeValues,
+  restoreCell,
+  internStyle,
+  setColumnWidth,
+  setRowHeight,
+  restoreDimension,
+} from '../mutations'
 import type { CellStyle, SheetModel } from '../types'
 import { cellKey } from '../types'
 
 const styleA = { font: {}, numFmt: 'General' } as unknown as CellStyle
 function sheet(): SheetModel {
-  return { cells: new Map(), styles: [styleA], dimension: { rows: 0, cols: 0 } } as unknown as SheetModel
+  return {
+    cells: new Map(),
+    styles: [styleA],
+    columns: new Map(),
+    rows: new Map(),
+    dimension: { rows: 0, cols: 0 },
+  } as unknown as SheetModel
 }
 
 describe('mutations.setCellValue(类型推断 + dimension)', () => {
@@ -76,5 +91,29 @@ describe('mutations 其它', () => {
     const i1 = internStyle(s, a)
     const i2 = internStyle(s, { font: { bold: true }, numFmt: 'General' } as unknown as CellStyle)
     expect(i1).toBe(i2) // 深相等复用
+  })
+})
+
+describe('mutations 维度(列宽/行高;E3.5)', () => {
+  it('setColumnWidth/setRowHeight 写 Map + 保留 hidden + 下限保护', () => {
+    const s = sheet()
+    s.columns.set(0, { width: 50, hidden: true })
+    setColumnWidth(s, 0, 100)
+    expect(s.columns.get(0)).toMatchObject({ width: 100, hidden: true }) // hidden 保留
+    setColumnWidth(s, 1, 2) // 低于下限
+    expect(s.columns.get(1)!.width).toBe(8) // 夹到 8
+    setRowHeight(s, 0, 30)
+    expect(s.rows.get(0)).toMatchObject({ height: 30, hidden: false })
+  })
+
+  it('restoreDimension:写回信息 / null 删项(回落默认)', () => {
+    const s = sheet()
+    setColumnWidth(s, 0, 120)
+    restoreDimension(s, 'col', 0, { width: 64, hidden: false })
+    expect(s.columns.get(0)).toMatchObject({ width: 64 })
+    restoreDimension(s, 'col', 0, null)
+    expect(s.columns.has(0)).toBe(false) // null → 删项
+    restoreDimension(s, 'row', 3, { height: 22, hidden: false })
+    expect(s.rows.get(3)).toMatchObject({ height: 22 })
   })
 })

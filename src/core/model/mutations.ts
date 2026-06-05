@@ -3,7 +3,7 @@
  * 只改 SheetModel,不碰渲染;调用方负责重绘(同 sortColumn 的"改完重绘")。
  * 全部以"前态可逆"为原则:返回旧值供命令栈做 undo。
  */
-import type { CellModel, CellStyle, MergeRange, SheetModel } from './types'
+import type { CellModel, CellStyle, ColumnInfo, MergeRange, RowInfo, SheetModel } from './types'
 import { cellKey } from './types'
 import type { CellValue } from './data-access'
 
@@ -63,6 +63,34 @@ export function restoreCell(sheet: SheetModel, row: number, col: number, cell: C
   } else {
     sheet.cells.delete(key)
   }
+}
+
+// ====================== 维度(列宽/行高)写 ======================
+// 注:存储单位与 renderer 一致——列宽=px(已从字符换算)、行高=px(已从 pt 换算)。
+// 这里只写模型;调用方负责 rebuildMetrics + 重绘(同 setCellValue 的"改完重绘")。
+
+/** 设列宽(px,非缩放存储);保留 hidden。 */
+export function setColumnWidth(sheet: SheetModel, col: number, width: number): void {
+  const info = sheet.columns.get(col)
+  sheet.columns.set(col, { width: Math.max(8, width), hidden: info?.hidden ?? false })
+}
+
+/** 设行高(px,非缩放存储);保留 hidden。 */
+export function setRowHeight(sheet: SheetModel, row: number, height: number): void {
+  const info = sheet.rows.get(row)
+  sheet.rows.set(row, { height: Math.max(6, height), hidden: info?.hidden ?? false })
+}
+
+/** 直接写回/删除一个列/行的维度信息(命令逆向用:精确还原前态;null=删 Map 项回落默认宽高)。 */
+export function restoreDimension(
+  sheet: SheetModel,
+  axis: 'col' | 'row',
+  index: number,
+  info: ColumnInfo | RowInfo | null,
+): void {
+  const map = axis === 'col' ? sheet.columns : sheet.rows
+  if (info) map.set(index, info as ColumnInfo & RowInfo)
+  else map.delete(index)
 }
 
 /** 样式去重入表,返回 styleId(E5 样式编辑用;深比较已存在则复用)。 */

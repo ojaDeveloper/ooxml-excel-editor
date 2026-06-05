@@ -15,7 +15,7 @@ import {
 } from 'react'
 import type { CellModel, CellStyleFn, MergeRange, SheetModel, TransformModelFn, WorkbookModel } from '@/core/model/types'
 import type { EditConfig } from '@/core/edit/types'
-import type { CellChangePayload } from '@/core/edit/edit-controller'
+import type { CellChangePayload, DimChangePayload, DirtyChangePayload } from '@/core/edit/edit-controller'
 import type { CellSnapshot } from '@/core/model/snapshot'
 import type { CellValue } from '@/core/model/data-access'
 import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
@@ -68,6 +68,10 @@ export interface ExcelViewerProps {
   onCellChange?: (p: CellChangePayload) => void
   onEditStart?: (p: unknown) => void
   onEditCommit?: (p: unknown) => void
+  /** 列宽/行高变更(拖拽/autofit/API/撤销重做;前后 px 尺寸) */
+  onDimChange?: (p: DimChangePayload) => void
+  /** 脏状态变更(有/无未保存修改) */
+  onDirtyChange?: (p: DirtyChangePayload) => void
 }
 
 /** 命令式句柄(与 Vue ref / ViewerApi 对齐) */
@@ -94,6 +98,10 @@ export interface ExcelViewerHandle {
   beginEdit: (row: number, col: number) => boolean
   cancelEdit: () => void
   isEditing: () => boolean
+  setColumnWidth: (col: number, width: number) => boolean
+  setRowHeight: (row: number, height: number) => boolean
+  isDirty: () => boolean
+  resetToOriginal: () => boolean
   exportImage: (opts?: ImageExportOptions) => Promise<Blob>
   downloadImage: (opts?: ImageExportOptions) => Promise<void>
   exportPdf: (opts?: PdfExportOptions) => Promise<Blob>
@@ -247,6 +255,8 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
           if (event === 'cell-change') propsRef.current.onCellChange?.(payload as CellChangePayload)
           else if (event === 'edit-start') propsRef.current.onEditStart?.(payload)
           else if (event === 'edit-commit') propsRef.current.onEditCommit?.(payload)
+          else if (event === 'dim-change') propsRef.current.onDimChange?.(payload as DimChangePayload)
+          else if (event === 'dirty-change') propsRef.current.onDirtyChange?.(payload as DirtyChangePayload)
           firePlugin(event, payload)
         },
       },
@@ -371,6 +381,10 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       beginEdit: (row, col) => controllerRef.current?.beginEdit(row, col) ?? false,
       cancelEdit: () => controllerRef.current?.cancelEdit(),
       isEditing: () => controllerRef.current?.isEditing() ?? false,
+      setColumnWidth: (col, width) => controllerRef.current?.setColumnWidth(col, width) ?? false,
+      setRowHeight: (row, height) => controllerRef.current?.setRowHeight(row, height) ?? false,
+      isDirty: () => controllerRef.current?.isDirty() ?? false,
+      resetToOriginal: () => controllerRef.current?.resetToOriginal() ?? false,
       exportImage: (opts) => controllerRef.current!.exportImage(opts),
       downloadImage: (opts) => controllerRef.current!.downloadImage(opts),
       exportPdf: (opts) => controllerRef.current!.exportPdf(opts),
@@ -429,6 +443,10 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     beginEdit: (row, col) => controllerRef.current?.beginEdit(row, col) ?? false,
     cancelEdit: () => controllerRef.current?.cancelEdit(),
     isEditing: () => controllerRef.current?.isEditing() ?? false,
+    setColumnWidth: (col, width) => controllerRef.current?.setColumnWidth(col, width) ?? false,
+    setRowHeight: (row, height) => controllerRef.current?.setRowHeight(row, height) ?? false,
+    isDirty: () => controllerRef.current?.isDirty() ?? false,
+    resetToOriginal: () => controllerRef.current?.resetToOriginal() ?? false,
     exportImage: (opts) => controllerRef.current!.exportImage(opts),
     downloadImage: (opts) => controllerRef.current!.downloadImage(opts),
     exportPdf: (opts) => controllerRef.current!.exportPdf(opts),
