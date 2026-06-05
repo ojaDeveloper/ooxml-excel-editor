@@ -305,6 +305,25 @@ describe('EditController — 行列结构编辑(E7)', () => {
     expect(ec.insertRows(0, 1)).toBe(false)
     expect(sheet.dimension.rows).toBe(3)
   })
+
+  it('插入行:公式引用自动重写(=A5→=A6),undo 还原引用文本(F1)', () => {
+    const { sheet, ec } = setup()
+    sheet.cells.set(cellKey(4, 1), { row: 4, col: 1, type: 'formula', raw: 0, formula: '=A5+1', styleId: 0 } as never)
+    sheet.dimension.rows = 5
+    ec.insertRows(2, 1) // 在第 2 行上方插入 → 公式格下移到 (5,1),引用 A5→A6
+    const moved = sheet.cells.get(cellKey(5, 1))!
+    expect(moved.formula).toBe('=A6+1') // 引用重写
+    ec.undo()
+    expect(sheet.cells.get(cellKey(4, 1))!.formula).toBe('=A5+1') // 还原
+  })
+
+  it('删除被引用行:公式引用 → #REF!', () => {
+    const { sheet, ec } = setup()
+    sheet.cells.set(cellKey(0, 0), { row: 0, col: 0, type: 'formula', raw: 0, formula: '=A5', styleId: 0 } as never)
+    sheet.dimension.rows = 5
+    ec.deleteRows(4, 1) // 删第 5 行(被 A5 引用)
+    expect(sheet.cells.get(cellKey(0, 0))!.formula).toBe('=#REF!')
+  })
 })
 
 /** 极简 mock 引擎:模型化 B1(0,1) = A1(0,0) + 1,够测 EditController 重算编排(不依赖 hyperformula)。 */
