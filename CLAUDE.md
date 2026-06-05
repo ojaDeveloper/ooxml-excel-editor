@@ -1,6 +1,6 @@
 # ooxml-excel-editor — 项目开发准则(AI 与贡献者必读)
 
-> Vue3(将来 + React)高保真 .xlsx 预览组件。从零实现解析与 Canvas 渲染,只读。
+> Vue3 + React 高保真 .xlsx 预览/编辑组件。从零实现解析与 Canvas 渲染。**默认只读、零回归;开 `editable` 进入编辑**(值/样式/列宽行高/图片/增删行列/公式重算/导出回写 .xlsx·JSON·CSV)。
 
 ## ★ 六条中心原则(任何后续开发都要围绕,不得破坏)
 
@@ -35,10 +35,10 @@ src/react(React 壳)→ dist/react.js:ExcelViewer.tsx + use-excel-document
 
 ## 不可破坏的硬约束
 
-- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **93 单测 + 13 e2e(12 Vue + 1 React)**。
-- **core 不依赖框架**:`src/core/**` 不得出现 `from 'vue'` / `'react'`(构建后 `dist/core.js` 也不得 import vue/react)。
+- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **188 单测 + 40 e2e(Vue + React 双覆盖)**。
+- **core 不依赖框架**:`src/core/**` 不得出现 `from 'vue'` / `'react'`(构建后 `dist/core.js` 也不得 import vue/react/hyperformula/exceljs —— 重依赖全动态懒加载)。
 - **两壳同构**:给 `ViewerController` 加能力后,Vue 壳(components/ExcelViewer.vue)与 React 壳(react/ExcelViewer.tsx)都要接上,e2e 各自覆盖。
-- **只读**:不做单元格编辑 / 公式重算(沿用 Excel 缓存值)。
+- **默认只读、零回归**:`editable` 关闭时行为与历史完全一致;编辑能力(单元格/样式/列宽行高/图片/增删行列/公式重算/导出回写)是 **opt-in**,全建在框架无关 core 的命令栈 + 前后快照事件上(见 README「编辑」章节)。
 - **e2e 浏览器**:`@playwright/test` 固定 `1.58.0`(对应本机缓存 chromium-1208,避开需下载的新版)。
 
 ## 常用命令
@@ -55,11 +55,13 @@ node scripts/gen-sample.mjs   # 重新生成 public/sample.xlsx
 
 ## 路线图(多框架架构 + 分包 + 发布)
 
-- **Phase A ✅** 抽框架无关 ViewerController(A1 叠加层 / A2a 渲染引擎 / A2b 选区+交互 / A2c 查找+筛选 / A3 导出编排)
+- **Phase A ✅** 抽框架无关 ViewerController(叠加层 / 渲染引擎 / 选区+交互 / 查找+筛选+排序 / 导出编排)
 - **Phase B ✅** 分包:单包三子入口(core/vue/react 共享 dist/core.js)
 - **Phase C ✅** React 薄壳(src/react,共用 core,带真浏览器 e2e)
-- **Phase D**(待)文档:ARCHITECTURE / CONTRIBUTING / README 补 React 用法 + 三入口 + props/导出表
-- **Phase E**(待)发布:定 author/repo/homepage 占位元数据、CHANGELOG、`npm publish`
-- 仍未做:排序(sort)交互;真正 workspace 三包拆分(目前单包多入口已够用)
+- **Phase D ✅** 文档:ARCHITECTURE / CONTRIBUTING / README(React 用法 + 三入口 + props/导出/编辑表)
+- **编辑能力 E0–E8 ✅(→ 1.0.0)** 配置/只读 → 写数据层+命令栈+前后快照事件 → editor 扩展 → 内置编辑器 → 数据层语义统一(resize 入栈+脏状态/还原)→ 公式重算(可换引擎)→ 样式 → 图片 → 增删行列 → 导出 xlsx/json/csv
+- **保真增强 F1–F3 ✅(→ 1.1.0)** 增删行列公式引用重写 / 图片导出 twoCell+EMU 偏移 / xlsx overlay 高保真
+- **Phase E**(进行中)发布:`ooxml-excel-editor` 1.1.0 → `npm publish`(2FA)
+- 仍未做:真正 workspace 三包拆分(目前单包多入口已够用);透视表 UI;大文件编辑性能
 
-每阶段测试 green + 提交,不破坏现有 Vue / React。
+每阶段测试 green + 提交,不破坏现有 Vue / React、不破坏「默认只读零回归」。
