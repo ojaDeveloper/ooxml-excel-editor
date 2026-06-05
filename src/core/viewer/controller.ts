@@ -25,7 +25,7 @@ import { CellEditorHost } from '../edit/editor-host'
 import { ContextMenuHost, type MenuItem } from '../edit/context-menu'
 import type { CellEditorContext, EditorCommitValue, EditorResolver } from '../edit/editor-context'
 import { defaultCellEditor } from '../edit/default-editor'
-import { CanvasRenderer, type RendererOptions, type ViewState } from '../render/canvas-renderer'
+import { CanvasRenderer, type CellImageFit, type RendererOptions, type ViewState } from '../render/canvas-renderer'
 import { OverlayManager, type OverlayQuads } from './overlay-manager'
 import { WorkbookExporter, type ExporterHost } from '../export/exporter'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '../export/types'
@@ -235,7 +235,10 @@ export class ViewerController {
     }
     this.activeIndex = Math.max(0, workbook.sheets.indexOf(sheet))
     this.rendererOpts = opts
-    this.renderer = new CanvasRenderer(this.els.canvas, sheet, workbook, zoom, opts)
+    this.renderer = new CanvasRenderer(this.els.canvas, sheet, workbook, zoom, {
+      ...opts,
+      onNeedsRedraw: () => this.scheduleRender(), // WPS 内嵌图异步解码完触发重绘
+    })
     this.hooks.onRenderer(this.renderer)
     this.view.zoom = zoom
     this.view.scrollX = 0
@@ -414,6 +417,47 @@ export class ViewerController {
   /** 活动单元格(选区的"焦点"角) */
   getActiveCell(): Cell | null {
     return this.selActive
+  }
+
+  /**
+   * 活动格(或指定格)在公式栏里**可编辑的字符串**:
+   * 公式 → `=...`;数值 → 原始数字串(非格式化,避免编辑货币/千分位被当文本);布尔 → TRUE/FALSE;
+   * 日期/字符串/富文本 → 显示文本。空格返 ''。供公式栏 / 命令式取活动格编辑值。
+   */
+  getCellEditString(row?: number, col?: number): string {
+    const a = row != null && col != null ? { row, col } : this.selActive
+    if (!a || !this.sheet) return ''
+    const cell = this.sheet.cells.get(cellKey(a.row, a.col))
+    if (!cell) return ''
+    if (cell.formula) return '=' + cell.formula
+    const raw = cell.raw
+    if (typeof raw === 'number') return String(raw)
+    if (typeof raw === 'boolean') return raw ? 'TRUE' : 'FALSE'
+    return this.renderer?.cellText(a.row, a.col) ?? (raw == null ? '' : String(raw))
+  }
+
+  /** 活动格此刻是否可经公式栏/命令式编辑(editable 开 + 该格非只读) */
+  canEditActiveCell(): boolean {
+    const a = this.selActive
+    return !!(a && this.editCfg.editable && this.isCellEditable(a.row, a.col))
+  }
+
+  /**
+   * 经公式栏提交活动格的值(value 同 editCell 的输入语义:`=`→公式、数字串→数字…)。
+   * 仅在 editable + 该格可编辑时生效;move='down' 时提交后活动格下移(像 Excel 回车)。返回是否提交。
+   */
+  commitActiveCellValue(value: string, move?: 'down'): boolean {
+    const a = this.selActive
+    if (!a || !this.editCfg.editable || !this.isCellEditable(a.row, a.col)) return false
+    // 若正有内嵌编辑器开着,先取消(避免双重提交打架)
+    if (this.editorHost.isActive()) this.cancelEdit()
+    // 仅当值真变化才入命令栈(避免把格式化显示文本当字符串回写、避免空提交污染 undo 栈)
+    if (value !== this.getCellEditString(a.row, a.col)) this.edit.editCell(a.row, a.col, value)
+    if (move === 'down' && this.renderer) {
+      const nr = Math.min(a.row + 1, this.renderer.metrics.rows - 1)
+      this.selectCell(nr, a.col) // selectCell 内含滚动到视图
+    }
+    return true
   }
 
   /** 清空选区 */
@@ -759,6 +803,33 @@ export class ViewerController {
       { separator: true },
       { label: '清除内容', action: () => this.clearRange(range) },
     ]
+    // WPS 单元格内嵌图(DISPIMG)⇄ 浮动图互转(单格时才有意义)
+    if (single) {
+      const r = range.top
+      const c = range.left
+      const activeCell = this.sheet?.cells.get(cellKey(r, c))
+      const imgs = this.sheet?.images ?? []
+      const convertItems: MenuItem[] = []
+      if (activeCell?.dispImgId) {
+        convertItems.push({ label: '内嵌图转为浮动图', action: () => this.convertCellImageToFloat(r, c) })
+      }
+      if (imgs.length) {
+        // 就近:点中的格上正好压着一张浮动图 → 一键嵌入它(无需手挑 #N)
+        const hereIdx = imgs.findIndex((_, i) => {
+          const a = this.imageCellOf(i)
+          return !!a && a.row === r && a.col === c
+        })
+        if (hereIdx >= 0) convertItems.push({ label: '将此处浮动图嵌入单元格', action: () => this.convertImageToCellAuto(hereIdx) })
+        // 整列(中心落在本列的浮动图)
+        const inCol = imgs.reduce((n, _, i) => n + (this.imageCellOf(i)?.col === c ? 1 : 0), 0)
+        if (inCol > 0) convertItems.push({ label: `整列浮动图嵌入单元格(${inCol} 张)`, action: () => this.convertAllImagesToCells(c) })
+        // 整表
+        convertItems.push({ label: `整表浮动图嵌入单元格(${imgs.length} 张)`, action: () => this.convertAllImagesToCells() })
+      }
+      if (convertItems.length) {
+        items.push({ separator: true }, ...convertItems)
+      }
+    }
     e.preventDefault()
     this.menuHost.show(e.clientX, e.clientY, items)
   }
@@ -1395,6 +1466,59 @@ export class ViewerController {
   /** 缩放图片(目标屏幕像素宽高);editable 时入命令栈 + 发 image-change。 */
   resizeImage(index: number, widthPx: number, heightPx: number): boolean {
     return this.editImageRect(index, (rect) => ({ ...rect, width: Math.max(8, widthPx), height: Math.max(8, heightPx) }))
+  }
+
+  // ---- WPS 单元格内嵌图(DISPIMG)⇄ 浮动图互转(第二期) ----
+  /** 改 WPS 单元格内嵌图贴合方式(fill/contain/cover);即时重绘。 */
+  setCellImageFit(fit: CellImageFit): void {
+    this.rendererOpts = { ...this.rendererOpts, cellImageFit: fit }
+    if (this.renderer?.setCellImageFit(fit)) this.render()
+  }
+  /** 读 WPS 单元格内嵌图登记表(克隆,id→{id,src,mime});无则空数组。 */
+  getCellImages(): { id: string; src: string; mime?: string }[] {
+    const reg = this.workbook?.cellImages
+    if (!reg) return []
+    return Array.from(reg.values(), (ci) => ({ id: ci.id, src: ci.src, mime: ci.mime }))
+  }
+  /** 一张浮动图视觉中心落在哪个单元格(用几何反推;无渲染器时回落锚点 from 格)。 */
+  imageCellOf(index: number): { row: number; col: number } | null {
+    const img = this.sheet?.images[index]
+    if (!img) return null
+    if (!this.renderer) return { row: img.from.row, col: img.from.col }
+    const r = anchorRect(this.renderer.metrics, img)
+    return {
+      row: this.renderer.metrics.rowAt(r.top + r.height / 2),
+      col: this.renderer.metrics.colAt(r.left + r.width / 2),
+    }
+  }
+  /** 浮动图 → 单元格内嵌图(显式指定目标格);失败返 false。 */
+  convertImageToCell(imageIndex: number, row: number, col: number): boolean {
+    return this.edit.convertImageToCell(imageIndex, row, col)
+  }
+  /** 浮动图 → 内嵌图(**就近**:图在哪格就嵌哪格,目标由几何反推);失败返 false。 */
+  convertImageToCellAuto(imageIndex: number): boolean {
+    const at = this.imageCellOf(imageIndex)
+    return at ? this.edit.convertImageToCell(imageIndex, at.row, at.col) : false
+  }
+  /**
+   * 批量把浮动图按"所在单元格"就近嵌入(整表 / 整列)。`col` 给定则只嵌中心落在该列的图。
+   * 一次进撤销栈(单次 Ctrl+Z 全撤)。返回成功嵌入的张数。
+   */
+  convertAllImagesToCells(col?: number): number {
+    const imgs = this.sheet?.images
+    if (!imgs || !imgs.length) return 0
+    const targets: { imageIndex: number; row: number; col: number }[] = []
+    for (let i = 0; i < imgs.length; i++) {
+      const at = this.imageCellOf(i)
+      if (!at) continue
+      if (col != null && at.col !== col) continue
+      targets.push({ imageIndex: i, row: at.row, col: at.col })
+    }
+    return this.edit.convertImagesToCells(targets)
+  }
+  /** 单元格内嵌图 → 浮动图(把 row,col 的 DISPIMG 拎成浮动图);非内嵌图格返 false。 */
+  convertCellImageToFloat(row: number, col: number, size?: { width: number; height: number }): boolean {
+    return this.edit.convertCellImageToFloat(row, col, size)
   }
   // ---- 行列结构编辑(E7;增删行列) ----
   /** 在 at 处插入 count 行(原 at 行及之后下移)。 */

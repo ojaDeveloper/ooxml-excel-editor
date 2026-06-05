@@ -293,6 +293,87 @@ describe('EditController — 图片编辑(E6)', () => {
   })
 })
 
+describe('EditController — WPS 内嵌图 ⇄ 浮动图互转(第二期)', () => {
+  const floatWithBytes = () =>
+    ({ src: 'blob:x', bytes: new Uint8Array([1, 2, 3]), mime: 'image/png', from: { col: 0, row: 0, colOffEmu: 0, rowOffEmu: 0 } }) as never
+
+  it('浮动图 → 内嵌图:登记表 + dispImgId + 移除浮动图;undo 整簿还原', () => {
+    const { sheet, workbook, ec } = setup()
+    sheet.images.push(floatWithBytes())
+    expect(ec.convertImageToCell(0, 2, 3)).toBe(true)
+    expect(sheet.images).toHaveLength(0)
+    const cell = sheet.cells.get(cellKey(2, 3))!
+    expect(cell.dispImgId).toBeTruthy()
+    expect(cell.formula).toContain('DISPIMG')
+    expect(workbook.cellImages!.size).toBe(1)
+    ec.undo()
+    expect(sheet.images).toHaveLength(1)
+    expect(sheet.cells.get(cellKey(2, 3))).toBeUndefined()
+    expect(workbook.cellImages?.size ?? 0).toBe(0)
+  })
+
+  it('内嵌图 → 浮动图:清空格 + 新浮动图 + 回收无引用登记项;非内嵌格返 false', () => {
+    const { sheet, workbook, ec } = setup()
+    sheet.images.push(floatWithBytes())
+    ec.convertImageToCell(0, 2, 3) // 先造一个内嵌图格
+    expect(ec.convertCellImageToFloat(2, 3)).toBe(true)
+    expect(sheet.images).toHaveLength(1)
+    expect(sheet.cells.get(cellKey(2, 3))).toBeUndefined()
+    expect(workbook.cellImages?.size ?? 0).toBe(0) // 无引用 → 回收
+    expect(ec.convertCellImageToFloat(5, 5)).toBe(false) // 非内嵌图格
+  })
+
+  it('浮动图缺字节 → 不可转,返 false 不动模型', () => {
+    const { sheet, ec } = setup()
+    sheet.images.push({ src: '', from: { col: 0, row: 0, colOffEmu: 0, rowOffEmu: 0 } } as never)
+    expect(ec.convertImageToCell(0, 1, 1)).toBe(false)
+    expect(sheet.images).toHaveLength(1)
+  })
+
+  it('批量嵌入 convertImagesToCells:多图一次入栈 + 单次 undo 全还原', () => {
+    const { sheet, workbook, ec } = setup()
+    sheet.images.push(floatWithBytes(), floatWithBytes(), floatWithBytes())
+    const n = ec.convertImagesToCells([
+      { imageIndex: 0, row: 1, col: 0 },
+      { imageIndex: 1, row: 2, col: 0 },
+      { imageIndex: 2, row: 3, col: 0 },
+    ])
+    expect(n).toBe(3)
+    expect(sheet.images).toHaveLength(0)
+    expect(workbook.cellImages!.size).toBe(3)
+    expect(sheet.cells.get(cellKey(1, 0))?.dispImgId).toBeTruthy()
+    expect(sheet.cells.get(cellKey(3, 0))?.dispImgId).toBeTruthy()
+    // 单次 undo 把整批撤回
+    ec.undo()
+    expect(sheet.images).toHaveLength(3)
+    expect(workbook.cellImages?.size ?? 0).toBe(0)
+    expect(sheet.cells.get(cellKey(1, 0))).toBeUndefined()
+  })
+
+  it('批量:缺字节的图被跳过,只数成功的', () => {
+    const { sheet, ec } = setup()
+    sheet.images.push(floatWithBytes(), { src: '', from: { col: 0, row: 0, colOffEmu: 0, rowOffEmu: 0 } } as never)
+    const n = ec.convertImagesToCells([
+      { imageIndex: 0, row: 1, col: 0 },
+      { imageIndex: 1, row: 2, col: 0 },
+    ])
+    expect(n).toBe(1) // 第二张缺字节 → 跳过
+    expect(sheet.images).toHaveLength(1) // 缺字节那张仍在
+  })
+
+  it('互转往返 redo:undo 后 redo 重做转换', () => {
+    const { sheet, workbook, ec } = setup()
+    sheet.images.push(floatWithBytes())
+    ec.convertImageToCell(0, 1, 1)
+    ec.undo()
+    expect(sheet.images).toHaveLength(1)
+    ec.redo()
+    expect(sheet.images).toHaveLength(0)
+    expect(workbook.cellImages!.size).toBe(1)
+    expect(sheet.cells.get(cellKey(1, 1))?.dispImgId).toBeTruthy()
+  })
+})
+
 describe('EditController — 行列结构编辑(E7)', () => {
   it('insertRows:格下移 + 发 struct-change + undo 还原', () => {
     const { sheet, ec, events } = setup()

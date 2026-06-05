@@ -48,11 +48,11 @@ function run(label: string, url: string, canvasSel: string, renderAreaSel: strin
     await expect(menu).toBeHidden()
     expect(await call(page, handle, 'getCellValue', 2, 1)).toBeNull()
 
-    // 再右键 → 点菜单外部关闭
+    // 再右键 → 点菜单外部关闭(菜单向下展开,选网格左上角一点必在菜单外,避免点中菜单项)
     await page.mouse.click(c.x, c.y, { button: 'right' })
     await expect(menu).toBeVisible()
-    const far = await cellCenter(page, renderAreaSel, handle, 6, 3) // 菜单外的另一格
-    await page.mouse.click(far.x, far.y)
+    const area = (await page.locator(renderAreaSel).boundingBox())!
+    await page.mouse.click(area.x + 5, area.y + 5) // 网格左上角(右键点在 B3,菜单在其右下方 → 左上角必在菜单外)
     await expect(menu).toBeHidden()
   })
 }

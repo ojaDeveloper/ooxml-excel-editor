@@ -57,6 +57,7 @@ export function autoFitRowHeights(sheet: SheetModel, workbook: WorkbookModel, ct
     if (extra <= 0) continue
     const cur = sheet.rows.get(r)
     if (cur?.hidden) continue
+    if (cur?.customHeight) continue // 手动设高的行不自动撑大(与 Excel/WPS 一致:只裁切/溢出)
     const base = cur?.height ?? sheet.defaultRowHeight
     const natural = Math.ceil(sheet.defaultRowHeight + extra + CELL_PADDING)
     if (natural > base) sheet.rows.set(r, { height: natural, hidden: false })

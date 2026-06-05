@@ -45,6 +45,8 @@ const props = withDefaults(
     transformModel?: TransformModelFn
     /** 渲染钩子: 按单元格覆盖样式 */
     cellStyle?: CellStyleFn
+    /** WPS 单元格内嵌图(DISPIMG)贴合方式:contain 等比(默认,与 WPS 渲染一致)/ fill 拉伸铺满 / cover 等比裁剪 */
+    cellImageFit?: 'fill' | 'contain' | 'cover'
     /** 单击超链接是否默认在新标签打开(false 时只派发 hyperlink-click 事件) */
     openLinks?: boolean
     /** 插件列表(打包主题/钩子/事件/overlay) */
@@ -203,6 +205,7 @@ function rebuildRenderer() {
   controller.rebuild(s, wb, zoom.value, {
     theme: effectiveTheme.value,
     cellStyle: hasCellStyleHook.value ? combinedCellStyle : undefined,
+    cellImageFit: props.cellImageFit,
   })
   controller.setSourceBuffer(sourceBuffer.value) // 注入原件字节(overlay 高保真导出)
 }
@@ -277,6 +280,7 @@ watch(() => props.fileName, (f) => {
 
 watch(effectiveEditConfig, (cfg) => controller?.setEditConfig(cfg))
 watch([() => props.editor, normalizedPlugins], () => controller?.setEditorResolver(hasEditor.value ? resolveEditor : undefined))
+watch(() => props.cellImageFit, (fit) => { if (fit) controller?.setCellImageFit(fit) })
 
 // 主题 / cellStyle / 插件 变化 → 重建渲染器(它们在构造时注入)
 watch(
@@ -350,6 +354,48 @@ const formulaBarText = computed(() => {
   if (!r || !c) return ''
   return r.cellFormula(c.row, c.col) ?? r.cellText(c.row, c.col)
 })
+// 公式栏可编辑 + 与单元格联动(提交→改格;切格/格内编辑→栏更新)
+const fbDraft = ref('')
+const fbEditing = ref(false)
+const fbCanEdit = computed(() => {
+  void selVersion.value
+  void renderTick.value
+  return !!controller?.canEditActiveCell()
+})
+const formulaBarEditString = computed(() => {
+  void selVersion.value
+  void renderTick.value
+  return controller?.getCellEditString() ?? ''
+})
+watch(formulaBarEditString, (v) => { if (!fbEditing.value) fbDraft.value = v }, { immediate: true })
+function fbFocus() {
+  fbEditing.value = true
+  fbDraft.value = formulaBarEditString.value
+}
+function fbCommit(move?: 'down') {
+  controller?.commitActiveCellValue(fbDraft.value, move)
+  fbEditing.value = false
+  fbDraft.value = formulaBarEditString.value
+  if (move === 'down') scrollerEl.value?.focus()
+}
+function fbCancel() {
+  fbEditing.value = false
+  fbDraft.value = formulaBarEditString.value
+  scrollerEl.value?.focus()
+}
+function fbBlur() {
+  if (fbEditing.value) fbCommit()
+}
+function fbKeydown(e: KeyboardEvent) {
+  e.stopPropagation() // 别让网格键盘处理插手
+  if (e.key === 'Enter') {
+    e.preventDefault()
+    fbCommit('down')
+  } else if (e.key === 'Escape') {
+    e.preventDefault()
+    fbCancel()
+  }
+}
 const stats = computed(() => {
   void selVersion.value
   const r = renderer.value
@@ -538,6 +584,15 @@ const viewerApi: ViewerApi = {
   removeImage: (i) => controller?.removeImage(i) ?? false,
   moveImage: (i, dx, dy) => controller?.moveImage(i, dx, dy) ?? false,
   resizeImage: (i, w, h) => controller?.resizeImage(i, w, h) ?? false,
+  getCellEditString: () => controller?.getCellEditString() ?? '',
+  canEditActiveCell: () => controller?.canEditActiveCell() ?? false,
+  commitActiveCellValue: (value, move) => controller?.commitActiveCellValue(value, move) ?? false,
+  getCellImages: () => controller?.getCellImages() ?? [],
+  setCellImageFit: (fit) => controller?.setCellImageFit(fit),
+  convertImageToCell: (i, row, col) => controller?.convertImageToCell(i, row, col) ?? false,
+  convertImageToCellAuto: (i) => controller?.convertImageToCellAuto(i) ?? false,
+  convertAllImagesToCells: (col) => controller?.convertAllImagesToCells(col) ?? 0,
+  convertCellImageToFloat: (row, col, size) => controller?.convertCellImageToFloat(row, col, size) ?? false,
   insertRows: (at, count) => controller?.insertRows(at, count) ?? false,
   deleteRows: (at, count) => controller?.deleteRows(at, count) ?? false,
   insertCols: (at, count) => controller?.insertCols(at, count) ?? false,
@@ -799,7 +854,18 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
     <div v-if="workbook" class="formula-bar">
       <span class="addr">{{ activeCellAddr || '—' }}</span>
       <span class="fx">fx</span>
-      <span class="content" :title="formulaBarText">{{ formulaBarText }}</span>
+      <input
+        v-if="fbCanEdit"
+        class="content content-input"
+        :value="fbDraft"
+        :title="fbDraft"
+        spellcheck="false"
+        @focus="fbFocus"
+        @input="fbDraft = ($event.target as HTMLInputElement).value"
+        @keydown="fbKeydown"
+        @blur="fbBlur"
+      />
+      <span v-else class="content" :title="formulaBarText">{{ formulaBarText }}</span>
     </div>
 
     <div class="render-area" ref="renderAreaEl">
@@ -1022,6 +1088,17 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
   text-overflow: ellipsis;
   color: #222;
   font-family: Consolas, 'Courier New', monospace;
+}
+.formula-bar .content-input {
+  border: none;
+  outline: none;
+  height: 100%;
+  background: transparent;
+  font-size: 13px;
+}
+.formula-bar .content-input:focus {
+  background: #f5fbf7;
+  box-shadow: inset 0 0 0 1px #21a366;
 }
 /* 状态栏 */
 .status-bar {

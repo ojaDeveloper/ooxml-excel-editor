@@ -30,7 +30,13 @@ function cloneSheet(s: SheetModel): SheetModel {
 
 /** 轻量深克隆整个工作簿(供 editable 懒捕获 baseline + 结构编辑 undo 快照)。 */
 export function cloneWorkbook(wb: WorkbookModel): WorkbookModel {
-  return { ...wb, sheets: wb.sheets.map(cloneSheet), themeColors: wb.themeColors.slice() }
+  return {
+    ...wb,
+    sheets: wb.sheets.map(cloneSheet),
+    themeColors: wb.themeColors.slice(),
+    // WPS 内嵌图登记表:新 Map(防转换增删污染快照),CellImage 不可变 → 按引用共享
+    cellImages: wb.cellImages ? new Map(wb.cellImages) : undefined,
+  }
 }
 
 /**
@@ -45,4 +51,5 @@ export function restoreWorkbookInto(live: WorkbookModel, snap: WorkbookModel): v
   live.activeSheet = fresh.activeSheet
   live.date1904 = fresh.date1904
   live.themeColors = fresh.themeColors
+  live.cellImages = fresh.cellImages // 转换 undo/redo 要还原登记表
 }

@@ -20,6 +20,15 @@ const parser = new XMLParser({
   allowBooleanAttributes: true,
   parseAttributeValue: true,
   trimValues: true,
+  // 放宽实体展开上限:大表(几百个 DISPIMG 格,每个含 &quot;)会超 fxp 默认 1000 上限而抛错,
+  // 导致 drawing-parser / row-meta 在大表上静默失败。本地解析可信 xlsx,放宽到足够大。
+  processEntities: {
+    enabled: true,
+    maxEntitySize: 10_000_000,
+    maxTotalExpansions: 100_000_000,
+    maxExpandedLength: 100_000_000,
+    maxEntityCount: 10_000_000,
+  },
 })
 
 export function openPackage(buffer: ArrayBuffer): RawPackage {

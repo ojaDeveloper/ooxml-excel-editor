@@ -5,6 +5,8 @@ import { openPackage } from './raw-xml'
 import { parseTheme } from './theme'
 import { buildSheets } from './exceljs-adapter'
 import { attachDrawings } from './drawing-parser'
+import { attachCellImages } from './cell-image-parser'
+import { attachRowMeta } from './row-meta-parser'
 import { attachSparklines } from './sparkline-parser'
 import { attachPageBreaks } from './page-break-parser'
 
@@ -29,6 +31,14 @@ export async function parseWorkbook(buffer: ArrayBuffer, onProgress?: ProgressFn
     console.warn('[ooxml-preview] drawings 解析失败，跳过图片/图表:', e)
   }
 
+  // 3.5 WPS 单元格内嵌图(DISPIMG):登记表 + 单元格 dispImgId 标记
+  let cellImages: WorkbookModel['cellImages']
+  try {
+    cellImages = attachCellImages(pkg, sheets)
+  } catch (e) {
+    console.warn('[ooxml-preview] WPS 单元格内嵌图(DISPIMG)解析失败，跳过:', e)
+  }
+
   // 4. 迷你图(sparklines)补齐
   try {
     attachSparklines(pkg, sheets)
@@ -43,6 +53,13 @@ export async function parseWorkbook(buffer: ArrayBuffer, onProgress?: ProgressFn
     console.warn('[ooxml-preview] 分页符解析失败，跳过:', e)
   }
 
+  // 6. 行 customHeight 标记(决定渲染层是否对该行做自动行高)
+  try {
+    attachRowMeta(pkg, sheets)
+  } catch (e) {
+    console.warn('[ooxml-preview] 行高标记解析失败，跳过:', e)
+  }
+
   const date1904 = !!(wb as any).properties?.date1904
 
   return {
@@ -50,5 +67,6 @@ export async function parseWorkbook(buffer: ArrayBuffer, onProgress?: ProgressFn
     activeSheet: 0,
     themeColors,
     date1904,
+    cellImages,
   }
 }

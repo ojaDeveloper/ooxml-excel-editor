@@ -48,6 +48,8 @@ export interface ExcelViewerProps {
   openLinks?: boolean
   transformModel?: TransformModelFn
   cellStyle?: CellStyleFn
+  /** WPS 单元格内嵌图(DISPIMG)贴合方式:contain 等比(默认,与 WPS 渲染一致)/ fill 拉伸铺满 / cover 等比裁剪 */
+  cellImageFit?: 'fill' | 'contain' | 'cover'
   /** 插件(与 Vue 通用):theme/transformModel/cellStyle/events/overlay/setup 全跨框架可用 */
   plugins?: ExcelPlugin[]
   /** 编辑总开关:默认 false = 只读(行为不变)。开启后才能进入编辑(E0:闸门) */
@@ -109,6 +111,18 @@ export interface ExcelViewerHandle {
   removeImage: (index: number) => boolean
   moveImage: (index: number, dxPx: number, dyPx: number) => boolean
   resizeImage: (index: number, widthPx: number, heightPx: number) => boolean
+  getCellImages: () => { id: string; src: string; mime?: string }[]
+  /** 活动格在公式栏里的可编辑字符串(公式→=…,数值→原始数字串) */
+  getCellEditString: () => string
+  /** 活动格此刻是否可经公式栏编辑(editable + 非只读) */
+  canEditActiveCell: () => boolean
+  /** 经公式栏提交活动格的值(move='down' 提交后下移) */
+  commitActiveCellValue: (value: string, move?: 'down') => boolean
+  setCellImageFit: (fit: 'fill' | 'contain' | 'cover') => void
+  convertImageToCell: (imageIndex: number, row: number, col: number) => boolean
+  convertImageToCellAuto: (imageIndex: number) => boolean
+  convertAllImagesToCells: (col?: number) => number
+  convertCellImageToFloat: (row: number, col: number, size?: { width: number; height: number }) => boolean
   insertRows: (at: number, count?: number) => boolean
   deleteRows: (at: number, count?: number) => boolean
   insertCols: (at: number, count?: number) => boolean
@@ -156,6 +170,9 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   const [zoom, setZoom] = useState(1)
   const [findOpen, setFindOpen] = useState(false)
   const [, force] = useReducer((x: number) => x + 1, 0)
+  // 公式栏编辑态(draft = 编辑中的文本;ref 标记是否正在编辑栏,改 ref 不触发重渲)
+  const [fbDraft, setFbDraft] = useState('')
+  const fbEditingRef = useRef(false)
 
   // DOM refs
   const renderAreaRef = useRef<HTMLDivElement>(null)
@@ -200,7 +217,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
           return acc
         }
       : undefined
-    return { theme, cellStyle }
+    return { theme, cellStyle, cellImageFit: propsRef.current.cellImageFit }
   }
   function effectiveTransform(wb: WorkbookModel): WorkbookModel {
     let m = wb
@@ -296,7 +313,10 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
         onFindChange: () => force(),
         onFilterChange: () => force(),
         onEditEvent: (event, payload) => {
-          if (event === 'cell-change') propsRef.current.onCellChange?.(payload as CellChangePayload)
+          if (event === 'cell-change') {
+            force() // 编辑改了格内容 → 重渲 chrome(公式栏联动);cell-change 非高频,安全
+            propsRef.current.onCellChange?.(payload as CellChangePayload)
+          }
           else if (event === 'edit-start') propsRef.current.onEditStart?.(payload)
           else if (event === 'edit-commit') propsRef.current.onEditCommit?.(payload)
           else if (event === 'dim-change') propsRef.current.onDimChange?.(payload as DimChangePayload)
@@ -350,6 +370,11 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     controllerRef.current?.setEditorResolver(editorResolver())
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.editor, props.plugins])
+
+  // ---- WPS 内嵌图贴合方式同步 ----
+  useEffect(() => {
+    if (props.cellImageFit) controllerRef.current?.setCellImageFit(props.cellImageFit)
+  }, [props.cellImageFit])
 
   // ---- 新工作簿 → 选活动表 + onRendered ----
   useEffect(() => {
@@ -428,6 +453,15 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       removeImage: (i) => controllerRef.current?.removeImage(i) ?? false,
       moveImage: (i, dx, dy) => controllerRef.current?.moveImage(i, dx, dy) ?? false,
       resizeImage: (i, w, h) => controllerRef.current?.resizeImage(i, w, h) ?? false,
+      getCellImages: () => controllerRef.current?.getCellImages() ?? [],
+      getCellEditString: () => controllerRef.current?.getCellEditString() ?? '',
+      canEditActiveCell: () => controllerRef.current?.canEditActiveCell() ?? false,
+      commitActiveCellValue: (v, m) => controllerRef.current?.commitActiveCellValue(v, m) ?? false,
+      setCellImageFit: (fit) => controllerRef.current?.setCellImageFit(fit),
+      convertImageToCell: (i, row, col) => controllerRef.current?.convertImageToCell(i, row, col) ?? false,
+      convertImageToCellAuto: (i) => controllerRef.current?.convertImageToCellAuto(i) ?? false,
+      convertAllImagesToCells: (col) => controllerRef.current?.convertAllImagesToCells(col) ?? 0,
+      convertCellImageToFloat: (row, col, size) => controllerRef.current?.convertCellImageToFloat(row, col, size) ?? false,
       insertRows: (at, count) => controllerRef.current?.insertRows(at, count) ?? false,
       deleteRows: (at, count) => controllerRef.current?.deleteRows(at, count) ?? false,
       insertCols: (at, count) => controllerRef.current?.insertCols(at, count) ?? false,
@@ -510,6 +544,15 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     removeImage: (i) => controllerRef.current?.removeImage(i) ?? false,
     moveImage: (i, dx, dy) => controllerRef.current?.moveImage(i, dx, dy) ?? false,
     resizeImage: (i, w, h) => controllerRef.current?.resizeImage(i, w, h) ?? false,
+    getCellImages: () => controllerRef.current?.getCellImages() ?? [],
+    getCellEditString: () => controllerRef.current?.getCellEditString() ?? '',
+    canEditActiveCell: () => controllerRef.current?.canEditActiveCell() ?? false,
+    commitActiveCellValue: (v, m) => controllerRef.current?.commitActiveCellValue(v, m) ?? false,
+    setCellImageFit: (fit) => controllerRef.current?.setCellImageFit(fit),
+    convertImageToCell: (i, row, col) => controllerRef.current?.convertImageToCell(i, row, col) ?? false,
+    convertImageToCellAuto: (i) => controllerRef.current?.convertImageToCellAuto(i) ?? false,
+    convertAllImagesToCells: (col) => controllerRef.current?.convertAllImagesToCells(col) ?? 0,
+    convertCellImageToFloat: (row, col, size) => controllerRef.current?.convertCellImageToFloat(row, col, size) ?? false,
     insertRows: (at, count) => controllerRef.current?.insertRows(at, count) ?? false,
     deleteRows: (at, count) => controllerRef.current?.deleteRows(at, count) ?? false,
     insertCols: (at, count) => controllerRef.current?.insertCols(at, count) ?? false,
@@ -612,6 +655,38 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   const selection = controller?.getSelection() ?? null
   const activeAddr = active ? colIndexToLetters(active.col) + (active.row + 1) : ''
   const formulaText = renderer && active ? (renderer.cellFormula(active.row, active.col) ?? renderer.cellText(active.row, active.col)) : ''
+  // 公式栏:可编辑判定 + 编辑字符串 + 联动处理(提交→改格;切格/格内编辑→栏更新)
+  const fbCanEdit = !!controller?.canEditActiveCell()
+  const fbEditString = controller?.getCellEditString() ?? ''
+  const fbValue = fbEditingRef.current ? fbDraft : fbEditString
+  const fbFocus = () => {
+    fbEditingRef.current = true
+    setFbDraft(controller?.getCellEditString() ?? '')
+  }
+  const fbCommit = (move?: 'down') => {
+    controller?.commitActiveCellValue(fbValue, move)
+    fbEditingRef.current = false
+    if (move === 'down') scrollerRef.current?.focus()
+    force()
+  }
+  const fbCancel = () => {
+    fbEditingRef.current = false
+    scrollerRef.current?.focus()
+    force()
+  }
+  const fbBlur = () => {
+    if (fbEditingRef.current) fbCommit()
+  }
+  const fbKeydown = (e: React.KeyboardEvent) => {
+    e.stopPropagation() // 别让网格键盘处理插手
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      fbCommit('down')
+    } else if (e.key === 'Escape') {
+      e.preventDefault()
+      fbCancel()
+    }
+  }
   const rangeLabel =
     selection && !(selection.top === selection.bottom && selection.left === selection.right)
       ? `${colIndexToLetters(selection.left)}${selection.top + 1}:${colIndexToLetters(selection.right)}${selection.bottom + 1}`
@@ -678,9 +753,22 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
         <div className="rxl-formula-bar">
           <span className="addr">{activeAddr || '—'}</span>
           <span className="fx">fx</span>
-          <span className="content" title={formulaText}>
-            {formulaText}
-          </span>
+          {fbCanEdit ? (
+            <input
+              className="content content-input"
+              value={fbValue}
+              title={fbValue}
+              spellCheck={false}
+              onFocus={fbFocus}
+              onChange={(e) => setFbDraft(e.target.value)}
+              onKeyDown={fbKeydown}
+              onBlur={fbBlur}
+            />
+          ) : (
+            <span className="content" title={formulaText}>
+              {formulaText}
+            </span>
+          )}
         </div>
       )}
 

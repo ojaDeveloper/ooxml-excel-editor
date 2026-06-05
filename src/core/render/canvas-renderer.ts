@@ -23,9 +23,22 @@ import {
 import { autoFitRowHeights } from '../layout/autofit'
 import { drawFilterButton, filterButtonBox, isFilterHeader } from './autofilter'
 
+/**
+ * WPS 单元格内嵌图(DISPIMG)在格内的贴合方式:
+ * - `contain`(默认,与 WPS 渲染一致):等比缩放完整显示,周围留白(不裁剪、不变形)。
+ *   WPS 打开导出文件时 DISPIMG 固定按 contain 渲染,故默认 contain 让预览所见即所得。
+ * - `fill`:拉伸铺满整格,随宽高变形(预览铺满,但导出后 WPS 仍按 contain 显示,二者不一致);
+ * - `cover`:等比放大铺满,超出部分裁掉(不变形、不留白)。
+ */
+export type CellImageFit = 'fill' | 'contain' | 'cover'
+
 export interface RendererOptions {
   theme?: Partial<ViewerTheme>
   cellStyle?: CellStyleFn
+  /** 异步内容(WPS 单元格内嵌图)解码完成后请求重绘;壳/控制器接到 scheduleRender */
+  onNeedsRedraw?: () => void
+  /** WPS 单元格内嵌图贴合方式(默认 contain,与 WPS 渲染一致) */
+  cellImageFit?: CellImageFit
 }
 
 /** 导出为离屏 canvas 的选项 */
@@ -99,6 +112,10 @@ export class CanvasRenderer {
   private sparklineIndex = new Map<string, Sparkline>()
   private theme: ViewerTheme
   private cellStyleHook?: CellStyleFn
+  private onNeedsRedraw?: () => void
+  private cellImageFit: CellImageFit
+  /** WPS 单元格内嵌图解码缓存: blob src → 已加载的 HTMLImageElement(complete 才画) */
+  private cellImageCache = new Map<string, HTMLImageElement>()
 
   constructor(
     private canvas: HTMLCanvasElement,
@@ -109,6 +126,8 @@ export class CanvasRenderer {
   ) {
     this.theme = mergeTheme(opts?.theme)
     this.cellStyleHook = opts?.cellStyle
+    this.onNeedsRedraw = opts?.onNeedsRedraw
+    this.cellImageFit = opts?.cellImageFit ?? 'contain' // 默认 contain:与 WPS DISPIMG 渲染一致
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('无法获取 canvas 2d context')
     this.ctx = ctx
@@ -119,6 +138,13 @@ export class CanvasRenderer {
     this.freeze = computeFreeze(sheet, this.metrics)
     this.cond = new ConditionalEngine(sheet)
     for (const sp of sheet.sparklines) this.sparklineIndex.set(cellKey(sp.row, sp.col), sp)
+  }
+
+  /** 改 WPS 单元格内嵌图贴合方式(fill/contain/cover);返回是否有变化(变了需重绘)。 */
+  setCellImageFit(fit: CellImageFit): boolean {
+    if (fit === this.cellImageFit) return false
+    this.cellImageFit = fit
+    return true
   }
 
   /** 改变缩放: 重建几何(列宽行高表头按 zoom 缩放)。合并/条件格式无需重建。 */
@@ -822,8 +848,10 @@ export class CanvasRenderer {
     const sparkline = this.sparklineIndex.get(cellKey(row, col))
     if (sparkline) drawSparkline(ctx, sparkline, x, y, w, h)
 
-    // 内容
-    if (cell && cell.type !== 'empty' && style) {
+    // 内容: WPS 单元格内嵌图(DISPIMG)优先画图(占文本位置),否则画文本/数值
+    if (cell?.dispImgId) {
+      this.drawCellImage(cell.dispImgId, x, y, w, h, zoom)
+    } else if (cell && cell.type !== 'empty' && style) {
       this.drawCellContent(cell, style, row, col, contentX, y, contentW, h, zoom, effect)
     }
 
@@ -853,6 +881,86 @@ export class CanvasRenderer {
       ctx.closePath()
       ctx.fill()
     }
+  }
+
+  /**
+   * 把 WPS 单元格内嵌图(DISPIMG)画进格内,贴合方式由 `cellImageFit` 决定(fill/contain/cover);
+   * 始终裁剪到格内、随行高列宽变化。未解码完成/缺图时画淡占位。
+   */
+  private drawCellImage(id: string, x: number, y: number, w: number, h: number, zoom: number): void {
+    const ctx = this.ctx
+    // 留 ~1px 内边距(不盖网格线);格子太小就不留,优先铺满
+    const pad = w > 6 && h > 6 ? Math.min(1 * zoom, 1.5) : 0
+    const boxX = x + pad
+    const boxY = y + pad
+    const boxW = Math.max(1, w - pad * 2)
+    const boxH = Math.max(1, h - pad * 2)
+    const entry = this.workbook.cellImages?.get(id)
+    if (!entry || !entry.src) {
+      this.drawImagePlaceholder(boxX, boxY, boxW, boxH, zoom)
+      return
+    }
+    const el = this.getCellImageEl(entry.src)
+    if (!el || !el.complete || el.naturalWidth === 0) {
+      this.drawImagePlaceholder(boxX, boxY, boxW, boxH, zoom)
+      return
+    }
+    // 按 fit 模式算目标矩形:fill=铺满变形;contain=等比留白;cover=等比裁剪铺满
+    let dx = boxX
+    let dy = boxY
+    let dw = boxW
+    let dh = boxH
+    if (this.cellImageFit !== 'fill') {
+      const iw = el.naturalWidth
+      const ih = el.naturalHeight
+      const scale =
+        this.cellImageFit === 'cover' ? Math.max(boxW / iw, boxH / ih) : Math.min(boxW / iw, boxH / ih)
+      dw = iw * scale
+      dh = ih * scale
+      dx = boxX + (boxW - dw) / 2
+      dy = boxY + (boxH - dh) / 2
+    }
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(boxX, boxY, boxW, boxH) // 裁剪到格内(cover 超出部分被裁;防图溢出相邻格)
+    ctx.clip()
+    try {
+      ctx.drawImage(el, dx, dy, dw, dh)
+    } catch {
+      /* 解码失败忽略 */
+    }
+    ctx.restore()
+  }
+
+  /** 取/起一张内嵌图的解码;未缓存则起加载,onload 请求重绘(无 DOM 环境返 null) */
+  private getCellImageEl(src: string): HTMLImageElement | null {
+    const cached = this.cellImageCache.get(src)
+    if (cached) return cached
+    if (typeof Image === 'undefined') return null
+    const el = new Image()
+    this.cellImageCache.set(src, el)
+    el.onload = () => this.onNeedsRedraw?.()
+    el.src = src
+    return el
+  }
+
+  private drawImagePlaceholder(x: number, y: number, w: number, h: number, zoom: number): void {
+    const ctx = this.ctx
+    ctx.save()
+    ctx.fillStyle = '#f2f4f7'
+    ctx.fillRect(x, y, w, h)
+    ctx.strokeStyle = '#d0d5dd'
+    ctx.lineWidth = 1
+    ctx.strokeRect(x + 0.5, y + 0.5, Math.max(0, w - 1), Math.max(0, h - 1))
+    const fs = Math.min(h * 0.5, 14 * zoom)
+    if (fs >= 6) {
+      ctx.fillStyle = '#98a2b3'
+      ctx.font = `${fs}px sans-serif`
+      ctx.textAlign = 'center'
+      ctx.textBaseline = 'middle'
+      ctx.fillText('🖼', x + w / 2, y + h / 2)
+    }
+    ctx.restore()
   }
 
   private drawCellContent(

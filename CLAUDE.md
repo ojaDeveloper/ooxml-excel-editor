@@ -35,7 +35,7 @@ src/react(React 壳)→ dist/react.js:ExcelViewer.tsx + use-excel-document
 
 ## 不可破坏的硬约束
 
-- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **188 单测 + 40 e2e(Vue + React 双覆盖)**。
+- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **213 单测 + 52 e2e(Vue + React 双覆盖)**。
 - **core 不依赖框架**:`src/core/**` 不得出现 `from 'vue'` / `'react'`(构建后 `dist/core.js` 也不得 import vue/react/hyperformula/exceljs —— 重依赖全动态懒加载)。
 - **两壳同构**:给 `ViewerController` 加能力后,Vue 壳(components/ExcelViewer.vue)与 React 壳(react/ExcelViewer.tsx)都要接上,e2e 各自覆盖。
 - **默认只读、零回归**:`editable` 关闭时行为与历史完全一致;编辑能力(单元格/样式/列宽行高/图片/增删行列/公式重算/导出回写)是 **opt-in**,全建在框架无关 core 的命令栈 + 前后快照事件上(见 README「编辑」章节)。
@@ -61,6 +61,7 @@ node scripts/gen-sample.mjs   # 重新生成 public/sample.xlsx
 - **Phase D ✅** 文档:ARCHITECTURE / CONTRIBUTING / README(React 用法 + 三入口 + props/导出/编辑表)
 - **编辑能力 E0–E8 ✅(→ 1.0.0)** 配置/只读 → 写数据层+命令栈+前后快照事件 → editor 扩展 → 内置编辑器 → 数据层语义统一(resize 入栈+脏状态/还原)→ 公式重算(可换引擎)→ 样式 → 图片 → 增删行列 → 导出 xlsx/json/csv
 - **保真增强 F1–F3 ✅(→ 1.1.0)** 增删行列公式引用重写 / 图片导出 twoCell+EMU 偏移 / xlsx overlay 高保真
+- **WPS 单元格内嵌图 DISPIMG ✅(并入 1.2.0,开发中)** 三期完成 + UX 打磨:① 解析 `xl/cellimages.xml` + `=DISPIMG()` 公式 → 画进格内展示,贴合方式可配置(`cellImageFit` fill/contain/cover,默认 fill 同 WPS);② 编辑模式互转 —— 就近嵌入(`convertImageToCellAuto`/几何反推)、整表/整列批量(`convertAllImagesToCells`,单次撤销)、嵌入→浮动,右键菜单接入,全入命令栈;③ **导出回注** —— ExcelJS 写出后在 zip 层回注 cellimages.xml + rels + media + Content_Types/workbook-rels 补丁(`export/wps-cellimages.ts`),rebuild/overlay 两模式都让导出 .xlsx 往返 DISPIMG。生成测试件:`node scripts/gen-wps-sample.mjs` → `public/wps-dispimg-sample.xlsx`。
 - **Phase E**(进行中)发布:`ooxml-excel-editor` 1.1.0 → `npm publish`(2FA)
 - 仍未做:真正 workspace 三包拆分(目前单包多入口已够用);透视表 UI;大文件编辑性能
 

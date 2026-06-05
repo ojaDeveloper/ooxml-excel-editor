@@ -72,6 +72,17 @@
   color: #222;
   font-family: Consolas, 'Courier New', monospace;
 }
+.rxl-formula-bar .content-input {
+  border: none;
+  outline: none;
+  height: 100%;
+  background: transparent;
+  font-size: 13px;
+}
+.rxl-formula-bar .content-input:focus {
+  background: #f5fbf7;
+  box-shadow: inset 0 0 0 1px #21a366;
+}
 .rxl-render-area {
   position: relative;
   flex: 1 1 auto;

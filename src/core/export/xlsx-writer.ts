@@ -11,6 +11,7 @@ import { cellKey } from '../model/types'
 import { GridMetrics } from '../layout/grid-metrics'
 import { anchorRect } from '../overlay/anchor'
 import { emuToPx, DEFAULT_MDW, PX_PER_POINT } from '../layout/units'
+import { injectCellImagesIntoZip } from './wps-cellimages'
 
 export interface XlsxExportOptions {
   /**
@@ -19,6 +20,10 @@ export interface XlsxExportOptions {
    * - `'overlay'`:重载原始 .xlsx,只把编辑后的 值/样式/合并/行高列宽/冻结 叠加上去,**保留** ExcelJS
    *   能往返的其余部分(条件格式/数据验证/打印设置/定义名/图表等)。需 `sourceBuffer`(壳自动注入);
    *   缺原件时自动回退 rebuild。注:overlay 不反映 结构增删行列 / 图片 编辑(那类用 rebuild)。
+   *
+   * WPS 单元格内嵌图(DISPIMG):两种模式都会在 ExcelJS 写出后**于 zip 层回注** `xl/cellimages.xml`
+   * + rels + media + Content_Types/workbook-rels(见 wps-cellimages.ts),从模型重建 → 原有的 + App 内
+   * 新转的内嵌图导出后都在(blob-only 无字节的图除外)。导出 → 用 WPS 打开,内嵌图正常显示。
    */
   fidelity?: 'rebuild' | 'overlay'
   /** 原始 .xlsx 字节(overlay 模式用;由 exporter 从 host 注入,用方一般不直接传) */
@@ -99,7 +104,10 @@ function cellValue(cell: CellModel): unknown {
       return { error: cell.raw }
     case 'formula': {
       const f = cell.formula ?? ''
-      return { formula: f[0] === '=' ? f.slice(1) : f, result: cell.raw ?? undefined }
+      const formula = f[0] === '=' ? f.slice(1) : f
+      // WPS DISPIMG 内嵌图格:缓存值 <v> 写成 =DISPIMG("id",1)(对齐真·WPS;图能加载时不显示此值,加载失败时作回退)
+      if (cell.dispImgId) return { formula, result: `=DISPIMG("${cell.dispImgId}",1)` }
+      return { formula, result: cell.raw ?? undefined }
     }
     case 'hyperlink':
       return { text: String(cell.raw ?? ''), hyperlink: cell.hyperlink ?? '' }
@@ -267,7 +275,7 @@ export async function workbookToXlsxBlob(workbook: WorkbookModel, opts: XlsxExpo
       applyModelOntoSheet(ws, sheet)
     }
     const buf = await wb.xlsx.writeBuffer()
-    return new Blob([buf], { type: XLSX_MIME })
+    return finalizeBlob(buf, workbook)
   }
 
   // 默认:从模型完整重建
@@ -280,5 +288,14 @@ export async function workbookToXlsxBlob(workbook: WorkbookModel, opts: XlsxExpo
     writeSheet(ws, sheet, wb)
   }
   const buf = await wb.xlsx.writeBuffer()
-  return new Blob([buf], { type: XLSX_MIME })
+  return finalizeBlob(buf, workbook)
+}
+
+/** ExcelJS 写出后:回注 WPS 单元格内嵌图(DISPIMG)私有件,再封 Blob。无内嵌图时零开销。 */
+function finalizeBlob(buf: ArrayBuffer, workbook: WorkbookModel): Blob {
+  let bytes: Uint8Array = new Uint8Array(buf)
+  if (workbook.cellImages && workbook.cellImages.size) {
+    bytes = injectCellImagesIntoZip(bytes, workbook)
+  }
+  return new Blob([bytes as BlobPart], { type: XLSX_MIME })
 }

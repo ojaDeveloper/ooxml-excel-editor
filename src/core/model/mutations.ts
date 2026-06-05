@@ -3,7 +3,7 @@
  * 只改 SheetModel,不碰渲染;调用方负责重绘(同 sortColumn 的"改完重绘")。
  * 全部以"前态可逆"为原则:返回旧值供命令栈做 undo。
  */
-import type { CellModel, CellStyle, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, SheetModel } from './types'
+import type { CellImage, CellModel, CellStyle, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, SheetModel, WorkbookModel } from './types'
 import { cellKey } from './types'
 import type { CellValue } from './data-access'
 import { pxToEmu } from '../layout/units'
@@ -111,6 +111,87 @@ export function addImage(sheet: SheetModel, anchor: ImageAnchor, index?: number)
 /** 删一张图(调用方负责为 undo 捕获前态)。 */
 export function removeImage(sheet: SheetModel, index: number): void {
   sheet.images.splice(index, 1)
+}
+
+// ---- WPS 单元格内嵌图(DISPIMG)⇄ 浮动图 互转(第二期) ----
+
+/** 为登记表生成一个未占用的 DISPIMG id(确定性:从计数找空位,不依赖随机) */
+function freshCellImageId(reg: Map<string, CellImage>): string {
+  let n = reg.size
+  let id = `ID_cell_${n}`
+  while (reg.has(id)) id = `ID_cell_${++n}`
+  return id
+}
+
+/** 全簿是否还有单元格引用某 DISPIMG id(用于决定登记项可否回收) */
+function anyCellRefs(wb: WorkbookModel, id: string): boolean {
+  for (const sheet of wb.sheets) for (const c of sheet.cells.values()) if (c.dispImgId === id) return true
+  return false
+}
+
+/**
+ * 浮动图 → WPS 单元格内嵌图(DISPIMG)。
+ * 取 sheet.images[imageIndex] 的字节登记到 wb.cellImages(新 id),目标格设 =DISPIMG 公式 + dispImgId,
+ * 移除该浮动图。返回新 id;图缺 bytes/mime 不可转 → 返 null(不动模型)。
+ */
+export function convertFloatToCellImage(
+  wb: WorkbookModel,
+  sheet: SheetModel,
+  imageIndex: number,
+  row: number,
+  col: number,
+): string | null {
+  const img = sheet.images[imageIndex]
+  if (!img || !img.bytes || !img.mime) return null
+  if (!wb.cellImages) wb.cellImages = new Map()
+  const id = freshCellImageId(wb.cellImages)
+  wb.cellImages.set(id, { id, bytes: img.bytes, mime: img.mime, src: img.src || '' })
+  const styleId = sheet.cells.get(cellKey(row, col))?.styleId ?? 0
+  sheet.cells.set(cellKey(row, col), {
+    row,
+    col,
+    type: 'formula',
+    raw: null,
+    formula: `_xlfn.DISPIMG("${id}",1)`,
+    dispImgId: id,
+    styleId,
+  })
+  growDimension(sheet, row, col)
+  sheet.images.splice(imageIndex, 1)
+  return id
+}
+
+/**
+ * WPS 单元格内嵌图 → 浮动图。
+ * 取 (row,col) 的 dispImgId 对应登记图,造一张 oneCellAnchor 浮动图锚在该格(默认尺寸 sizePx),
+ * 清空该格。登记表里若无其它格再引用该 id,一并回收。返回浮动图索引;非内嵌图格返 -1。
+ */
+export function convertCellImageToFloat(
+  wb: WorkbookModel,
+  sheet: SheetModel,
+  row: number,
+  col: number,
+  size: { width: number; height: number } = { width: 96, height: 96 },
+): number {
+  const key = cellKey(row, col)
+  const cell = sheet.cells.get(key)
+  const id = cell?.dispImgId
+  if (!id) return -1
+  const ci = wb.cellImages?.get(id)
+  const anchor: ImageAnchor = {
+    src: ci?.src ?? '',
+    bytes: ci?.bytes,
+    mime: ci?.mime,
+    from: { col, row, colOffEmu: 0, rowOffEmu: 0 },
+    extWidthEmu: pxToEmu(size.width),
+    extHeightEmu: pxToEmu(size.height),
+    editAs: 'oneCell',
+  }
+  sheet.cells.delete(key) // 内嵌图本占满格,转浮动后该格清空
+  const at = sheet.images.length
+  sheet.images.push(anchor)
+  if (!anyCellRefs(wb, id)) wb.cellImages?.delete(id)
+  return at
 }
 
 /**

@@ -116,6 +116,12 @@ export interface CellModel {
   comment?: string
   /** 样式索引，指向 SheetModel.styles */
   styleId: number
+  /**
+   * WPS DISPIMG 单元格内嵌图的 id(指向 WorkbookModel.cellImages)。
+   * 有值时渲染器把图画进格内(随行高列宽缩放、随网格滚动裁剪),而非画 formula 文本。
+   * 由 cell-image-parser 从 `=DISPIMG("id",n)` 公式解析填充。
+   */
+  dispImgId?: string
 }
 
 /** 合并区域(0-based，闭区间) */
@@ -135,6 +141,12 @@ export interface RowInfo {
   /** 行高，单位 = px(已从 pt 换算) */
   height: number
   hidden: boolean
+  /**
+   * 是否"手动设定行高"(OOXML `<row customHeight="1">`)。
+   * true 时渲染层**不做自动行高**(与 Excel/WPS 一致:手动高度的行只裁切/溢出,不撑大)。
+   * 由 row-meta-parser 从原始 XML 读出(ExcelJS 不暴露此标记)。
+   */
+  customHeight?: boolean
 }
 
 /** 冻结窗格: 冻结前 frozenRows 行 / frozenCols 列 */
@@ -181,6 +193,20 @@ export interface AnchorCell {
   colOffEmu: number
   row: number // 0-based
   rowOffEmu: number
+}
+
+/**
+ * WPS DISPIMG 单元格内嵌图(workbook 级登记表 xl/cellimages.xml 的一条)。
+ * 单元格通过 `=DISPIMG("id",n)` 公式按 id 引用;不同于浮动图(ImageAnchor),它"属于"单元格。
+ */
+export interface CellImage {
+  /** DISPIMG id(= cellimages.xml 里 cNvPr@name,如 "ID_5db4b3...") */
+  id: string
+  /** 原始图片字节 + mime(解析层产出,可跨 Worker 传输) */
+  bytes?: Uint8Array
+  mime?: string
+  /** blob url(主线程 finalize 从 bytes 生成;解析阶段为空) */
+  src: string
 }
 
 /** 图表规格(从 chartN.xml 抽出，交给 ECharts 映射) */
@@ -285,6 +311,11 @@ export interface WorkbookModel {
   /** 主题色调色板(theme1.xml 解析所得，索引同 ECMA dk1/lt1/dk2/lt2/accent1..6/hlink/folHlink) */
   themeColors: CssColor[]
   date1904: boolean
+  /**
+   * WPS DISPIMG 单元格内嵌图登记表(id → 图)。对应 xl/cellimages.xml,workbook 级共享。
+   * 单元格 CellModel.dispImgId 指向此表;无 WPS 内嵌图时为 undefined。
+   */
+  cellImages?: Map<string, CellImage>
 }
 
 export const cellKey = (row: number, col: number) => `${row}:${col}`

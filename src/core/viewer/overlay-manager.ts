@@ -189,7 +189,9 @@ export class OverlayManager {
     setQuad(this.quads.main, hw + fw, hh + fh, bodyW, bodyH)
 
     for (const im of this.imageEls) {
-      placeInQuad(im.el, anchorRect(renderer.metrics, sheet.images[im.anchorIdx]), im.quad, fw, fh, view)
+      const anchor = sheet.images[im.anchorIdx]
+      if (!anchor) continue // 图片在 build 与 position 之间被移除(如转内嵌图)→ 跳过,待重建
+      placeInQuad(im.el, anchorRect(renderer.metrics, anchor), im.quad, fw, fh, view)
     }
     const shapeFont = Math.round(11 * (96 / 72) * renderer.metrics.zoom)
     for (const sh of this.shapeEls) {

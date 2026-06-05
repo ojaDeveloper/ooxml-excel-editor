@@ -31,6 +31,7 @@ function Demo() {
   const [src, setSrc] = useState<ExcelSource | undefined>(undefined)
   const [fileName, setFileName] = useState('')
   const [editMode, setEditMode] = useState(false) // E0: 编辑模式闸门
+  const [fit, setFit] = useState<'fill' | 'contain' | 'cover'>('contain') // WPS 内嵌图贴合方式(默认 contain 同 WPS)
   const ref = useRef<ExcelViewerHandle>(null)
 
   // 开发期把命令式句柄挂 window,供 e2e 取几何/读数据(与 Vue demo 的 __excelViewer 对齐)
@@ -88,6 +89,30 @@ function Demo() {
         )}
         {editMode && (
           <button
+            onClick={() => { const n = ref.current?.convertAllImagesToCells() ?? 0; if (!n) alert('没有可嵌入的浮动图') }}
+            title="把整表所有浮动图就近嵌入各自单元格(WPS 浮动→嵌入/DISPIMG)"
+          >
+            整表嵌入
+          </button>
+        )}
+        {editMode && (
+          <button
+            onClick={() => { const s = ref.current?.getSelection(); if (s) ref.current?.convertCellImageToFloat(s.top, s.left) }}
+            title="把选中格的内嵌图拎成浮动图(WPS 嵌入→浮动)"
+          >
+            格→图
+          </button>
+        )}
+        <label style={{ fontSize: 13 }} title="WPS 内嵌图贴合方式">
+          贴合
+          <select value={fit} onChange={(e) => setFit(e.target.value as 'fill' | 'contain' | 'cover')}>
+            <option value="contain">contain 等比(同 WPS)</option>
+            <option value="fill">fill 铺满</option>
+            <option value="cover">cover 裁剪</option>
+          </select>
+        </label>
+        {editMode && (
+          <button
             onClick={() => {
               const sel = ref.current?.getSelection()
               if (sel) ref.current?.insertRows(sel.top, 1)
@@ -125,6 +150,7 @@ function Demo() {
           fileName={fileName}
           plugins={[demoPlugin]}
           editable={editMode}
+          cellImageFit={fit}
           recalc={editMode}
           readOnlyRanges={[{ top: 1, left: 0, bottom: 1, right: 4 }]}
           editor={demoSelectEditor}

@@ -129,6 +129,24 @@ export interface ViewerApi {
   moveImage(index: number, dxPx: number, dyPx: number): boolean
   /** 缩放图片(目标屏幕像素宽高);editable 时入命令栈 + 发 image-change */
   resizeImage(index: number, widthPx: number, heightPx: number): boolean
+  /** 活动格在公式栏里的可编辑字符串(公式→`=...`;数值→原始数字串;布尔→TRUE/FALSE;其余→显示文本) */
+  getCellEditString(): string
+  /** 活动格此刻是否可经公式栏/命令式编辑(editable 开 + 该格非只读) */
+  canEditActiveCell(): boolean
+  /** 经公式栏提交活动格的值(同 editCell 输入语义);move='down' 提交后活动格下移。返回是否提交 */
+  commitActiveCellValue(value: string, move?: 'down'): boolean
+  /** 读 WPS 单元格内嵌图(DISPIMG)登记表(id→{id,src,mime});非 WPS 文件返空数组 */
+  getCellImages(): { id: string; src: string; mime?: string }[]
+  /** 设 WPS 单元格内嵌图贴合方式(fill 拉伸铺满 / contain 等比留白 / cover 等比裁剪);即时重绘 */
+  setCellImageFit(fit: 'fill' | 'contain' | 'cover'): void
+  /** 浮动图 → 单元格内嵌图(显式目标格);editable 时入命令栈 */
+  convertImageToCell(imageIndex: number, row: number, col: number): boolean
+  /** 浮动图 → 内嵌图(**就近**:图在哪格就嵌哪格,几何反推目标);editable 时入命令栈 */
+  convertImageToCellAuto(imageIndex: number): boolean
+  /** 批量把浮动图就近嵌入各自单元格(整表;`col` 给定则仅该列);一次进撤销栈,返回嵌入张数 */
+  convertAllImagesToCells(col?: number): number
+  /** 单元格内嵌图 → 浮动图(把 row,col 的 DISPIMG 拎成浮动图,默认 96×96px);editable 时入命令栈 */
+  convertCellImageToFloat(row: number, col: number, size?: { width: number; height: number }): boolean
   /** 在 at 处插入 count 行(E7);editable 时入命令栈 + 发 struct-change */
   insertRows(at: number, count?: number): boolean
   /** 删除 [at, at+count) 行(与合并相交则相交合并被移除) */

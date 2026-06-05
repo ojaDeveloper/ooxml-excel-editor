@@ -11,6 +11,14 @@ export function finalizeImages(model: WorkbookModel): void {
       }
     }
   }
+  // WPS 单元格内嵌图(DISPIMG)登记表同样落 blob url
+  if (model.cellImages) {
+    for (const ci of model.cellImages.values()) {
+      if (ci.bytes && ci.mime && !ci.src) {
+        ci.src = URL.createObjectURL(new Blob([ci.bytes as BlobPart], { type: ci.mime }))
+      }
+    }
+  }
 }
 
 /** 释放之前 finalizeImages 生成的 blob URL,避免内存泄漏 */
@@ -19,6 +27,11 @@ export function revokeImages(model: WorkbookModel): void {
   for (const sheet of model.sheets) {
     for (const img of sheet.images) {
       if (img.src?.startsWith('blob:')) URL.revokeObjectURL(img.src)
+    }
+  }
+  if (model.cellImages) {
+    for (const ci of model.cellImages.values()) {
+      if (ci.src?.startsWith('blob:')) URL.revokeObjectURL(ci.src)
     }
   }
 }

@@ -37,6 +37,10 @@ export type EditCommand =
   | { kind: 'merge-cells'; range: MergeRange }
   | { kind: 'unmerge-cells'; range: MergeRange }
   | { kind: 'restore-merges'; merges: MergeRange[]; cells: { row: number; col: number; cell: CellModel | null }[] }
+  // WPS 内嵌图 ⇄ 浮动图互转(第二期):由 EditController.exec 直接处理(需 workbook 级快照逆),不走 applyCommand
+  | { kind: 'convert-to-cell'; imageIndex: number; row: number; col: number }
+  | { kind: 'convert-to-cells'; targets: { imageIndex: number; row: number; col: number }[] }
+  | { kind: 'convert-to-float'; row: number; col: number; size?: { width: number; height: number } }
 
 /** dim 命令(列宽/行高)— 仅维度族,无格位置 */
 export type DimCommand = Extract<EditCommand, { kind: 'set-dim' } | { kind: 'restore-dim' }>
@@ -86,6 +90,9 @@ export function affectedOf(cmd: EditCommand): CellPos[] {
     case 'struct-edit':
     case 'restore-wb':
     case 'unmerge-cells':
+    case 'convert-to-cell':
+    case 'convert-to-cells':
+    case 'convert-to-float':
       return []
   }
 }

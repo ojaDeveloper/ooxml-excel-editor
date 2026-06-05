@@ -7,9 +7,17 @@
 编辑 UX 补齐 + 性能 + 导出错误可见性(向后兼容)。
 
 ### 新增
+- **公式栏(Fx 内容条)可编辑 + 联动**:顶部公式栏从只读改为可编辑 `<input>`(editable + 该格非只读时)。在栏里输入提交(回车下移、Esc 取消、失焦提交)→ 改活动格;切选区 / 格内编辑 → 栏即时反映。栏显示**可编辑字符串**:公式 `=...`、数值原始数字串(非格式化,避免编辑货币/千分位被当文本)、布尔 TRUE/FALSE。新 API:`getCellEditString()` / `canEditActiveCell()` / `commitActiveCellValue(value, move?)`。仅值真变化才入命令栈。两壳同构(React 顺带补:`cell-change` 触发 chrome 重渲)。
 - **合并/拆分单元格**:`mergeCells(range)`(吸收相交旧合并、清空被覆盖格只留左上锚点)/ `unmergeCells(range)`,入命令栈可撤销。
 - **粘贴**:`Ctrl+V` / `pasteText(text, at?)` —— TSV(制表符+换行)→ 区域写入,类型自动推断、跳过只读、整块一次撤销。
 - **右键上下文菜单**:框架无关 body 级 DOM 菜单 —— 插入/删除行列、合并/拆分、清除内容、复制/粘贴;点外部/Esc/滚动关闭、贴边翻转。只读仍用浏览器默认菜单。
+- **WPS 单元格内嵌图(DISPIMG)**:
+  - **展示**:解析 WPS 私有件 `xl/cellimages.xml` + 单元格 `=DISPIMG("id",1)` 公式,把图按行高列宽画进单元格内(随网格滚动/裁剪/冻结/缩放),普通工具打不开的 WPS 内嵌图现在能正常显示。新 `parser/cell-image-parser.ts`;模型加 `WorkbookModel.cellImages` + `CellModel.dispImgId`;canvas 渲染带图片解码缓存 + onload 重绘。
+  - **贴合方式可配置** `cellImageFit`:`contain`(默认,等比缩放,与 WPS 渲染一致——WPS 打开导出文件时 DISPIMG 固定按 contain 显示)/ `fill`(拉伸铺满随格变形)/ `cover`(等比裁剪铺满),两壳 prop + `setCellImageFit()` 运行时切换、即时重绘。
+  - **行 customHeight 保真**:解析 `<row customHeight="1">` 标记(ExcelJS 不暴露),自动行高跳过手动设高的行——避免长文本把"作者设矮放图"的行撑大,渲染/导出行高都与 WPS 一致。顺带放宽 fast-xml-parser 实体展开上限(大表几百个 `&quot;` 会撞默认 1000 上限致 drawing/row-meta 解析静默失败)。
+  - **就近 / 批量嵌入**:`convertImageToCellAuto(imgIdx)`(图压在哪格就嵌哪格,几何反推)/ `convertAllImagesToCells(col?)`(整表或整列批量,一次进撤销栈)/ `convertCellImageToFloat(row,col,size?)`(嵌入→浮动);右键单格菜单为「将此处浮动图嵌入 / 整列嵌入(N 张)/ 整表嵌入(N 张)/ 内嵌图转浮动图」。两向入命令栈(整簿快照逆)、发 `cell-change`/`image-change`、翻脏标记。`getCellImages()` 读登记表。`convertImageToCell(imgIdx,row,col)` 保留(显式目标格)。
+  - **导出往返**:ExcelJS 写出后在 zip 层回注 `cellimages.xml` + rels + media + `[Content_Types].xml`/`workbook.xml.rels` 补丁(新 `export/wps-cellimages.ts`,从模型重建),rebuild / overlay 两模式均覆盖。原有的 + App 内新转的内嵌图导出后用 WPS 打开都显示。验证:解析→导出→再解析 往返存活(单测)。
+  - **逐字节对齐真·WPS(修正 #REF!)**:首版用了 `cellimages+xml`(复数)内容类型 + `2017/etCustomData` 关系类型 + 空 `<xdr:spPr/>`,导致 WPS 加载不了登记表、DISPIMG 显示 `#REF!`。据真·WPS 文件实测修正为 **单数** `cellimage+xml`、关系类型 **`2020/cellImage`**、`<xdr:spPr>` 补全 `xfrm`+`prstGeom rect`、`cNvPr` 加 `descr`、DISPIMG 格缓存值 `<v>` 写为 `=DISPIMG("id",1)`。单测锁定这些字段。
 
 ### 性能
 - **undo 快照轻量化**:增删行列的整簿快照从 `structuredClone`(深拷图片字节/图表)改为手写轻量克隆 —— 只克隆编辑会动的部分,**图片字节/图表/形状/条件格式按引用共享**(编辑期间不可变),大文件 + undo 栈内存大幅下降。惠及结构编辑 undo、脏状态 baseline、还原原件。

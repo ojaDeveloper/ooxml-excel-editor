@@ -84,6 +84,17 @@ function unmergeSelection() {
   const sel = v?.getSelection()
   if (v && sel) v.unmergeCells(sel)
 }
+// WPS 内嵌图 ⇄ 浮动图互转
+function embedAll() {
+  const n = viewerRef.value?.convertAllImagesToCells() ?? 0 // 整表就近嵌入
+  if (!n) alert('没有可嵌入的浮动图')
+}
+function cellToFloat() {
+  const v = viewerRef.value
+  const sel = v?.getSelection()
+  if (v && sel) v.convertCellImageToFloat(sel.top, sel.left)
+}
+const cellImageFit = ref<'fill' | 'contain' | 'cover'>('contain')
 
 // 开发环境把命令式 API 挂到 window,便于 e2e 计算 canvas 上的几何(如筛选按钮位置)
 if (import.meta.env.DEV) {
@@ -202,6 +213,11 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
       </button>
       <button v-if="src && editMode" class="sample-btn" @click="mergeSelection" title="合并选区(G1)">合并</button>
       <button v-if="src && editMode" class="sample-btn" @click="unmergeSelection" title="拆分选区(G1)">拆分</button>
+      <button v-if="src && editMode" class="sample-btn" @click="embedAll" title="整表浮动图就近嵌入各自单元格(WPS 浮动→嵌入/DISPIMG)">整表嵌入</button>
+      <button v-if="src && editMode" class="sample-btn" @click="cellToFloat" title="把选中格的内嵌图拎成浮动图(WPS 嵌入→浮动)">格→图</button>
+      <label v-if="src" class="sample-label" title="WPS 内嵌图贴合方式">贴合
+        <select v-model="cellImageFit"><option value="contain">contain 等比(同 WPS)</option><option value="fill">fill 铺满</option><option value="cover">cover 裁剪</option></select>
+      </label>
       <button v-if="src && editMode" class="sample-btn" @click="insertRowAtSel" title="选区上方插入行(E7)">＋行</button>
       <button v-if="src && editMode" class="sample-btn" @click="deleteRowAtSel" title="删除选区行(E7)">－行</button>
       <button v-if="src" class="sample-btn" @click="viewerRef?.downloadXlsx()" title="导出 .xlsx(E8:从模型重建)">↓XLSX</button>
@@ -215,6 +231,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         :src="src"
         :file-name="fileName"
         :plugins="plugins"
+        :cell-image-fit="cellImageFit"
         :editable="editMode"
         :recalc="editMode"
         :read-only-ranges="[{ top: 1, left: 0, bottom: 1, right: 4 }]"

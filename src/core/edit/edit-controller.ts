@@ -7,7 +7,7 @@ import type { CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, S
 import type { CellValue } from '../model/data-access'
 import { buildCellSnapshot, type CellSnapshot } from '../model/snapshot'
 import { cloneWorkbook, restoreWorkbookInto } from '../model/clone'
-import { cloneImageAnchor } from '../model/mutations'
+import { cloneImageAnchor, convertFloatToCellImage, convertCellImageToFloat } from '../model/mutations'
 import { applyCommand, affectedOf, isDimCommand, isImageCommand, isStructCommand, type CellPos, type DimAxis, type EditCommand } from './commands'
 import { applyStructOp, type StructOp } from '../model/structure'
 import { rewriteWorkbookFormulas } from '../formula/refs'
@@ -320,6 +320,53 @@ export class EditController {
     this.host.emit('image-change', { index, before, after, source: 'ui' } satisfies ImageChangePayload)
   }
 
+  // ---- WPS 内嵌图 ⇄ 浮动图互转(第二期) ----
+  /**
+   * 浮动图 → 单元格内嵌图(DISPIMG):把第 imageIndex 张浮动图塞进 (row,col) 格。
+   * 图缺字节不可转 → 返 false。入命令栈(undo 走整簿快照还原)。
+   */
+  convertImageToCell(imageIndex: number, row: number, col: number): boolean {
+    if (!this.host.isEditingEnabled()) return false
+    this.ensureBaseline()
+    const inv = this.exec({ kind: 'convert-to-cell', imageIndex, row, col }, 'api')
+    if (inv) {
+      this.pushUndo(inv)
+      this.markDirty()
+    }
+    return !!inv
+  }
+  /**
+   * 批量把多张浮动图嵌入各自的目标格(整表/整列);一次进撤销栈。返回成功嵌入的张数。
+   * targets 的 imageIndex 是调用前的浮动图索引(内部按降序 splice,索引互不干扰)。
+   */
+  convertImagesToCells(targets: { imageIndex: number; row: number; col: number }[]): number {
+    if (!this.host.isEditingEnabled() || !targets.length) return 0
+    const sheet = this.host.getSheet()
+    const before = sheet?.images.length ?? 0
+    this.ensureBaseline()
+    const inv = this.exec({ kind: 'convert-to-cells', targets }, 'api')
+    if (inv) {
+      this.pushUndo(inv)
+      this.markDirty()
+    }
+    const after = this.host.getSheet()?.images.length ?? before
+    return Math.max(0, before - after)
+  }
+  /**
+   * 单元格内嵌图 → 浮动图:把 (row,col) 的 DISPIMG 拎出来变成浮动图(默认 96×96px)。
+   * 非内嵌图格 → 返 false。入命令栈。
+   */
+  convertCellImageToFloat(row: number, col: number, size?: { width: number; height: number }): boolean {
+    if (!this.host.isEditingEnabled()) return false
+    this.ensureBaseline()
+    const inv = this.exec({ kind: 'convert-to-float', row, col, size }, 'api')
+    if (inv) {
+      this.pushUndo(inv)
+      this.markDirty()
+    }
+    return !!inv
+  }
+
   // ---- 维度编辑(列宽/行高;E3.5:resize 入命令栈) ----
   /** 程序化设列宽/行高(API 路径:apply-via-command)。返回是否生效。 */
   setDimension(axis: DimAxis, index: number, size: number): boolean {
@@ -440,6 +487,36 @@ export class EditController {
       else this.host.rebuildOverlays()
       this.host.emit('image-change', { index, before, after, source } satisfies ImageChangePayload)
       return inverse
+    }
+    // 转换族(WPS 内嵌图 ⇄ 浮动图):整簿快照逆(动 cells + images + cellImages 登记表)
+    if (cmd.kind === 'convert-to-cell' || cmd.kind === 'convert-to-cells' || cmd.kind === 'convert-to-float') {
+      const wb = this.host.getWorkbook()
+      if (!wb) return null
+      const d = this.host.getDate1904()
+      // 受影响格(单/批/拆):先拍前态快照,apply 后逐格拍后态发 cell-change
+      const cells: CellPos[] =
+        cmd.kind === 'convert-to-cells' ? cmd.targets.map((t) => ({ row: t.row, col: t.col })) : [{ row: cmd.row, col: cmd.col }]
+      const before = cells.map((p) => buildCellSnapshot(sheet, p.row, p.col, d))
+      const snap = cloneWorkbook(wb)
+      let any = false
+      if (cmd.kind === 'convert-to-cell') {
+        any = convertFloatToCellImage(wb, sheet, cmd.imageIndex, cmd.row, cmd.col) !== null
+      } else if (cmd.kind === 'convert-to-float') {
+        any = convertCellImageToFloat(wb, sheet, cmd.row, cmd.col, cmd.size) !== -1
+      } else {
+        // 批量:按 imageIndex 降序处理(先删高索引,低索引不受 splice 影响)
+        const sorted = [...cmd.targets].sort((a, b) => b.imageIndex - a.imageIndex)
+        for (const t of sorted) if (convertFloatToCellImage(wb, sheet, t.imageIndex, t.row, t.col) !== null) any = true
+      }
+      if (!any) return null // 一张都没转(缺字节 / 非内嵌图格)→ 不入栈、不动模型
+      this.host.rebuildOverlays() // 先重建叠加层(浮动图增删 → imageEls 与 sheet.images 重新对齐)
+      this.host.onModelChange() // 再重建几何 + 重绘(此时 position 读到的是新 imageEls)
+      if (this.host.isRecalcEnabled()) this.refreshEngine() // 公式集变了,重建引擎
+      cells.forEach((p, i) =>
+        this.host.emit('cell-change', { before: before[i], after: buildCellSnapshot(sheet, p.row, p.col, d), source } satisfies CellChangePayload),
+      )
+      this.host.emit('image-change', { index: -1, before: null, after: null, source } satisfies ImageChangePayload)
+      return { kind: 'restore-wb', snapshot: snap }
     }
     // 结构族(增删行列):整簿快照逆 + 跨表公式引用重写;全表重建(几何+合并索引+叠加层)
     if (isStructCommand(cmd)) {

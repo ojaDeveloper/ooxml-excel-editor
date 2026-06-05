@@ -81,4 +81,11 @@ describe('autoFitRowHeights', () => {
     autoFitRowHeights(sheet, wb, mockCtx())
     expect(sheet.rows.get(0)?.height).toBe(200)
   })
+
+  it('customHeight 手动设高的行不被撑大(与 Excel/WPS 一致)', () => {
+    const sheet = makeSheet({ text: 'A'.repeat(40), wrap: true }, 60) // 长文本本会撑高
+    sheet.rows.set(0, { height: 30, hidden: false, customHeight: true }) // 手动设矮
+    autoFitRowHeights(sheet, wb, mockCtx())
+    expect(sheet.rows.get(0)?.height).toBe(30) // 保持手动高度,不撑大
+  })
 })
