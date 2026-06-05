@@ -101,7 +101,7 @@ export class OverlayManager {
       el.draggable = false
       el.style.position = 'absolute'
       el.style.objectFit = 'fill'
-      el.style.pointerEvents = 'none'
+      el.style.pointerEvents = 'none' // 穿透到 canvas:点击/拖拽由控制器在 onMouseUp 经 imageHitAt 命中处理
       this.container(quad).appendChild(el)
       this.imageEls.push({ el, anchorIdx: i, quad })
     }

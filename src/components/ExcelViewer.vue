@@ -47,6 +47,8 @@ const props = withDefaults(
     cellStyle?: CellStyleFn
     /** WPS 单元格内嵌图(DISPIMG)贴合方式:contain 等比(默认,与 WPS 渲染一致)/ fill 拉伸铺满 / cover 等比裁剪 */
     cellImageFit?: 'fill' | 'contain' | 'cover'
+    /** 图片点击放大灯箱(默认 true):只读模式单击图放大、编辑模式右键「查看大图」;false 关闭 */
+    imageLightbox?: boolean
     /** 单击超链接是否默认在新标签打开(false 时只派发 hyperlink-click 事件) */
     openLinks?: boolean
     /** 插件列表(打包主题/钩子/事件/overlay) */
@@ -70,8 +72,8 @@ const props = withDefaults(
     /** 自定义/自研公式引擎工厂(可换引擎);不给则用默认 HyperFormula(需 npm i hyperformula) */
     formulaEngine?: FormulaEngineFactory
   }>(),
-  // toolbar 默认 true(显示内置项);若不显式给默认,Vue 会把布尔型 prop 缺省判成 false
-  { openLinks: true, toolbar: true },
+  // toolbar/imageLightbox 默认 true;若不显式给默认,Vue 会把布尔型 prop 缺省判成 false
+  { openLinks: true, toolbar: true, imageLightbox: true },
 )
 
 const normalizedPlugins = computed<ExcelPlugin[]>(() => props.plugins ?? [])
@@ -252,6 +254,7 @@ onMounted(() => {
     controller.fileName = props.fileName // 导出默认文件名
     controller.setEditConfig(effectiveEditConfig.value) // 编辑配置(默认只读)
     controller.setEditorResolver(hasEditor.value ? resolveEditor : undefined) // E2: 编辑器解析
+    controller.setLightboxEnabled(props.imageLightbox !== false) // 图片点击放大(默认开)
   }
   if (pluginOvEl.value) pluginOverlayHost = new PluginOverlayHost(pluginOvEl.value)
   if (props.src) load(props.src, effectiveTransform)
@@ -281,6 +284,7 @@ watch(() => props.fileName, (f) => {
 watch(effectiveEditConfig, (cfg) => controller?.setEditConfig(cfg))
 watch([() => props.editor, normalizedPlugins], () => controller?.setEditorResolver(hasEditor.value ? resolveEditor : undefined))
 watch(() => props.cellImageFit, (fit) => { if (fit) controller?.setCellImageFit(fit) })
+watch(() => props.imageLightbox, (v) => controller?.setLightboxEnabled(v !== false))
 
 // 主题 / cellStyle / 插件 变化 → 重建渲染器(它们在构造时注入)
 watch(
@@ -592,6 +596,8 @@ const viewerApi: ViewerApi = {
   canEditActiveCell: () => controller?.canEditActiveCell() ?? false,
   commitActiveCellValue: (value, move) => controller?.commitActiveCellValue(value, move) ?? false,
   getCellImages: () => controller?.getCellImages() ?? [],
+  getCellImageAt: (row, col) => controller?.getCellImageAt(row, col) ?? null,
+  openImageLightbox: (src, fileName, mime) => controller?.openImageLightbox(src, fileName, mime),
   setCellImageFit: (fit) => controller?.setCellImageFit(fit),
   convertImageToCell: (i, row, col) => controller?.convertImageToCell(i, row, col) ?? false,
   convertImageToCellAuto: (i) => controller?.convertImageToCellAuto(i) ?? false,

@@ -145,6 +145,10 @@ export interface ViewerApi {
   commitActiveCellValue(value: string, move?: 'down'): boolean
   /** 读 WPS 单元格内嵌图(DISPIMG)登记表(id→{id,src,mime});非 WPS 文件返空数组 */
   getCellImages(): { id: string; src: string; mime?: string }[]
+  /** 某格是否内嵌图 → {id,src,mime} 否则 null(供图片放大判定) */
+  getCellImageAt(row: number, col: number): { id: string; src: string; mime?: string } | null
+  /** 打开图片放大灯箱(命令式;src = blob/data/http url) */
+  openImageLightbox(src: string, fileName?: string, mime?: string): void
   /** 设 WPS 单元格内嵌图贴合方式(fill 拉伸铺满 / contain 等比留白 / cover 等比裁剪);即时重绘 */
   setCellImageFit(fit: 'fill' | 'contain' | 'cover'): void
   /** 浮动图 → 单元格内嵌图(显式目标格);editable 时入命令栈 */

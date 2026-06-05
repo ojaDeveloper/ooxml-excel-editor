@@ -50,6 +50,8 @@ export interface ExcelViewerProps {
   cellStyle?: CellStyleFn
   /** WPS 单元格内嵌图(DISPIMG)贴合方式:contain 等比(默认,与 WPS 渲染一致)/ fill 拉伸铺满 / cover 等比裁剪 */
   cellImageFit?: 'fill' | 'contain' | 'cover'
+  /** 图片点击放大灯箱(默认 true):只读模式单击图放大、编辑模式右键「查看大图」;false 关闭 */
+  imageLightbox?: boolean
   /** 插件(与 Vue 通用):theme/transformModel/cellStyle/events/overlay/setup 全跨框架可用 */
   plugins?: ExcelPlugin[]
   /** 编辑总开关:默认 false = 只读(行为不变)。开启后才能进入编辑(E0:闸门) */
@@ -116,6 +118,8 @@ export interface ExcelViewerHandle {
   moveImage: (index: number, dxPx: number, dyPx: number) => boolean
   resizeImage: (index: number, widthPx: number, heightPx: number) => boolean
   getCellImages: () => { id: string; src: string; mime?: string }[]
+  getCellImageAt: (row: number, col: number) => { id: string; src: string; mime?: string } | null
+  openImageLightbox: (src: string, fileName?: string, mime?: string) => void
   /** 活动格在公式栏里的可编辑字符串(公式→=…,数值→原始数字串) */
   getCellEditString: () => string
   /** 活动格此刻是否可经公式栏编辑(editable + 非只读) */
@@ -335,6 +339,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     controller.fileName = propsRef.current.fileName
     controller.setEditConfig(buildEditConfig())
     controller.setEditorResolver(editorResolver())
+    controller.setLightboxEnabled(propsRef.current.imageLightbox !== false) // 图片点击放大(默认开)
     controllerRef.current = controller
     if (pluginOvRef.current) pluginHostRef.current = new PluginOverlayHost(pluginOvRef.current)
 
@@ -380,6 +385,11 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   useEffect(() => {
     if (props.cellImageFit) controllerRef.current?.setCellImageFit(props.cellImageFit)
   }, [props.cellImageFit])
+
+  // ---- 图片放大灯箱开关同步 ----
+  useEffect(() => {
+    controllerRef.current?.setLightboxEnabled(props.imageLightbox !== false)
+  }, [props.imageLightbox])
 
   // ---- 新工作簿 → 选活动表 + onRendered ----
   useEffect(() => {
@@ -463,6 +473,8 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       moveImage: (i, dx, dy) => controllerRef.current?.moveImage(i, dx, dy) ?? false,
       resizeImage: (i, w, h) => controllerRef.current?.resizeImage(i, w, h) ?? false,
       getCellImages: () => controllerRef.current?.getCellImages() ?? [],
+      getCellImageAt: (row, col) => controllerRef.current?.getCellImageAt(row, col) ?? null,
+      openImageLightbox: (src, fileName, mime) => controllerRef.current?.openImageLightbox(src, fileName, mime),
       getCellEditString: () => controllerRef.current?.getCellEditString() ?? '',
       canEditActiveCell: () => controllerRef.current?.canEditActiveCell() ?? false,
       commitActiveCellValue: (v, m) => controllerRef.current?.commitActiveCellValue(v, m) ?? false,
@@ -559,6 +571,8 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     moveImage: (i, dx, dy) => controllerRef.current?.moveImage(i, dx, dy) ?? false,
     resizeImage: (i, w, h) => controllerRef.current?.resizeImage(i, w, h) ?? false,
     getCellImages: () => controllerRef.current?.getCellImages() ?? [],
+    getCellImageAt: (row, col) => controllerRef.current?.getCellImageAt(row, col) ?? null,
+    openImageLightbox: (src, fileName, mime) => controllerRef.current?.openImageLightbox(src, fileName, mime),
     getCellEditString: () => controllerRef.current?.getCellEditString() ?? '',
     canEditActiveCell: () => controllerRef.current?.canEditActiveCell() ?? false,
     commitActiveCellValue: (v, m) => controllerRef.current?.commitActiveCellValue(v, m) ?? false,

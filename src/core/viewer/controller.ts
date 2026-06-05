@@ -23,6 +23,7 @@ import type { CellValue, SheetToJSONOptions } from '../model/data-access'
 import type { CellSnapshot } from '../model/snapshot'
 import { CellEditorHost } from '../edit/editor-host'
 import { ContextMenuHost, type MenuItem } from '../edit/context-menu'
+import { LightboxHost } from './lightbox-host'
 import type { CellEditorContext, EditorCommitValue, EditorResolver } from '../edit/editor-context'
 import { defaultCellEditor } from '../edit/default-editor'
 import { CanvasRenderer, type CellImageFit, type RendererOptions, type ViewState } from '../render/canvas-renderer'
@@ -122,6 +123,8 @@ export class ViewerController {
   fileName: string | undefined = undefined
   /** 右键上下文菜单宿主(G3;body 级 DOM,框架无关) */
   private menuHost = new ContextMenuHost()
+  private lightbox = new LightboxHost()
+  private lightboxEnabled = true
   /** 原始 .xlsx 字节(壳加载时注入;供高保真 overlay 导出重载原件) */
   private sourceBuffer: ArrayBuffer | null = null
   /** 壳在加载后注入原始字节(供 exportXlsx({fidelity:'overlay'}) 重载原件叠加编辑) */
@@ -148,6 +151,7 @@ export class ViewerController {
   private resizeStartInfo: ColumnInfo | RowInfo | null = null // 拖拽起始的列/行维度信息(克隆,供 undo)
   private resizeStartModelSize = 0 // 拖拽起始的模型 px 尺寸(非缩放,dim-change 事件用)
   private dragMoved = false
+  private dragStartXY: { x: number; y: number } | null = null // mousedown 起点(死区判定:超 3px 才算拖动)
 
   // ---- 查找态 ----
   private findQuery = ''
@@ -386,6 +390,7 @@ export class ViewerController {
     this.overlays.dispose()
     this.editorHost.dispose()
     this.menuHost.dispose()
+    this.lightbox.dispose()
     this.edit.disposeEngine()
   }
 
@@ -657,6 +662,7 @@ export class ViewerController {
     }
     const hit = this.hitRegion(e)
     this.dragMoved = false
+    this.dragStartXY = this.localXY(e)
     if (hit.region === 'corner') {
       this.selectAll()
       this.dragMode = 'none'
@@ -680,7 +686,10 @@ export class ViewerController {
       const r = this.renderer
       const p = this.localXY(e)
       if (!r || !p) return
-      this.dragMoved = true
+      // 死区:移动超过 3px 才算"拖动"(避免单击时的微抖被当拖拽 → 误吞单击放大/单击语义)
+      if (!this.dragStartXY || Math.abs(p.x - this.dragStartXY.x) > 3 || Math.abs(p.y - this.dragStartXY.y) > 3) {
+        this.dragMoved = true
+      }
       if (this.dragMode === 'image' && this.imageDragStartRect && this.sheet) {
         const dx = p.x - this.imageDragStartMouse.x
         const dy = p.y - this.imageDragStartMouse.y
@@ -741,6 +750,18 @@ export class ViewerController {
         this.hooks.onCellClick(hit.row, hit.col, r.cellText(hit.row, hit.col))
         const link = r.cellHyperlink(hit.row, hit.col)
         if (link) this.hooks.onHyperlink(link, { row: hit.row, col: hit.col })
+        // 阅读模式单击图片 → 放大灯箱(编辑模式下单击仍只选中,放大走右键菜单)
+        if (this.lightboxEnabled && !this.editCfg.editable && !this.isEditing()) {
+          const p = this.localXY(e)
+          const imgIdx = p ? this.imageHitAt(p) : -1 // 浮动图盖在格上,优先命中
+          if (imgIdx >= 0) {
+            const img = this.sheet?.images[imgIdx]
+            if (img?.src) this.openImageLightbox(img.src, `image-${imgIdx + 1}.${img.mime?.split('/')[1] || 'png'}`, img.mime)
+          } else {
+            const ci = this.getCellImageAt(hit.row, hit.col) // 内嵌图(DISPIMG,画在 canvas)
+            if (ci?.src) this.openImageLightbox(ci.src, `${ci.id}.${ci.mime?.split('/')[1] || 'png'}`, ci.mime)
+          }
+        }
       }
     } else if (this.dragMode === 'resize-col') {
       this.endResizeRecord('col', this.resizeTarget)
@@ -846,6 +867,14 @@ export class ViewerController {
       const imgs = this.sheet?.images ?? []
       const convertItems: MenuItem[] = []
       if (activeCell?.dispImgId) {
+        // 编辑模式下单击是选区,放大/下载走右键(只读模式直接单击放大)
+        const ci = this.getCellImageAt(r, c)
+        if (this.lightboxEnabled && ci?.src) {
+          convertItems.push({
+            label: '查看大图 / 下载原图',
+            action: () => this.openImageLightbox(ci.src, `${ci.id}.${ci.mime?.split('/')[1] || 'png'}`, ci.mime),
+          })
+        }
         convertItems.push({ label: '内嵌图转为浮动图', action: () => this.convertCellImageToFloat(r, c) })
       }
       if (imgs.length) {
@@ -1541,6 +1570,20 @@ export class ViewerController {
     const reg = this.workbook?.cellImages
     if (!reg) return []
     return Array.from(reg.values(), (ci) => ({ id: ci.id, src: ci.src, mime: ci.mime }))
+  }
+  /** 某格是否内嵌图(DISPIMG)→ 返 {id,src,mime},否则 null(供点击放大判定)。 */
+  getCellImageAt(row: number, col: number): { id: string; src: string; mime?: string } | null {
+    const id = this.sheet?.cells.get(cellKey(row, col))?.dispImgId
+    const ci = id ? this.workbook?.cellImages?.get(id) : undefined
+    return ci ? { id: ci.id, src: ci.src, mime: ci.mime } : null
+  }
+  /** 开/关图片点击放大灯箱(默认开;只读模式单击图、编辑模式右键菜单触发)。 */
+  setLightboxEnabled(b: boolean): void {
+    this.lightboxEnabled = b
+  }
+  /** 打开图片放大灯箱(命令式;src = blob/data/http url)。 */
+  openImageLightbox(src: string, fileName?: string, mime?: string): void {
+    this.lightbox.show({ src, fileName, mime })
   }
   /** 一张浮动图视觉中心落在哪个单元格(用几何反推;无渲染器时回落锚点 from 格)。 */
   imageCellOf(index: number): { row: number; col: number } | null {
