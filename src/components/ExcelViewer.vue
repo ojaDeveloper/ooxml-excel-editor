@@ -553,6 +553,12 @@ const viewerApi: ViewerApi = {
   exportPdf,
   downloadPdf,
   print,
+  exportXlsx: (opts) => controller!.exportXlsx(opts),
+  downloadXlsx: (opts) => controller!.downloadXlsx(opts),
+  exportJson: (opts) => controller?.exportJson(opts) ?? '{}',
+  downloadJson: (opts) => controller?.downloadJson(opts),
+  exportCsv: (opts) => controller?.exportCsv(opts) ?? '',
+  downloadCsv: (opts) => controller?.downloadCsv(opts),
   // ---- 数据读取(委托独立函数,自动绑 date1904 + 默认当前表) ----
   getCellValue: (row, col, si) => {
     const s = dataSheet(si)

@@ -19,7 +19,7 @@ import type { EditConfig } from '../edit/types'
 import { resolveEditable } from '../edit/permissions'
 import { EditController, type EditControllerHost, type EditEventName } from '../edit/edit-controller'
 import { defaultFormulaEngineFactory } from '../formula/hyperformula-adapter'
-import type { CellValue } from '../model/data-access'
+import type { CellValue, SheetToJSONOptions } from '../model/data-access'
 import type { CellSnapshot } from '../model/snapshot'
 import { CellEditorHost } from '../edit/editor-host'
 import type { CellEditorContext, EditorCommitValue, EditorResolver } from '../edit/editor-context'
@@ -28,6 +28,7 @@ import { CanvasRenderer, type RendererOptions, type ViewState } from '../render/
 import { OverlayManager, type OverlayQuads } from './overlay-manager'
 import { WorkbookExporter, type ExporterHost } from '../export/exporter'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '../export/types'
+import type { XlsxExportOptions } from '../export/xlsx-writer'
 
 export type Cell = { row: number; col: number }
 export interface TooltipState {
@@ -1455,6 +1456,25 @@ export class ViewerController {
   }
   print(opts?: PrintOptions): Promise<void> {
     return this.exporter.print(opts)
+  }
+  // ---- 数据导出(E8;委托 WorkbookExporter,一份数据层 → xlsx/json/csv) ----
+  exportXlsx(opts?: XlsxExportOptions): Promise<Blob> {
+    return this.exporter.exportXlsx(opts)
+  }
+  downloadXlsx(opts?: XlsxExportOptions): Promise<void> {
+    return this.exporter.downloadXlsx(opts)
+  }
+  exportJson(opts?: SheetToJSONOptions): string {
+    return this.exporter.exportJson(opts)
+  }
+  downloadJson(opts?: SheetToJSONOptions): void {
+    this.exporter.downloadJson(opts)
+  }
+  exportCsv(opts?: { target?: number; format?: boolean }): string {
+    return this.exporter.exportCsv(opts)
+  }
+  downloadCsv(opts?: { target?: number; format?: boolean }): void {
+    this.exporter.downloadCsv(opts)
   }
 }
 

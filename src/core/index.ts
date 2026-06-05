@@ -83,6 +83,10 @@ export {
   deleteIntersectsMerge,
 } from './model/structure'
 export type { StructOp, StructSnapshot } from './model/structure'
+// ---- 数据导出(E8;一份数据层 → xlsx/json/csv) ----
+export { toCsv, toWorkbookJson } from './export/data-export'
+export { workbookToXlsxBlob } from './export/xlsx-writer'
+export type { XlsxExportOptions } from './export/xlsx-writer'
 export { buildCellSnapshot, cloneCell } from './model/snapshot'
 export type { CellSnapshot } from './model/snapshot'
 export {

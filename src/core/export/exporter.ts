@@ -19,6 +19,9 @@ import { compositeOverlays, type ExportDecorations } from './composite'
 import { exportToPdf, type ExportSheetImage } from './pdf'
 import { exportToVectorPdf, type VectorSheet } from './vector-pdf'
 import { printSheets } from './print'
+import { toCsv, toWorkbookJson } from './data-export'
+import { workbookToXlsxBlob, type XlsxExportOptions } from './xlsx-writer'
+import type { SheetToJSONOptions } from '../model/data-access'
 import type { ExportTarget, ImageExportOptions, PdfExportOptions, PrintOptions } from './types'
 
 /** 导出取数器: 壳提供当前工作簿 / 活动表 / 复用渲染器 / 渲染配置 / 文件名 */
@@ -307,5 +310,40 @@ export class WorkbookExporter {
     const eff: PrintOptions = { ...this.pageSetupDefaults(targets[0]), ...opts }
     const images = (await Promise.all(targets.map((i) => this.buildSheetImage(i, eff, true)))).filter(Boolean) as ExportSheetImage[]
     printSheets(images, { ...eff, title: eff.title ?? this.baseName() })
+  }
+
+  // ====================== 数据导出(E8;复用读层 + 从模型重建 xlsx) ======================
+
+  /** 整簿 → JSON 文本(各表首行作 key 的对象数组)。 */
+  exportJson(opts?: SheetToJSONOptions): string {
+    const wb = this.host.getWorkbook()
+    if (!wb) throw new Error('无工作簿可导出')
+    return toWorkbookJson(wb, opts)
+  }
+  downloadJson(opts?: SheetToJSONOptions): void {
+    downloadBlob(new Blob([this.exportJson(opts)], { type: 'application/json' }), `${this.baseName()}.json`)
+  }
+
+  /** 一张表 → CSV 文本(默认活动表、格式化显示值)。 */
+  exportCsv(opts: { target?: number; format?: boolean } = {}): string {
+    const wb = this.host.getWorkbook()
+    if (!wb) throw new Error('无工作簿可导出')
+    const s = wb.sheets[typeof opts.target === 'number' ? opts.target : this.host.getActiveIndex()]
+    if (!s) throw new Error('无工作表可导出')
+    return toCsv(s, { format: opts.format, date1904: wb.date1904 })
+  }
+  downloadCsv(opts: { target?: number; format?: boolean } = {}): void {
+    // BOM 头让 Excel 正确识别 UTF-8 中文
+    downloadBlob(new Blob(['﻿' + this.exportCsv(opts)], { type: 'text/csv;charset=utf-8' }), `${this.baseName()}.csv`)
+  }
+
+  /** 整簿 → .xlsx Blob(从编辑后模型重建,所见即所得;懒加载 exceljs)。 */
+  exportXlsx(opts?: XlsxExportOptions): Promise<Blob> {
+    const wb = this.host.getWorkbook()
+    if (!wb) throw new Error('无工作簿可导出')
+    return workbookToXlsxBlob(wb, opts)
+  }
+  async downloadXlsx(opts?: XlsxExportOptions): Promise<void> {
+    downloadBlob(await this.exportXlsx(opts), `${this.baseName()}.xlsx`)
   }
 }

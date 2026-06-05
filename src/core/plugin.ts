@@ -20,6 +20,7 @@ import type { EditorResolver } from './edit/editor-context'
 import type { ViewerTheme } from './render/theme'
 import type { ExcelSource } from './loader'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from './export/types'
+import type { XlsxExportOptions } from './export/xlsx-writer'
 
 export interface Rect {
   x: number
@@ -65,6 +66,19 @@ export interface ViewerApi {
   downloadPdf(opts?: PdfExportOptions): Promise<void>
   /** 打开系统打印(可在对话框另存为 PDF) */
   print(opts?: PrintOptions): Promise<void>
+  // ---- 数据导出(E8;一份数据层 → xlsx/json/csv) ----
+  /** 整簿 → .xlsx Blob(从编辑后模型重建,所见即所得;需可选依赖 exceljs) */
+  exportXlsx(opts?: XlsxExportOptions): Promise<Blob>
+  /** 导出 .xlsx 并触发下载 */
+  downloadXlsx(opts?: XlsxExportOptions): Promise<void>
+  /** 整簿 → JSON 文本(各表首行作 key) */
+  exportJson(opts?: SheetToJSONOptions): string
+  /** 导出 JSON 并触发下载 */
+  downloadJson(opts?: SheetToJSONOptions): void
+  /** 一张表 → CSV 文本(默认活动表、格式化显示值) */
+  exportCsv(opts?: { target?: number; format?: boolean }): string
+  /** 导出 CSV 并触发下载(带 UTF-8 BOM) */
+  downloadCsv(opts?: { target?: number; format?: boolean }): void
   // ---- 数据读取(自动用当前 workbook 的 date1904;sheetIndex 缺省=当前活动表) ----
   /** 单元格原始值 */
   getCellValue(row: number, col: number, sheetIndex?: number): CellValue

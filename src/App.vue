@@ -191,6 +191,9 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
       </button>
       <button v-if="src && editMode" class="sample-btn" @click="insertRowAtSel" title="选区上方插入行(E7)">＋行</button>
       <button v-if="src && editMode" class="sample-btn" @click="deleteRowAtSel" title="删除选区行(E7)">－行</button>
+      <button v-if="src" class="sample-btn" @click="viewerRef?.downloadXlsx()" title="导出 .xlsx(E8:从模型重建)">↓XLSX</button>
+      <button v-if="src" class="sample-btn" @click="viewerRef?.downloadCsv()" title="导出 .csv(E8)">↓CSV</button>
+      <button v-if="src" class="sample-btn" @click="viewerRef?.downloadJson()" title="导出 .json(E8)">↓JSON</button>
     </header>
 
     <main class="app-body">

@@ -23,6 +23,7 @@ import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-conte
 import type { ViewerTheme } from '@/core/render/theme'
 import type { ExcelSource } from '@/core/loader'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '@/core/export'
+import type { XlsxExportOptions } from '@/core/export/xlsx-writer'
 import {
   getCellValue,
   getCellText,
@@ -30,6 +31,7 @@ import {
   getRangeData,
   sheetToJSON,
   type ReadOptions,
+  type SheetToJSONOptions,
 } from '@/core/model/data-access'
 import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { ViewerController, type Cell, type TooltipState } from '@/core/viewer/controller'
@@ -127,6 +129,12 @@ export interface ExcelViewerHandle {
   exportPdf: (opts?: PdfExportOptions) => Promise<Blob>
   downloadPdf: (opts?: PdfExportOptions) => Promise<void>
   print: (opts?: PrintOptions) => Promise<void>
+  exportXlsx: (opts?: XlsxExportOptions) => Promise<Blob>
+  downloadXlsx: (opts?: XlsxExportOptions) => Promise<void>
+  exportJson: (opts?: SheetToJSONOptions) => string
+  downloadJson: (opts?: SheetToJSONOptions) => void
+  exportCsv: (opts?: { target?: number; format?: boolean }) => string
+  downloadCsv: (opts?: { target?: number; format?: boolean }) => void
   getCellValue: (row: number, col: number, sheet?: number) => ReturnType<typeof getCellValue>
   getCellText: (row: number, col: number, sheet?: number) => string
   getSheetData: (opts?: ReadOptions, sheet?: number) => ReturnType<typeof getSheetData>
@@ -429,6 +437,12 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       exportPdf: (opts) => controllerRef.current!.exportPdf(opts),
       downloadPdf: (opts) => controllerRef.current!.downloadPdf(opts),
       print: (opts) => controllerRef.current!.print(opts),
+      exportXlsx: (opts) => controllerRef.current!.exportXlsx(opts),
+      downloadXlsx: (opts) => controllerRef.current!.downloadXlsx(opts),
+      exportJson: (opts) => controllerRef.current?.exportJson(opts) ?? '{}',
+      downloadJson: (opts) => controllerRef.current?.downloadJson(opts),
+      exportCsv: (opts) => controllerRef.current?.exportCsv(opts) ?? '',
+      downloadCsv: (opts) => controllerRef.current?.downloadCsv(opts),
       getCellValue: (row, col, si) => {
         const s = dataSheet(si)
         return s ? getCellValue(s, row, col) : null
@@ -502,6 +516,12 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     exportPdf: (opts) => controllerRef.current!.exportPdf(opts),
     downloadPdf: (opts) => controllerRef.current!.downloadPdf(opts),
     print: (opts) => controllerRef.current!.print(opts),
+    exportXlsx: (opts) => controllerRef.current!.exportXlsx(opts),
+    downloadXlsx: (opts) => controllerRef.current!.downloadXlsx(opts),
+    exportJson: (opts) => controllerRef.current?.exportJson(opts) ?? '{}',
+    downloadJson: (opts) => controllerRef.current?.downloadJson(opts),
+    exportCsv: (opts) => controllerRef.current?.exportCsv(opts) ?? '',
+    downloadCsv: (opts) => controllerRef.current?.downloadCsv(opts),
     getCellValue: (row, col, si) => {
       const s = apiSheet(si)
       return s ? getCellValue(s, row, col) : null

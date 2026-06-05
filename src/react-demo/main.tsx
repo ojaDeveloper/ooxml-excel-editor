@@ -98,6 +98,15 @@ function Demo() {
             －行
           </button>
         )}
+        <button onClick={() => ref.current?.downloadXlsx()} title="导出 .xlsx(E8:从模型重建)">
+          ↓XLSX
+        </button>
+        <button onClick={() => ref.current?.downloadCsv()} title="导出 .csv(E8)">
+          ↓CSV
+        </button>
+        <button onClick={() => ref.current?.downloadJson()} title="导出 .json(E8)">
+          ↓JSON
+        </button>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
         <ExcelViewer
