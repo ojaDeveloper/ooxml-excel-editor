@@ -804,6 +804,11 @@ export class ViewerController {
       e.preventDefault()
       return
     }
+    if (this.editCfg.editable && (e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
+      void this.pasteFromClipboard() // G2:Ctrl+V 粘贴(读剪贴板 → 区域写入)
+      e.preventDefault()
+      return
+    }
     if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
       this.selectAll()
       this.render()
@@ -941,6 +946,34 @@ export class ViewerController {
     } catch {
       /* 某些环境无剪贴板权限，静默忽略 */
     }
+  }
+
+  /** 从系统剪贴板粘贴(读 text/plain → TSV → 区域写入);需剪贴板读权限,无则静默返回 false。 */
+  async pasteFromClipboard(): Promise<boolean> {
+    try {
+      const text = await navigator.clipboard.readText()
+      return this.pasteText(text)
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * 把 TSV(Excel/表格复制的制表符分隔文本)粘到选区左上角(无 at 时用活动格)。
+   * 值类型自动推断(纯数字串→数字、`=`→公式)、跳过只读格;入命令栈可撤销。返回是否有改动。
+   */
+  pasteText(text: string, at?: { row: number; col: number }): boolean {
+    if (!this.editCfg.editable || !this.sheet) return false
+    const grid = parseClipboardGrid(text)
+    if (!grid.length) return false
+    const sel = this.getSelection()
+    const start = at ?? this.selActive ?? (sel ? { row: sel.top, col: sel.left } : null)
+    if (!start) return false
+    const top = start.row
+    const left = start.col
+    const bottom = top + grid.length - 1
+    const right = left + Math.max(1, ...grid.map((r) => r.length)) - 1
+    return this.edit.editRange({ top, left, bottom, right }, grid)
   }
 
   // ====================== 查找 ======================
@@ -1507,6 +1540,15 @@ function cellRange(c: Cell): MergeRange {
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/** 剪贴板文本 → 2D 网格(行用换行、列用制表符;去掉末尾换行)。空文本 → []。 */
+function parseClipboardGrid(text: string): string[][] {
+  if (!text) return []
+  let t = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  if (t.endsWith('\n')) t = t.slice(0, -1)
+  if (t === '') return []
+  return t.split('\n').map((line) => line.split('\t'))
 }
 
 /** 排序用:空值判定(null / 空串 / undefined) */

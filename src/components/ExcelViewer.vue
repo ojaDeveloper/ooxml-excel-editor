@@ -528,6 +528,7 @@ const viewerApi: ViewerApi = {
   setStyle: (range, patch) => controller?.setStyle(range, patch) ?? false,
   mergeCells: (range) => controller?.mergeCells(range) ?? false,
   unmergeCells: (range) => controller?.unmergeCells(range) ?? false,
+  pasteText: (text, at) => controller?.pasteText(text, at) ?? false,
   getImages: () => controller?.getImages() ?? [],
   addImage: (a) => controller?.addImage(a) ?? -1,
   removeImage: (i) => controller?.removeImage(i) ?? false,

@@ -117,6 +117,8 @@ export interface ViewerApi {
   mergeCells(range: MergeRange): boolean
   /** 拆分区域内的合并(G1);editable 时入命令栈 */
   unmergeCells(range: MergeRange): boolean
+  /** 把 TSV 文本粘到选区左上角(G2;类型自动推断、跳过只读、入命令栈);at 缺省用活动格 */
+  pasteText(text: string, at?: { row: number; col: number }): boolean
   /** 读当前表全部图片锚点(克隆;E6) */
   getImages(): ImageAnchor[]
   /** 加一张图(无 src 但有 bytes+mime 时自动生成 blob url);返回插入索引 */
