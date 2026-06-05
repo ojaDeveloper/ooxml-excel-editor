@@ -146,7 +146,7 @@ export function convertFloatToCellImage(
   if (!wb.cellImages) wb.cellImages = new Map()
   const id = freshCellImageId(wb.cellImages)
   wb.cellImages.set(id, { id, bytes: img.bytes, mime: img.mime, src: img.src || '' })
-  const styleId = sheet.cells.get(cellKey(row, col))?.styleId ?? 0
+  const existing = sheet.cells.get(cellKey(row, col))
   sheet.cells.set(cellKey(row, col), {
     row,
     col,
@@ -154,10 +154,13 @@ export function convertFloatToCellImage(
     raw: null,
     formula: `_xlfn.DISPIMG("${id}",1)`,
     dispImgId: id,
-    styleId,
+    styleId: existing?.styleId ?? 0,
   })
   growDimension(sheet, row, col)
   sheet.images.splice(imageIndex, 1)
+  // 原本是空格(渲染为白)→ 别让默认 styleId 0 的填充冒出来(有些文件 styles[0] 自带灰底如 #D0CECE),
+  // 清掉填充保持原来的白。原本有样式的格保留不动(绝不主动改色)。
+  if (!existing) applyStyleOverride(sheet, row, col, { fill: { type: 'none' } })
   return id
 }
 

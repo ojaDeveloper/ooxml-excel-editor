@@ -14,6 +14,7 @@ import {
   removeImage,
   setImageRect,
   cloneImageAnchor,
+  convertFloatToCellImage,
 } from '../mutations'
 import type { CellStyle, ImageAnchor, SheetModel } from '../types'
 import { cellKey } from '../types'
@@ -197,5 +198,28 @@ describe('mutations 图片(E6)', () => {
     setImageRect(s, 0, { left: 200, top: 0, width: 400, height: 0 }, 2)
     expect(s.images[0].from.colOffEmu).toBe(100 * 9525) // 200/2=100px
     expect(s.images[0].extWidthEmu).toBe(200 * 9525) // 400/2=200px
+  })
+
+  it('convertFloatToCellImage:转到空格时清掉默认 styles[0] 填充(保持白,不冒灰底)', () => {
+    const s = sheet()
+    s.styles[0] = { ...styleA, fill: { type: 'solid', fgColor: '#D0CECE' } } as unknown as CellStyle // styles[0] 自带灰
+    s.images.push({ ...img(), bytes: new Uint8Array([1, 2, 3]), mime: 'image/png' })
+    const wb = { sheets: [s], activeSheet: 0, themeColors: [], date1904: false } as never
+    const id = convertFloatToCellImage(wb, s, 0, 3, 3) // 转到空格 (3,3)
+    expect(id).toBeTruthy()
+    const cell = s.cells.get(cellKey(3, 3))!
+    expect(cell.dispImgId).toBe(id)
+    expect(s.styles[cell.styleId].fill.type).toBe('none') // 不继承灰底 → 渲染白
+  })
+
+  it('convertFloatToCellImage:转到已有样式格时保留其填充(不主动改色)', () => {
+    const s = sheet()
+    const grayId = internStyle(s, { ...styleA, fill: { type: 'solid', fgColor: '#FFCC00' } } as unknown as CellStyle)
+    s.cells.set(cellKey(2, 2), { row: 2, col: 2, type: 'string', raw: 'x', styleId: grayId } as never)
+    s.images.push({ ...img(), bytes: new Uint8Array([1]), mime: 'image/png' })
+    const wb = { sheets: [s], activeSheet: 0, themeColors: [], date1904: false } as never
+    convertFloatToCellImage(wb, s, 0, 2, 2)
+    const cell = s.cells.get(cellKey(2, 2))!
+    expect(s.styles[cell.styleId].fill).toMatchObject({ type: 'solid', fgColor: '#FFCC00' }) // 原填充保留
   })
 })
