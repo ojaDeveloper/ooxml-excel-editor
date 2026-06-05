@@ -17,6 +17,7 @@ import {
   removeImage,
   cloneImageAnchor,
 } from '../model/mutations'
+import { applyStructOp, captureStructure, restoreStructure, type StructOp, type StructSnapshot } from '../model/structure'
 
 export type CellPos = { row: number; col: number }
 export type DimAxis = 'col' | 'row'
@@ -31,6 +32,8 @@ export type EditCommand =
   | { kind: 'image-set'; index: number; anchor: ImageAnchor }
   | { kind: 'image-add'; anchor: ImageAnchor; index?: number }
   | { kind: 'image-remove'; index: number }
+  | { kind: 'struct-edit'; op: StructOp; at: number; count: number }
+  | { kind: 'restore-struct'; snapshot: StructSnapshot }
 
 /** dim 命令(列宽/行高)— 仅维度族,无格位置 */
 export type DimCommand = Extract<EditCommand, { kind: 'set-dim' } | { kind: 'restore-dim' }>
@@ -42,6 +45,12 @@ export function isDimCommand(cmd: EditCommand): cmd is DimCommand {
 export type ImageCommand = Extract<EditCommand, { kind: 'image-set' } | { kind: 'image-add' } | { kind: 'image-remove' }>
 export function isImageCommand(cmd: EditCommand): cmd is ImageCommand {
   return cmd.kind === 'image-set' || cmd.kind === 'image-add' || cmd.kind === 'image-remove'
+}
+
+/** struct 命令(增删行列)— 无格位置,发 struct-change,全表重建 */
+export type StructCommand = Extract<EditCommand, { kind: 'struct-edit' } | { kind: 'restore-struct' }>
+export function isStructCommand(cmd: EditCommand): cmd is StructCommand {
+  return cmd.kind === 'struct-edit' || cmd.kind === 'restore-struct'
 }
 
 export interface ApplyResult {
@@ -67,6 +76,8 @@ export function affectedOf(cmd: EditCommand): CellPos[] {
     case 'image-set':
     case 'image-add':
     case 'image-remove':
+    case 'struct-edit':
+    case 'restore-struct':
       return []
   }
 }
@@ -113,6 +124,17 @@ export function applyCommand(sheet: SheetModel, cmd: EditCommand): ApplyResult {
     const prior = cloneImageAnchor(sheet.images[cmd.index])
     removeImage(sheet, cmd.index)
     return { inverse: { kind: 'image-add', anchor: prior, index: cmd.index }, affected }
+  }
+  // 结构族(增删行列):逆=restore-struct(应用前/后整张结构快照,bulletproof undo/redo)
+  if (cmd.kind === 'struct-edit') {
+    const snap = captureStructure(sheet)
+    applyStructOp(sheet, cmd.op, cmd.at, cmd.count)
+    return { inverse: { kind: 'restore-struct', snapshot: snap }, affected }
+  }
+  if (cmd.kind === 'restore-struct') {
+    const cur = captureStructure(sheet)
+    restoreStructure(sheet, cmd.snapshot)
+    return { inverse: { kind: 'restore-struct', snapshot: cur }, affected }
   }
   // 单元格族:逆=restore-cells(捕获前态;set-style 也走它 → 空格上色的逆=删格)
   const prior = capture(sheet, affected)

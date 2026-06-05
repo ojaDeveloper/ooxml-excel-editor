@@ -13,6 +13,7 @@
 import type { CellModel, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
 import { setImageRect, cloneImageAnchor } from '../model/mutations'
+import { deleteIntersectsMerge } from '../model/structure'
 import { anchorRect } from '../overlay/anchor'
 import type { EditConfig } from '../edit/types'
 import { resolveEditable } from '../edit/permissions'
@@ -1305,6 +1306,28 @@ export class ViewerController {
   resizeImage(index: number, widthPx: number, heightPx: number): boolean {
     return this.editImageRect(index, (rect) => ({ ...rect, width: Math.max(8, widthPx), height: Math.max(8, heightPx) }))
   }
+  // ---- 行列结构编辑(E7;增删行列) ----
+  /** 在 at 处插入 count 行(原 at 行及之后下移)。 */
+  insertRows(at: number, count = 1): boolean {
+    return this.edit.insertRows(at, count)
+  }
+  /** 删除 [at, at+count) 行(与合并相交则警告,相交合并被移除)。 */
+  deleteRows(at: number, count = 1): boolean {
+    if (this.sheet && deleteIntersectsMerge(this.sheet, 'delete-rows', at, count))
+      console.warn('[ooxml-preview] 删除行与合并单元格相交,相交的合并将被移除')
+    return this.edit.deleteRows(at, count)
+  }
+  /** 在 at 处插入 count 列。 */
+  insertCols(at: number, count = 1): boolean {
+    return this.edit.insertCols(at, count)
+  }
+  /** 删除 [at, at+count) 列(与合并相交则警告)。 */
+  deleteCols(at: number, count = 1): boolean {
+    if (this.sheet && deleteIntersectsMerge(this.sheet, 'delete-cols', at, count))
+      console.warn('[ooxml-preview] 删除列与合并单元格相交,相交的合并将被移除')
+    return this.edit.deleteCols(at, count)
+  }
+
   /** 移动/缩放公共路径:算当前矩形 → 变换 → setImageRect → 重定位 → 补登命令。 */
   private editImageRect(
     index: number,

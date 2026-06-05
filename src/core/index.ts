@@ -69,9 +69,20 @@ export type {
   DimChangePayload,
   DirtyChangePayload,
   ImageChangePayload,
+  StructChangePayload,
 } from './edit/edit-controller'
-export { isDimCommand, isImageCommand } from './edit/commands'
+export { isDimCommand, isImageCommand, isStructCommand } from './edit/commands'
 export type { EditCommand, CellPos, DimAxis } from './edit/commands'
+export {
+  insertRows,
+  deleteRows,
+  insertCols,
+  deleteCols,
+  captureStructure,
+  restoreStructure,
+  deleteIntersectsMerge,
+} from './model/structure'
+export type { StructOp, StructSnapshot } from './model/structure'
 export { buildCellSnapshot, cloneCell } from './model/snapshot'
 export type { CellSnapshot } from './model/snapshot'
 export {

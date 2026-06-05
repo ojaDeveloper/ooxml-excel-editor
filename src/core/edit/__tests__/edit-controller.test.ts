@@ -261,6 +261,52 @@ describe('EditController — 图片编辑(E6)', () => {
   })
 })
 
+describe('EditController — 行列结构编辑(E7)', () => {
+  it('insertRows:格下移 + 发 struct-change + undo 还原', () => {
+    const { sheet, ec, events } = setup()
+    sheet.cells.set(cellKey(2, 0), { row: 2, col: 0, type: 'number', raw: 5, styleId: 0 } as never)
+    sheet.dimension.rows = 3
+    expect(ec.insertRows(1, 1)).toBe(true)
+    expect(sheet.cells.has(cellKey(2, 0))).toBe(false)
+    expect(sheet.cells.get(cellKey(3, 0))).toMatchObject({ raw: 5 }) // 下移
+    const ev = events.find((e) => e.event === 'struct-change')!
+    expect(ev.payload).toMatchObject({ op: 'insert-rows', at: 1, count: 1 })
+    expect(ec.isDirty()).toBe(true)
+    ec.undo()
+    expect(sheet.cells.get(cellKey(2, 0))).toMatchObject({ raw: 5 }) // 快照还原
+    expect(sheet.cells.has(cellKey(3, 0))).toBe(false)
+  })
+
+  it('deleteRows:删数据 + undo 还原被删内容', () => {
+    const { sheet, ec } = setup()
+    sheet.cells.set(cellKey(2, 0), { row: 2, col: 0, type: 'string', raw: 'gone', styleId: 0 } as never)
+    sheet.dimension.rows = 3
+    expect(ec.deleteRows(2, 1)).toBe(true)
+    expect(sheet.cells.has(cellKey(2, 0))).toBe(false)
+    ec.undo()
+    expect(sheet.cells.get(cellKey(2, 0))).toMatchObject({ raw: 'gone' }) // 删除内容被还原
+  })
+
+  it('insertCols + undo/redo 往返', () => {
+    const { sheet, ec } = setup()
+    sheet.cells.set(cellKey(0, 1), { row: 0, col: 1, type: 'number', raw: 9, styleId: 0 } as never)
+    sheet.dimension.cols = 2
+    ec.insertCols(0, 1)
+    expect(sheet.cells.get(cellKey(0, 2))).toMatchObject({ raw: 9 }) // 右移
+    ec.undo()
+    expect(sheet.cells.get(cellKey(0, 1))).toMatchObject({ raw: 9 })
+    ec.redo()
+    expect(sheet.cells.get(cellKey(0, 2))).toMatchObject({ raw: 9 }) // 重做再右移
+  })
+
+  it('非编辑模式:结构编辑不生效', () => {
+    const { sheet, ec } = setup(new Set(), false)
+    sheet.dimension.rows = 3
+    expect(ec.insertRows(0, 1)).toBe(false)
+    expect(sheet.dimension.rows).toBe(3)
+  })
+})
+
 /** 极简 mock 引擎:模型化 B1(0,1) = A1(0,0) + 1,够测 EditController 重算编排(不依赖 hyperformula)。 */
 function mockEngine(): FormulaEngine {
   const k = (s: number, r: number, c: number) => `${s}:${r}:${c}`

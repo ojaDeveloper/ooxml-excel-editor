@@ -16,7 +16,7 @@ import {
 import type { CellModel, CellStyleFn, CellStyleOverride, ImageAnchor, MergeRange, SheetModel, TransformModelFn, WorkbookModel } from '@/core/model/types'
 import type { EditConfig } from '@/core/edit/types'
 import type { FormulaEngineFactory } from '@/core/formula/engine'
-import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload } from '@/core/edit/edit-controller'
+import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload, StructChangePayload } from '@/core/edit/edit-controller'
 import type { CellSnapshot } from '@/core/model/snapshot'
 import type { CellValue } from '@/core/model/data-access'
 import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
@@ -79,6 +79,8 @@ export interface ExcelViewerProps {
   onDirtyChange?: (p: DirtyChangePayload) => void
   /** 图片增删移改(前后 ImageAnchor) */
   onImageChange?: (p: ImageChangePayload) => void
+  /** 行列结构变更(增删行列) */
+  onStructChange?: (p: StructChangePayload) => void
 }
 
 /** 命令式句柄(与 Vue ref / ViewerApi 对齐) */
@@ -102,6 +104,10 @@ export interface ExcelViewerHandle {
   removeImage: (index: number) => boolean
   moveImage: (index: number, dxPx: number, dyPx: number) => boolean
   resizeImage: (index: number, widthPx: number, heightPx: number) => boolean
+  insertRows: (at: number, count?: number) => boolean
+  deleteRows: (at: number, count?: number) => boolean
+  insertCols: (at: number, count?: number) => boolean
+  deleteCols: (at: number, count?: number) => boolean
   undo: () => void
   redo: () => void
   canUndo: () => boolean
@@ -278,6 +284,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
           else if (event === 'dim-change') propsRef.current.onDimChange?.(payload as DimChangePayload)
           else if (event === 'dirty-change') propsRef.current.onDirtyChange?.(payload as DirtyChangePayload)
           else if (event === 'image-change') propsRef.current.onImageChange?.(payload as ImageChangePayload)
+          else if (event === 'struct-change') propsRef.current.onStructChange?.(payload as StructChangePayload)
           firePlugin(event, payload)
         },
       },
@@ -399,6 +406,10 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       removeImage: (i) => controllerRef.current?.removeImage(i) ?? false,
       moveImage: (i, dx, dy) => controllerRef.current?.moveImage(i, dx, dy) ?? false,
       resizeImage: (i, w, h) => controllerRef.current?.resizeImage(i, w, h) ?? false,
+      insertRows: (at, count) => controllerRef.current?.insertRows(at, count) ?? false,
+      deleteRows: (at, count) => controllerRef.current?.deleteRows(at, count) ?? false,
+      insertCols: (at, count) => controllerRef.current?.insertCols(at, count) ?? false,
+      deleteCols: (at, count) => controllerRef.current?.deleteCols(at, count) ?? false,
       undo: () => controllerRef.current?.undo(),
       redo: () => controllerRef.current?.redo(),
       canUndo: () => controllerRef.current?.canUndo() ?? false,
@@ -468,6 +479,10 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     removeImage: (i) => controllerRef.current?.removeImage(i) ?? false,
     moveImage: (i, dx, dy) => controllerRef.current?.moveImage(i, dx, dy) ?? false,
     resizeImage: (i, w, h) => controllerRef.current?.resizeImage(i, w, h) ?? false,
+    insertRows: (at, count) => controllerRef.current?.insertRows(at, count) ?? false,
+    deleteRows: (at, count) => controllerRef.current?.deleteRows(at, count) ?? false,
+    insertCols: (at, count) => controllerRef.current?.insertCols(at, count) ?? false,
+    deleteCols: (at, count) => controllerRef.current?.deleteCols(at, count) ?? false,
     undo: () => controllerRef.current?.undo(),
     redo: () => controllerRef.current?.redo(),
     canUndo: () => controllerRef.current?.canUndo() ?? false,

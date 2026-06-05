@@ -53,6 +53,20 @@ function onDirtyChange(p: { dirty: boolean }) {
 function onImageChange(p: unknown) {
   if (import.meta.env.DEV) (window as unknown as { __lastImageChange?: unknown }).__lastImageChange = p
 }
+function onStructChange(p: unknown) {
+  if (import.meta.env.DEV) (window as unknown as { __lastStructChange?: unknown }).__lastStructChange = p
+}
+// E7: 在选区上方插入一行 / 删除选区所在行
+function insertRowAtSel() {
+  const v = viewerRef.value
+  const sel = v?.getSelection()
+  if (v && sel) v.insertRows(sel.top, 1)
+}
+function deleteRowAtSel() {
+  const v = viewerRef.value
+  const sel = v?.getSelection()
+  if (v && sel) v.deleteRows(sel.top, sel.bottom - sel.top + 1)
+}
 // E5: 给当前选区加粗(样式编辑演示)
 function boldSelection() {
   const v = viewerRef.value
@@ -175,6 +189,8 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
       <button v-if="src && editMode" class="sample-btn" @click="boldSelection" title="给选区加粗(E5:样式编辑)">
         B 加粗选区
       </button>
+      <button v-if="src && editMode" class="sample-btn" @click="insertRowAtSel" title="选区上方插入行(E7)">＋行</button>
+      <button v-if="src && editMode" class="sample-btn" @click="deleteRowAtSel" title="删除选区行(E7)">－行</button>
     </header>
 
     <main class="app-body">
@@ -193,6 +209,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         @dim-change="onDimChange"
         @dirty-change="onDirtyChange"
         @image-change="onImageChange"
+        @struct-change="onStructChange"
       >
         <!-- 分层 UI 演示: B3 上叠一个可点徽标,随滚动跟随 -->
         <template #overlay="{ rectOf, tick }">

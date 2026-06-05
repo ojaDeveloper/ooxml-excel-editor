@@ -21,7 +21,7 @@ import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { ViewerController, type TooltipState, type FindState } from '@/core/viewer/controller'
 import type { EditConfig } from '@/core/edit/types'
 import type { FormulaEngineFactory } from '@/core/formula/engine'
-import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload } from '@/core/edit/edit-controller'
+import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload, StructChangePayload } from '@/core/edit/edit-controller'
 import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
 import { revokeImages } from '@/core/finalize'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '@/core/export'
@@ -143,6 +143,8 @@ const emit = defineEmits<{
   (e: 'dirty-change', payload: DirtyChangePayload): void
   /** 图片增删移改(前后 ImageAnchor) */
   (e: 'image-change', payload: ImageChangePayload): void
+  /** 行列结构变更(增删行列 / 撤销重做的整体还原) */
+  (e: 'struct-change', payload: StructChangePayload): void
 }>()
 
 const { loading, error, workbook, load, progress } = useExcelDocument()
@@ -528,6 +530,10 @@ const viewerApi: ViewerApi = {
   removeImage: (i) => controller?.removeImage(i) ?? false,
   moveImage: (i, dx, dy) => controller?.moveImage(i, dx, dy) ?? false,
   resizeImage: (i, w, h) => controller?.resizeImage(i, w, h) ?? false,
+  insertRows: (at, count) => controller?.insertRows(at, count) ?? false,
+  deleteRows: (at, count) => controller?.deleteRows(at, count) ?? false,
+  insertCols: (at, count) => controller?.insertCols(at, count) ?? false,
+  deleteCols: (at, count) => controller?.deleteCols(at, count) ?? false,
   undo: () => controller?.undo(),
   redo: () => controller?.redo(),
   canUndo: () => controller?.canUndo() ?? false,

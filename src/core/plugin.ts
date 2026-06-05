@@ -40,6 +40,7 @@ export type PluginEvent =
   | 'dim-change'
   | 'dirty-change'
   | 'image-change'
+  | 'struct-change'
 
 /** 命令式 API(组件 ref 与插件 ctx 共用) */
 export interface ViewerApi {
@@ -108,6 +109,14 @@ export interface ViewerApi {
   moveImage(index: number, dxPx: number, dyPx: number): boolean
   /** 缩放图片(目标屏幕像素宽高);editable 时入命令栈 + 发 image-change */
   resizeImage(index: number, widthPx: number, heightPx: number): boolean
+  /** 在 at 处插入 count 行(E7);editable 时入命令栈 + 发 struct-change */
+  insertRows(at: number, count?: number): boolean
+  /** 删除 [at, at+count) 行(与合并相交则相交合并被移除) */
+  deleteRows(at: number, count?: number): boolean
+  /** 在 at 处插入 count 列 */
+  insertCols(at: number, count?: number): boolean
+  /** 删除 [at, at+count) 列 */
+  deleteCols(at: number, count?: number): boolean
   /** 程序化设列宽(px,模型单位);editable 时入命令栈(可撤销 + 发 dim-change + 记脏) */
   setColumnWidth(col: number, width: number): boolean
   /** 程序化设行高(px,模型单位);editable 时入命令栈 */

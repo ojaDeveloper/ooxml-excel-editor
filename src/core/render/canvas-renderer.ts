@@ -325,6 +325,7 @@ export class CanvasRenderer {
   rebuildMetrics(): void {
     this.metrics = new GridMetrics(this.sheet, this.metrics.zoom)
     this.freeze = computeFreeze(this.sheet, this.metrics)
+    this.merges = new MergeIndex(this.sheet) // 结构编辑(增删行列)会改 merges → 同步重建索引
   }
 
   /** 选区统计: 遍历非空 cell(O(非空数),不随选区大小爆炸) */

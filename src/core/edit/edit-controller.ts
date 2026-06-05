@@ -8,12 +8,28 @@ import type { CellValue } from '../model/data-access'
 import { buildCellSnapshot, type CellSnapshot } from '../model/snapshot'
 import { cloneWorkbook, restoreWorkbookInto } from '../model/clone'
 import { cloneImageAnchor } from '../model/mutations'
-import { applyCommand, affectedOf, isDimCommand, isImageCommand, type CellPos, type DimAxis, type EditCommand } from './commands'
+import { applyCommand, affectedOf, isDimCommand, isImageCommand, isStructCommand, type CellPos, type DimAxis, type EditCommand } from './commands'
+import type { StructOp } from '../model/structure'
 import type { FormulaEngine, FormulaEngineFactory } from '../formula/engine'
 import { collectDirty, writeDirty, dependentsOnSheet } from '../formula/recalc'
 
-export type EditEventName = 'cell-change' | 'edit-start' | 'edit-commit' | 'dim-change' | 'dirty-change' | 'image-change'
+export type EditEventName =
+  | 'cell-change'
+  | 'edit-start'
+  | 'edit-commit'
+  | 'dim-change'
+  | 'dirty-change'
+  | 'image-change'
+  | 'struct-change'
 export type EditSource = 'api' | 'ui' | 'undo' | 'redo'
+
+/** 结构变更事件载荷(增删行列;restore = 撤销/重做的整体还原) */
+export interface StructChangePayload {
+  op: StructOp | 'restore'
+  at?: number
+  count?: number
+  source: EditSource
+}
 
 /** 图片变更事件载荷(before/after = ImageAnchor 克隆;add → before=null;remove → after=null) */
 export interface ImageChangePayload {
@@ -213,6 +229,30 @@ export class EditController {
     return !!inv
   }
 
+  // ---- 行列结构编辑(E7;增删行列,快照逆) ----
+  insertRows(at: number, count = 1): boolean {
+    return this.structEdit('insert-rows', at, count)
+  }
+  deleteRows(at: number, count = 1): boolean {
+    return this.structEdit('delete-rows', at, count)
+  }
+  insertCols(at: number, count = 1): boolean {
+    return this.structEdit('insert-cols', at, count)
+  }
+  deleteCols(at: number, count = 1): boolean {
+    return this.structEdit('delete-cols', at, count)
+  }
+  private structEdit(op: StructOp, at: number, count: number): boolean {
+    if (!this.host.isEditingEnabled() || at < 0 || count <= 0) return false
+    this.ensureBaseline()
+    const inv = this.exec({ kind: 'struct-edit', op, at, count }, 'api')
+    if (inv) {
+      this.pushUndo(inv)
+      this.markDirty()
+    }
+    return !!inv
+  }
+
   // ---- 图片编辑(浮动/嵌入;E6) ----
   /** 读当前表全部图片锚点(克隆,防外部改)。 */
   getImages(): ImageAnchor[] {
@@ -373,6 +413,19 @@ export class EditController {
       if (cmd.kind === 'image-set') this.host.onModelChange()
       else this.host.rebuildOverlays()
       this.host.emit('image-change', { index, before, after, source } satisfies ImageChangePayload)
+      return inverse
+    }
+    // 结构族(增删行列):全表重建(几何+合并索引+叠加层),引擎按新结构重建
+    if (isStructCommand(cmd)) {
+      const { inverse } = applyCommand(sheet, cmd)
+      this.host.onModelChange() // rebuildMetrics(含 merges 索引)+ 重绘
+      this.host.rebuildOverlays() // 图片随结构移位/移除
+      if (this.host.isRecalcEnabled()) this.refreshEngine() // v1:引擎重建(不重写公式引用文本)
+      const payload: StructChangePayload =
+        cmd.kind === 'struct-edit'
+          ? { op: cmd.op, at: cmd.at, count: cmd.count, source }
+          : { op: 'restore', source }
+      this.host.emit('struct-change', payload)
       return inverse
     }
     // 单元格族:逐格发前后完整快照

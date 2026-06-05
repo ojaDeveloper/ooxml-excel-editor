@@ -76,6 +76,28 @@ function Demo() {
             B 加粗选区
           </button>
         )}
+        {editMode && (
+          <button
+            onClick={() => {
+              const sel = ref.current?.getSelection()
+              if (sel) ref.current?.insertRows(sel.top, 1)
+            }}
+            title="选区上方插入行(E7)"
+          >
+            ＋行
+          </button>
+        )}
+        {editMode && (
+          <button
+            onClick={() => {
+              const sel = ref.current?.getSelection()
+              if (sel) ref.current?.deleteRows(sel.top, sel.bottom - sel.top + 1)
+            }}
+            title="删除选区行(E7)"
+          >
+            －行
+          </button>
+        )}
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
         <ExcelViewer
@@ -98,6 +120,9 @@ function Demo() {
           }}
           onImageChange={(p) => {
             if (import.meta.env.DEV) (window as unknown as { __lastImageChange?: unknown }).__lastImageChange = p
+          }}
+          onStructChange={(p) => {
+            if (import.meta.env.DEV) (window as unknown as { __lastStructChange?: unknown }).__lastStructChange = p
           }}
           onRendered={() => {
             // ref.current 此时已就绪,再挂一次保证 e2e 拿到
