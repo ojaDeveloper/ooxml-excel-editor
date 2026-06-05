@@ -19,6 +19,10 @@ import { useExcelDocument } from '@/composables/useExcelDocument'
 import { CanvasRenderer, type ViewState } from '@/core/render/canvas-renderer'
 import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { ViewerController, type TooltipState, type FindState } from '@/core/viewer/controller'
+import type { EditConfig } from '@/core/edit/types'
+import type { FormulaEngineFactory } from '@/core/formula/engine'
+import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload, StructChangePayload } from '@/core/edit/edit-controller'
+import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
 import { revokeImages } from '@/core/finalize'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '@/core/export'
 import ViewerToolbar from './ViewerToolbar.vue'
@@ -51,6 +55,18 @@ const props = withDefaults(
      * 插件 ExcelPlugin.toolbar 贡献的项总会追加(opt-in)。
      */
     toolbar?: boolean | Array<string | ToolbarItem>
+    /** 编辑总开关:默认 false = 只读(行为不变)。开启后才能进入编辑(E0:闸门) */
+    editable?: boolean
+    /** 按格只读判定:返回 true = 只读(cell 为空格时传 null) */
+    cellReadOnly?: (cell: CellModel | null, pos: { row: number; col: number }) => boolean | void
+    /** 只读区域(0-based 闭区间);命中即只读 */
+    readOnlyRanges?: MergeRange[]
+    /** 自定义单元格编辑器(按格返回工厂;覆盖插件 editor)。需 editable 开启 */
+    editor?: EditorResolver
+    /** 公式重算(E4):默认 false 沿用缓存值。开启后编辑公式/被引用格 → 依赖格自动重算。需 editable */
+    recalc?: boolean
+    /** 自定义/自研公式引擎工厂(可换引擎);不给则用默认 HyperFormula(需 npm i hyperformula) */
+    formulaEngine?: FormulaEngineFactory
   }>(),
   // toolbar 默认 true(显示内置项);若不显式给默认,Vue 会把布尔型 prop 缺省判成 false
   { openLinks: true, toolbar: true },
@@ -79,6 +95,24 @@ function effectiveTransform(wb: WorkbookModel): WorkbookModel {
   if (props.transformModel) m = props.transformModel(m) ?? m
   return m
 }
+// 编辑配置(E0:默认只读;开 editable + 可按格/区域只读)
+const effectiveEditConfig = computed<EditConfig>(() => ({
+  editable: props.editable,
+  cellReadOnly: props.cellReadOnly,
+  readOnlyRanges: props.readOnlyRanges,
+  recalc: props.recalc,
+  formulaEngine: props.formulaEngine,
+}))
+// 合并编辑器解析器(E2:组件 editor prop 优先,其次插件 editor 数组序首个非空)
+function resolveEditor(cell: CellModel | null, pos: { row: number; col: number }): CellEditorFactory | void {
+  const fromProp = props.editor?.(cell, pos)
+  if (fromProp) return fromProp
+  for (const p of normalizedPlugins.value) {
+    const f = p.editor?.(cell, pos)
+    if (f) return f
+  }
+}
+const hasEditor = computed(() => !!props.editor || normalizedPlugins.value.some((p) => p.editor))
 
 const emit = defineEmits<{
   /** 工作簿解析并首次渲染完成 */
@@ -97,6 +131,20 @@ const emit = defineEmits<{
   (e: 'sheet-change', payload: { index: number; name: string }): void
   /** 单击超链接(openLinks=false 时由你处理跳转) */
   (e: 'hyperlink-click', payload: { url: string; cell: { row: number; col: number } }): void
+  /** 单元格变更(编辑/撤销/重做;含前后完整快照) */
+  (e: 'cell-change', payload: CellChangePayload): void
+  /** 进入编辑 */
+  (e: 'edit-start', payload: unknown): void
+  /** 提交编辑 */
+  (e: 'edit-commit', payload: unknown): void
+  /** 列宽/行高变更(拖拽/autofit/API/撤销重做;前后 px 尺寸) */
+  (e: 'dim-change', payload: DimChangePayload): void
+  /** 脏状态变更(有/无未保存修改) */
+  (e: 'dirty-change', payload: DirtyChangePayload): void
+  /** 图片增删移改(前后 ImageAnchor) */
+  (e: 'image-change', payload: ImageChangePayload): void
+  /** 行列结构变更(增删行列 / 撤销重做的整体还原) */
+  (e: 'struct-change', payload: StructChangePayload): void
 }>()
 
 const { loading, error, workbook, load, progress } = useExcelDocument()
@@ -137,6 +185,7 @@ const sheet = computed<SheetModel | null>(() => {
 // overlay slot 用: 每次重绘 +1 → 作用域插槽重算 rectOf 位置(随滚动/缩放/切表跟随)
 const renderTick = ref(0)
 const spacerEl = ref<HTMLElement | null>(null)
+const editorSlotEl = ref<HTMLElement | null>(null) // E2: 单元格编辑器挂载层
 let controller: ViewerController | null = null
 
 function doRender() {
@@ -169,7 +218,7 @@ let resizeObserver: ResizeObserver | null = null
 onMounted(() => {
   initPlugins()
   // DOM 挂载后实例化框架无关控制器,把 canvas/scroller/spacer/叠加层四象限交给它
-  if (canvasEl.value && renderAreaEl.value && scrollerEl.value && spacerEl.value && ovMain.value && ovFRow.value && ovFCol.value && ovCorner.value) {
+  if (canvasEl.value && renderAreaEl.value && scrollerEl.value && spacerEl.value && editorSlotEl.value && ovMain.value && ovFRow.value && ovFCol.value && ovCorner.value) {
     controller = new ViewerController(
       {
         canvas: canvasEl.value,
@@ -177,6 +226,7 @@ onMounted(() => {
         scroller: scrollerEl.value,
         spacer: spacerEl.value,
         overlays: { main: ovMain.value, frow: ovFRow.value, fcol: ovFCol.value, corner: ovCorner.value },
+        editorSlot: editorSlotEl.value,
       },
       {
         onRenderer: (r) => (renderer.value = r),
@@ -191,10 +241,13 @@ onMounted(() => {
         onTooltip: (tip) => (tooltip.value = tip),
         onFindChange: () => findVersion.value++,
         onFilterChange: () => filterVersion.value++,
+        onEditEvent: (event, payload) => fire(event, payload),
       },
     )
     view.value = controller.view // 壳与控制器共享同一 view 对象(现有 view.value 读法不变)
     controller.fileName = props.fileName // 导出默认文件名
+    controller.setEditConfig(effectiveEditConfig.value) // 编辑配置(默认只读)
+    controller.setEditorResolver(hasEditor.value ? resolveEditor : undefined) // E2: 编辑器解析
   }
   if (pluginOvEl.value) pluginOverlayHost = new PluginOverlayHost(pluginOvEl.value)
   if (props.src) load(props.src, effectiveTransform)
@@ -220,6 +273,9 @@ watch(() => props.src, (s) => {
 watch(() => props.fileName, (f) => {
   if (controller) controller.fileName = f
 })
+
+watch(effectiveEditConfig, (cfg) => controller?.setEditConfig(cfg))
+watch([() => props.editor, normalizedPlugins], () => controller?.setEditorResolver(hasEditor.value ? resolveEditor : undefined))
 
 // 主题 / cellStyle / 插件 变化 → 重建渲染器(它们在构造时注入)
 watch(
@@ -464,11 +520,45 @@ const viewerApi: ViewerApi = {
   rectOf,
   rectOfRange,
   redraw: () => doRender(),
+  isCellEditable: (row, col) => controller?.isCellEditable(row, col) ?? false,
+  editCell: (row, col, value) => controller?.editCell(row, col, value) ?? false,
+  editRange: (range, values) => controller?.editRange(range, values) ?? false,
+  clearRange: (range) => controller?.clearRange(range) ?? false,
+  setStyle: (range, patch) => controller?.setStyle(range, patch) ?? false,
+  getImages: () => controller?.getImages() ?? [],
+  addImage: (a) => controller?.addImage(a) ?? -1,
+  removeImage: (i) => controller?.removeImage(i) ?? false,
+  moveImage: (i, dx, dy) => controller?.moveImage(i, dx, dy) ?? false,
+  resizeImage: (i, w, h) => controller?.resizeImage(i, w, h) ?? false,
+  insertRows: (at, count) => controller?.insertRows(at, count) ?? false,
+  deleteRows: (at, count) => controller?.deleteRows(at, count) ?? false,
+  insertCols: (at, count) => controller?.insertCols(at, count) ?? false,
+  deleteCols: (at, count) => controller?.deleteCols(at, count) ?? false,
+  undo: () => controller?.undo(),
+  redo: () => controller?.redo(),
+  canUndo: () => controller?.canUndo() ?? false,
+  canRedo: () => controller?.canRedo() ?? false,
+  getEditingCell: () => controller?.getEditingCell() ?? null,
+  getCellSnapshot: (row, col) => controller?.getCellSnapshot(row, col) ?? null,
+  beginEdit: (row, col) => controller?.beginEdit(row, col) ?? false,
+  cancelEdit: () => controller?.cancelEdit(),
+  isEditing: () => controller?.isEditing() ?? false,
+  setColumnWidth: (col, width) => controller?.setColumnWidth(col, width) ?? false,
+  setRowHeight: (row, height) => controller?.setRowHeight(row, height) ?? false,
+  isRecalcReady: () => controller?.isRecalcReady() ?? false,
+  isDirty: () => controller?.isDirty() ?? false,
+  resetToOriginal: () => controller?.resetToOriginal() ?? false,
   exportImage,
   downloadImage,
   exportPdf,
   downloadPdf,
   print,
+  exportXlsx: (opts) => controller!.exportXlsx(opts),
+  downloadXlsx: (opts) => controller!.downloadXlsx(opts),
+  exportJson: (opts) => controller?.exportJson(opts) ?? '{}',
+  downloadJson: (opts) => controller?.downloadJson(opts),
+  exportCsv: (opts) => controller?.exportCsv(opts) ?? '',
+  downloadCsv: (opts) => controller?.downloadCsv(opts),
   // ---- 数据读取(委托独立函数,自动绑 date1904 + 默认当前表) ----
   getCellValue: (row, col, si) => {
     const s = dataSheet(si)
@@ -760,6 +850,8 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
         <!-- 插件 overlay:框架无关 DOM,由 PluginOverlayHost 挂载 -->
         <div ref="pluginOvEl" />
       </div>
+      <!-- 单元格编辑器层(E2):在格 + overlay 之上,CellEditorHost 挂载 -->
+      <div class="editor-slot" ref="editorSlotEl" />
 
       <div
         v-if="tooltip"
@@ -863,6 +955,17 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
   pointer-events: none;
 }
 .ov-slot :deep(*) {
+  pointer-events: auto;
+}
+/* 单元格编辑器层(E2): 在最上,容器穿透,编辑器本身接收交互 */
+.editor-slot {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  overflow: hidden;
+  pointer-events: none;
+}
+.editor-slot :deep(*) {
   pointer-events: auto;
 }
 /* 滚动条层: 透明、置顶、提供原生滚动条 + 接收鼠标交互 */

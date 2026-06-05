@@ -4,10 +4,12 @@ import ExcelViewer from './components/ExcelViewer.vue'
 import { definePlugin } from './core/plugin'
 import type { ViewerApi } from './core/plugin'
 import type { PdfPageContext } from './core/export/types'
+import { demoSelectEditor } from './demo-shared/demo-editor'
 
 const src = ref<File | string | undefined>(undefined)
 const fileName = ref<string>('')
 const dragOver = ref(false)
+const editMode = ref(false) // E0: 编辑模式闸门(默认只读)
 
 function onFile(file: File | undefined) {
   if (!file) return
@@ -34,6 +36,43 @@ async function loadSample() {
 // ---- 扩展 API 演示 ----
 const lastEvent = ref('')
 const viewerRef = ref<ViewerApi | null>(null)
+
+// 编辑变更:记录到状态栏 + (DEV)挂 window 供 e2e 校验前后快照
+function onCellChange(p: { before: { text: string }; after: { text: string }; source: string }) {
+  lastEvent.value = `[${p.source}] R?C? "${p.before.text}" → "${p.after.text}"`
+  if (import.meta.env.DEV) (window as unknown as { __lastCellChange?: unknown }).__lastCellChange = p
+}
+// E3.5: 列宽/行高 + 脏状态变更(DEV 挂 window 供 e2e 校验)
+function onDimChange(p: { axis: string; index: number; before: number; after: number; source: string }) {
+  lastEvent.value = `[${p.source}] ${p.axis}${p.index} ${Math.round(p.before)}→${Math.round(p.after)}px`
+  if (import.meta.env.DEV) (window as unknown as { __lastDimChange?: unknown }).__lastDimChange = p
+}
+function onDirtyChange(p: { dirty: boolean }) {
+  if (import.meta.env.DEV) (window as unknown as { __lastDirtyChange?: unknown }).__lastDirtyChange = p
+}
+function onImageChange(p: unknown) {
+  if (import.meta.env.DEV) (window as unknown as { __lastImageChange?: unknown }).__lastImageChange = p
+}
+function onStructChange(p: unknown) {
+  if (import.meta.env.DEV) (window as unknown as { __lastStructChange?: unknown }).__lastStructChange = p
+}
+// E7: 在选区上方插入一行 / 删除选区所在行
+function insertRowAtSel() {
+  const v = viewerRef.value
+  const sel = v?.getSelection()
+  if (v && sel) v.insertRows(sel.top, 1)
+}
+function deleteRowAtSel() {
+  const v = viewerRef.value
+  const sel = v?.getSelection()
+  if (v && sel) v.deleteRows(sel.top, sel.bottom - sel.top + 1)
+}
+// E5: 给当前选区加粗(样式编辑演示)
+function boldSelection() {
+  const v = viewerRef.value
+  const sel = v?.getSelection()
+  if (v && sel) v.setStyle(sel, { font: { bold: true } })
+}
 
 // 开发环境把命令式 API 挂到 window,便于 e2e 计算 canvas 上的几何(如筛选按钮位置)
 if (import.meta.env.DEV) {
@@ -144,6 +183,17 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
       <button v-if="src" class="sample-btn" @click="showSheetJSON" title="演示数据读取 API getSheetJSON">
         数据→JSON
       </button>
+      <label v-if="src" class="edit-toggle" title="开启编辑模式(E0:闸门)">
+        <input type="checkbox" v-model="editMode" /> 编辑模式
+      </label>
+      <button v-if="src && editMode" class="sample-btn" @click="boldSelection" title="给选区加粗(E5:样式编辑)">
+        B 加粗选区
+      </button>
+      <button v-if="src && editMode" class="sample-btn" @click="insertRowAtSel" title="选区上方插入行(E7)">＋行</button>
+      <button v-if="src && editMode" class="sample-btn" @click="deleteRowAtSel" title="删除选区行(E7)">－行</button>
+      <button v-if="src" class="sample-btn" @click="viewerRef?.downloadXlsx()" title="导出 .xlsx(E8:从模型重建)">↓XLSX</button>
+      <button v-if="src" class="sample-btn" @click="viewerRef?.downloadCsv()" title="导出 .csv(E8)">↓CSV</button>
+      <button v-if="src" class="sample-btn" @click="viewerRef?.downloadJson()" title="导出 .json(E8)">↓JSON</button>
     </header>
 
     <main class="app-body">
@@ -152,8 +202,17 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         :src="src"
         :file-name="fileName"
         :plugins="plugins"
+        :editable="editMode"
+        :recalc="editMode"
+        :read-only-ranges="[{ top: 1, left: 0, bottom: 1, right: 4 }]"
+        :editor="demoSelectEditor"
         :toolbar="['find', 'filter', 'clear-filter', 'separator', 'copy', 'freeze', 'separator', 'zoom', 'export']"
         @selection-change="(s) => (lastEvent = `选区 ${s.range.top + 1},${s.range.left + 1} → ${s.range.bottom + 1},${s.range.right + 1}`)"
+        @cell-change="onCellChange"
+        @dim-change="onDimChange"
+        @dirty-change="onDirtyChange"
+        @image-change="onImageChange"
+        @struct-change="onStructChange"
       >
         <!-- 分层 UI 演示: B3 上叠一个可点徽标,随滚动跟随 -->
         <template #overlay="{ rectOf, tick }">

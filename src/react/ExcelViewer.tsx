@@ -13,10 +13,17 @@ import {
   useState,
   type CSSProperties,
 } from 'react'
-import type { CellStyleFn, MergeRange, SheetModel, TransformModelFn, WorkbookModel } from '@/core/model/types'
+import type { CellModel, CellStyleFn, CellStyleOverride, ImageAnchor, MergeRange, SheetModel, TransformModelFn, WorkbookModel } from '@/core/model/types'
+import type { EditConfig } from '@/core/edit/types'
+import type { FormulaEngineFactory } from '@/core/formula/engine'
+import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload, StructChangePayload } from '@/core/edit/edit-controller'
+import type { CellSnapshot } from '@/core/model/snapshot'
+import type { CellValue } from '@/core/model/data-access'
+import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
 import type { ViewerTheme } from '@/core/render/theme'
 import type { ExcelSource } from '@/core/loader'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '@/core/export'
+import type { XlsxExportOptions } from '@/core/export/xlsx-writer'
 import {
   getCellValue,
   getCellText,
@@ -24,6 +31,7 @@ import {
   getRangeData,
   sheetToJSON,
   type ReadOptions,
+  type SheetToJSONOptions,
 } from '@/core/model/data-access'
 import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { ViewerController, type Cell, type TooltipState } from '@/core/viewer/controller'
@@ -42,6 +50,18 @@ export interface ExcelViewerProps {
   cellStyle?: CellStyleFn
   /** 插件(与 Vue 通用):theme/transformModel/cellStyle/events/overlay/setup 全跨框架可用 */
   plugins?: ExcelPlugin[]
+  /** 编辑总开关:默认 false = 只读(行为不变)。开启后才能进入编辑(E0:闸门) */
+  editable?: boolean
+  /** 按格只读判定:返回 true = 只读(cell 为空格时传 null) */
+  cellReadOnly?: (cell: CellModel | null, pos: { row: number; col: number }) => boolean | void
+  /** 只读区域(0-based 闭区间);命中即只读 */
+  readOnlyRanges?: MergeRange[]
+  /** 自定义单元格编辑器(按格返回工厂;覆盖插件 editor)。需 editable 开启 */
+  editor?: EditorResolver
+  /** 公式重算(E4):默认 false 沿用缓存值。开启后编辑公式/被引用格 → 依赖格自动重算。需 editable */
+  recalc?: boolean
+  /** 自定义/自研公式引擎工厂(可换引擎);不给则用默认 HyperFormula(需 npm i hyperformula) */
+  formulaEngine?: FormulaEngineFactory
   className?: string
   style?: CSSProperties
   onRendered?: (wb: WorkbookModel) => void
@@ -51,6 +71,18 @@ export interface ExcelViewerProps {
   onSelectionChange?: (p: { range: MergeRange; active: Cell }) => void
   onHyperlinkClick?: (p: { url: string; cell: Cell }) => void
   onSheetChange?: (p: { index: number; name: string }) => void
+  /** 单元格变更(编辑/撤销/重做;含前后完整快照) */
+  onCellChange?: (p: CellChangePayload) => void
+  onEditStart?: (p: unknown) => void
+  onEditCommit?: (p: unknown) => void
+  /** 列宽/行高变更(拖拽/autofit/API/撤销重做;前后 px 尺寸) */
+  onDimChange?: (p: DimChangePayload) => void
+  /** 脏状态变更(有/无未保存修改) */
+  onDirtyChange?: (p: DirtyChangePayload) => void
+  /** 图片增删移改(前后 ImageAnchor) */
+  onImageChange?: (p: ImageChangePayload) => void
+  /** 行列结构变更(增删行列) */
+  onStructChange?: (p: StructChangePayload) => void
 }
 
 /** 命令式句柄(与 Vue ref / ViewerApi 对齐) */
@@ -64,11 +96,45 @@ export interface ExcelViewerHandle {
   rectOf: (row: number, col: number) => { x: number; y: number; w: number; h: number } | null
   rectOfRange: (range: MergeRange) => { x: number; y: number; w: number; h: number } | null
   redraw: () => void
+  isCellEditable: (row: number, col: number) => boolean
+  editCell: (row: number, col: number, value: CellValue) => boolean
+  editRange: (range: MergeRange, values: CellValue[][]) => boolean
+  clearRange: (range: MergeRange) => boolean
+  setStyle: (range: MergeRange, patch: CellStyleOverride) => boolean
+  getImages: () => ImageAnchor[]
+  addImage: (anchor: ImageAnchor) => number
+  removeImage: (index: number) => boolean
+  moveImage: (index: number, dxPx: number, dyPx: number) => boolean
+  resizeImage: (index: number, widthPx: number, heightPx: number) => boolean
+  insertRows: (at: number, count?: number) => boolean
+  deleteRows: (at: number, count?: number) => boolean
+  insertCols: (at: number, count?: number) => boolean
+  deleteCols: (at: number, count?: number) => boolean
+  undo: () => void
+  redo: () => void
+  canUndo: () => boolean
+  canRedo: () => boolean
+  getEditingCell: () => { row: number; col: number } | null
+  getCellSnapshot: (row: number, col: number) => CellSnapshot | null
+  beginEdit: (row: number, col: number) => boolean
+  cancelEdit: () => void
+  isEditing: () => boolean
+  setColumnWidth: (col: number, width: number) => boolean
+  setRowHeight: (row: number, height: number) => boolean
+  isRecalcReady: () => boolean
+  isDirty: () => boolean
+  resetToOriginal: () => boolean
   exportImage: (opts?: ImageExportOptions) => Promise<Blob>
   downloadImage: (opts?: ImageExportOptions) => Promise<void>
   exportPdf: (opts?: PdfExportOptions) => Promise<Blob>
   downloadPdf: (opts?: PdfExportOptions) => Promise<void>
   print: (opts?: PrintOptions) => Promise<void>
+  exportXlsx: (opts?: XlsxExportOptions) => Promise<Blob>
+  downloadXlsx: (opts?: XlsxExportOptions) => Promise<void>
+  exportJson: (opts?: SheetToJSONOptions) => string
+  downloadJson: (opts?: SheetToJSONOptions) => void
+  exportCsv: (opts?: { target?: number; format?: boolean }) => string
+  downloadCsv: (opts?: { target?: number; format?: boolean }) => void
   getCellValue: (row: number, col: number, sheet?: number) => ReturnType<typeof getCellValue>
   getCellText: (row: number, col: number, sheet?: number) => string
   getSheetData: (opts?: ReadOptions, sheet?: number) => ReturnType<typeof getSheetData>
@@ -101,6 +167,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   const controllerRef = useRef<ViewerController | null>(null)
   const tooltipRef = useRef<TooltipState | null>(null)
   const pluginOvRef = useRef<HTMLDivElement>(null)
+  const editorSlotRef = useRef<HTMLDivElement>(null)
   const pluginHostRef = useRef<PluginOverlayHost | null>(null)
   const pluginHandlersRef = useRef<Map<PluginEvent, Set<(p: unknown) => void>>>(new Map())
   // 最新 props / 派生量(供 mount 时注册的 hook 读到当前值)
@@ -138,6 +205,29 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     if (propsRef.current.transformModel) m = propsRef.current.transformModel(m) ?? m
     return m
   }
+  function buildEditConfig(): EditConfig {
+    const p = propsRef.current
+    return {
+      editable: p.editable,
+      cellReadOnly: p.cellReadOnly,
+      readOnlyRanges: p.readOnlyRanges,
+      recalc: p.recalc,
+      formulaEngine: p.formulaEngine,
+    }
+  }
+  // E2: 合并编辑器解析器(prop 优先,其次插件数组序首个非空)。无任何 editor → undefined
+  function editorResolver(): EditorResolver | undefined {
+    const hasAny = !!propsRef.current.editor || pluginsRef.current.some((p) => p.editor)
+    if (!hasAny) return undefined
+    return (cell, pos) => {
+      const fromProp = propsRef.current.editor?.(cell, pos)
+      if (fromProp) return fromProp as CellEditorFactory
+      for (const p of pluginsRef.current) {
+        const f = p.editor?.(cell, pos)
+        if (f) return f
+      }
+    }
+  }
   /** 派发交互事件给插件(props 回调在各 hook 里另外调) */
   const firePlugin = (event: PluginEvent, payload: unknown) =>
     pluginHandlersRef.current.get(event)?.forEach((h) => h(payload))
@@ -160,7 +250,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     const ra = renderAreaRef.current
     const sc = scrollerRef.current
     const sp = spacerRef.current
-    if (!c || !ra || !sc || !sp || !ovMain.current || !ovFRow.current || !ovFCol.current || !ovCorner.current) return
+    if (!c || !ra || !sc || !sp || !editorSlotRef.current || !ovMain.current || !ovFRow.current || !ovFCol.current || !ovCorner.current) return
     const controller = new ViewerController(
       {
         canvas: c,
@@ -168,6 +258,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
         scroller: sc,
         spacer: sp,
         overlays: { main: ovMain.current, frow: ovFRow.current, fcol: ovFCol.current, corner: ovCorner.current },
+        editorSlot: editorSlotRef.current,
       },
       {
         onRenderer: () => force(),
@@ -194,9 +285,21 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
         },
         onFindChange: () => force(),
         onFilterChange: () => force(),
+        onEditEvent: (event, payload) => {
+          if (event === 'cell-change') propsRef.current.onCellChange?.(payload as CellChangePayload)
+          else if (event === 'edit-start') propsRef.current.onEditStart?.(payload)
+          else if (event === 'edit-commit') propsRef.current.onEditCommit?.(payload)
+          else if (event === 'dim-change') propsRef.current.onDimChange?.(payload as DimChangePayload)
+          else if (event === 'dirty-change') propsRef.current.onDirtyChange?.(payload as DirtyChangePayload)
+          else if (event === 'image-change') propsRef.current.onImageChange?.(payload as ImageChangePayload)
+          else if (event === 'struct-change') propsRef.current.onStructChange?.(payload as StructChangePayload)
+          firePlugin(event, payload)
+        },
       },
     )
     controller.fileName = propsRef.current.fileName
+    controller.setEditConfig(buildEditConfig())
+    controller.setEditorResolver(editorResolver())
     controllerRef.current = controller
     if (pluginOvRef.current) pluginHostRef.current = new PluginOverlayHost(pluginOvRef.current)
 
@@ -225,6 +328,18 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   useEffect(() => {
     if (controllerRef.current) controllerRef.current.fileName = props.fileName
   }, [props.fileName])
+
+  // ---- 编辑配置同步(E0) ----
+  useEffect(() => {
+    controllerRef.current?.setEditConfig(buildEditConfig())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.editable, props.cellReadOnly, props.readOnlyRanges, props.recalc, props.formulaEngine])
+
+  // ---- 编辑器解析器同步(E2) ----
+  useEffect(() => {
+    controllerRef.current?.setEditorResolver(editorResolver())
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.editor, props.plugins])
 
   // ---- 新工作簿 → 选活动表 + onRendered ----
   useEffect(() => {
@@ -289,11 +404,45 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       rectOf: (row, col) => controllerRef.current?.rectOf(row, col) ?? null,
       rectOfRange: (range) => controllerRef.current?.rectOfRange(range) ?? null,
       redraw: () => controllerRef.current?.render(),
+      isCellEditable: (row, col) => controllerRef.current?.isCellEditable(row, col) ?? false,
+      editCell: (row, col, value) => controllerRef.current?.editCell(row, col, value) ?? false,
+      editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
+      clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
+      setStyle: (range, patch) => controllerRef.current?.setStyle(range, patch) ?? false,
+      getImages: () => controllerRef.current?.getImages() ?? [],
+      addImage: (a) => controllerRef.current?.addImage(a) ?? -1,
+      removeImage: (i) => controllerRef.current?.removeImage(i) ?? false,
+      moveImage: (i, dx, dy) => controllerRef.current?.moveImage(i, dx, dy) ?? false,
+      resizeImage: (i, w, h) => controllerRef.current?.resizeImage(i, w, h) ?? false,
+      insertRows: (at, count) => controllerRef.current?.insertRows(at, count) ?? false,
+      deleteRows: (at, count) => controllerRef.current?.deleteRows(at, count) ?? false,
+      insertCols: (at, count) => controllerRef.current?.insertCols(at, count) ?? false,
+      deleteCols: (at, count) => controllerRef.current?.deleteCols(at, count) ?? false,
+      undo: () => controllerRef.current?.undo(),
+      redo: () => controllerRef.current?.redo(),
+      canUndo: () => controllerRef.current?.canUndo() ?? false,
+      canRedo: () => controllerRef.current?.canRedo() ?? false,
+      getEditingCell: () => controllerRef.current?.getEditingCell() ?? null,
+      getCellSnapshot: (row, col) => controllerRef.current?.getCellSnapshot(row, col) ?? null,
+      beginEdit: (row, col) => controllerRef.current?.beginEdit(row, col) ?? false,
+      cancelEdit: () => controllerRef.current?.cancelEdit(),
+      isEditing: () => controllerRef.current?.isEditing() ?? false,
+      setColumnWidth: (col, width) => controllerRef.current?.setColumnWidth(col, width) ?? false,
+      setRowHeight: (row, height) => controllerRef.current?.setRowHeight(row, height) ?? false,
+      isRecalcReady: () => controllerRef.current?.isRecalcReady() ?? false,
+      isDirty: () => controllerRef.current?.isDirty() ?? false,
+      resetToOriginal: () => controllerRef.current?.resetToOriginal() ?? false,
       exportImage: (opts) => controllerRef.current!.exportImage(opts),
       downloadImage: (opts) => controllerRef.current!.downloadImage(opts),
       exportPdf: (opts) => controllerRef.current!.exportPdf(opts),
       downloadPdf: (opts) => controllerRef.current!.downloadPdf(opts),
       print: (opts) => controllerRef.current!.print(opts),
+      exportXlsx: (opts) => controllerRef.current!.exportXlsx(opts),
+      downloadXlsx: (opts) => controllerRef.current!.downloadXlsx(opts),
+      exportJson: (opts) => controllerRef.current?.exportJson(opts) ?? '{}',
+      downloadJson: (opts) => controllerRef.current?.downloadJson(opts),
+      exportCsv: (opts) => controllerRef.current?.exportCsv(opts) ?? '',
+      downloadCsv: (opts) => controllerRef.current?.downloadCsv(opts),
       getCellValue: (row, col, si) => {
         const s = dataSheet(si)
         return s ? getCellValue(s, row, col) : null
@@ -334,11 +483,45 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     rectOf: (row, col) => controllerRef.current?.rectOf(row, col) ?? null,
     rectOfRange: (range) => controllerRef.current?.rectOfRange(range) ?? null,
     redraw: () => controllerRef.current?.render(),
+    isCellEditable: (row, col) => controllerRef.current?.isCellEditable(row, col) ?? false,
+    editCell: (row, col, value) => controllerRef.current?.editCell(row, col, value) ?? false,
+    editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
+    clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
+    setStyle: (range, patch) => controllerRef.current?.setStyle(range, patch) ?? false,
+    getImages: () => controllerRef.current?.getImages() ?? [],
+    addImage: (a) => controllerRef.current?.addImage(a) ?? -1,
+    removeImage: (i) => controllerRef.current?.removeImage(i) ?? false,
+    moveImage: (i, dx, dy) => controllerRef.current?.moveImage(i, dx, dy) ?? false,
+    resizeImage: (i, w, h) => controllerRef.current?.resizeImage(i, w, h) ?? false,
+    insertRows: (at, count) => controllerRef.current?.insertRows(at, count) ?? false,
+    deleteRows: (at, count) => controllerRef.current?.deleteRows(at, count) ?? false,
+    insertCols: (at, count) => controllerRef.current?.insertCols(at, count) ?? false,
+    deleteCols: (at, count) => controllerRef.current?.deleteCols(at, count) ?? false,
+    undo: () => controllerRef.current?.undo(),
+    redo: () => controllerRef.current?.redo(),
+    canUndo: () => controllerRef.current?.canUndo() ?? false,
+    canRedo: () => controllerRef.current?.canRedo() ?? false,
+    getEditingCell: () => controllerRef.current?.getEditingCell() ?? null,
+    getCellSnapshot: (row, col) => controllerRef.current?.getCellSnapshot(row, col) ?? null,
+    beginEdit: (row, col) => controllerRef.current?.beginEdit(row, col) ?? false,
+    cancelEdit: () => controllerRef.current?.cancelEdit(),
+    isEditing: () => controllerRef.current?.isEditing() ?? false,
+    setColumnWidth: (col, width) => controllerRef.current?.setColumnWidth(col, width) ?? false,
+    setRowHeight: (row, height) => controllerRef.current?.setRowHeight(row, height) ?? false,
+    isRecalcReady: () => controllerRef.current?.isRecalcReady() ?? false,
+    isDirty: () => controllerRef.current?.isDirty() ?? false,
+    resetToOriginal: () => controllerRef.current?.resetToOriginal() ?? false,
     exportImage: (opts) => controllerRef.current!.exportImage(opts),
     downloadImage: (opts) => controllerRef.current!.downloadImage(opts),
     exportPdf: (opts) => controllerRef.current!.exportPdf(opts),
     downloadPdf: (opts) => controllerRef.current!.downloadPdf(opts),
     print: (opts) => controllerRef.current!.print(opts),
+    exportXlsx: (opts) => controllerRef.current!.exportXlsx(opts),
+    downloadXlsx: (opts) => controllerRef.current!.downloadXlsx(opts),
+    exportJson: (opts) => controllerRef.current?.exportJson(opts) ?? '{}',
+    downloadJson: (opts) => controllerRef.current?.downloadJson(opts),
+    exportCsv: (opts) => controllerRef.current?.exportCsv(opts) ?? '',
+    downloadCsv: (opts) => controllerRef.current?.downloadCsv(opts),
     getCellValue: (row, col, si) => {
       const s = apiSheet(si)
       return s ? getCellValue(s, row, col) : null
@@ -511,6 +694,8 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
         <div className="rxl-ov-slot">
           <div ref={pluginOvRef} />
         </div>
+        {/* 单元格编辑器层(E2):CellEditorHost 挂载 */}
+        <div className="rxl-editor-slot" ref={editorSlotRef} />
 
         {findOpen && workbook && (
           <div className="rxl-findbar">

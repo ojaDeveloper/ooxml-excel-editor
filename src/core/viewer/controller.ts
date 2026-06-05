@@ -10,12 +10,25 @@
  * onSelectionChange(壳据此 +1 让选区相关计算属性重算)、onCellClick/onCellDblClick/onHyperlink/onFilterButton/onTooltip
  * (交互回调,壳决定 emit / 插件派发 / 策略)。壳不需镜像 contentSize/selection —— 直接读控制器。
  */
-import type { CellModel, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
+import type { CellModel, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
+import { setImageRect, cloneImageAnchor } from '../model/mutations'
+import { deleteIntersectsMerge } from '../model/structure'
+import { anchorRect } from '../overlay/anchor'
+import type { EditConfig } from '../edit/types'
+import { resolveEditable } from '../edit/permissions'
+import { EditController, type EditControllerHost, type EditEventName } from '../edit/edit-controller'
+import { defaultFormulaEngineFactory } from '../formula/hyperformula-adapter'
+import type { CellValue, SheetToJSONOptions } from '../model/data-access'
+import type { CellSnapshot } from '../model/snapshot'
+import { CellEditorHost } from '../edit/editor-host'
+import type { CellEditorContext, EditorCommitValue, EditorResolver } from '../edit/editor-context'
+import { defaultCellEditor } from '../edit/default-editor'
 import { CanvasRenderer, type RendererOptions, type ViewState } from '../render/canvas-renderer'
 import { OverlayManager, type OverlayQuads } from './overlay-manager'
 import { WorkbookExporter, type ExporterHost } from '../export/exporter'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '../export/types'
+import type { XlsxExportOptions } from '../export/xlsx-writer'
 
 export type Cell = { row: number; col: number }
 export interface TooltipState {
@@ -55,6 +68,8 @@ export interface ViewerControllerEls {
   spacer: HTMLElement
   /** 叠加层四象限 */
   overlays: OverlayQuads
+  /** 单元格编辑器挂载层(在格 + overlay 之上;E2) */
+  editorSlot: HTMLElement
 }
 
 export interface ViewerControllerHooks {
@@ -76,6 +91,8 @@ export interface ViewerControllerHooks {
   onFindChange: () => void
   /** 筛选状态/浮层变化(壳据此 +1 让 FilterPopup / 工具栏重算) */
   onFilterChange: () => void
+  /** 编辑事件(cell-change/edit-start/edit-commit;壳转 emit + 插件派发) */
+  onEditEvent: (event: EditEventName, payload: unknown) => void
 }
 
 const BLANK = '(空白)'
@@ -106,10 +123,17 @@ export class ViewerController {
   private selMode: 'range' | 'rows' | 'cols' = 'range'
 
   // ---- 拖拽态 ----
-  private dragMode: 'none' | 'cell' | 'row' | 'col' | 'resize-col' | 'resize-row' = 'none'
+  private dragMode: 'none' | 'cell' | 'row' | 'col' | 'resize-col' | 'resize-row' | 'image' = 'none'
   private resizeTarget = -1 // 正在拖拽改宽高的列/行索引
+  // 图片拖拽态(E6)
+  private imageDragIdx = -1
+  private imageDragStartRect: { left: number; top: number; width: number; height: number } | null = null
+  private imageDragStartMouse = { x: 0, y: 0 }
+  private imageDragBefore: ImageAnchor | null = null
   private resizeStartPos = 0 // 起始鼠标坐标(px)
-  private resizeStartSize = 0 // 起始宽/高(px)
+  private resizeStartSize = 0 // 起始宽/高(px,zoom 后)
+  private resizeStartInfo: ColumnInfo | RowInfo | null = null // 拖拽起始的列/行维度信息(克隆,供 undo)
+  private resizeStartModelSize = 0 // 拖拽起始的模型 px 尺寸(非缩放,dim-change 事件用)
   private dragMoved = false
 
   // ---- 查找态 ----
@@ -128,6 +152,15 @@ export class ViewerController {
   private sortCol = -1
   private sortDir: 'asc' | 'desc' | null = null
 
+  // ---- 编辑配置(默认只读;E0 只做闸门,后续阶段在此扩展) ----
+  private editCfg: EditConfig = {}
+  /** 编辑底座(命令栈/快照/事件;E1) */
+  readonly edit: EditController
+  /** 单元格编辑器宿主(E2) */
+  private editorHost: CellEditorHost
+  /** 按格解析编辑器(壳合并 plugin.editor + prop.editor 后注入;E2) */
+  private editorResolver?: EditorResolver
+
   constructor(
     private els: ViewerControllerEls,
     private hooks: ViewerControllerHooks,
@@ -141,6 +174,31 @@ export class ViewerController {
       getFileName: () => this.fileName,
     }
     this.exporter = new WorkbookExporter(host)
+
+    const editHost: EditControllerHost = {
+      getSheet: () => this.sheet,
+      getWorkbook: () => this.workbook,
+      getDate1904: () => this.workbook?.date1904 ?? false,
+      isEditable: (row, col) => this.isCellEditable(row, col),
+      isEditingEnabled: () => !!this.editCfg.editable,
+      getActiveSheetIndex: () => this.activeIndex,
+      isRecalcEnabled: () => !!this.editCfg.editable && !!this.editCfg.recalc,
+      getEngineFactory: () =>
+        this.editCfg.editable && this.editCfg.recalc
+          ? (this.editCfg.formulaEngine ?? defaultFormulaEngineFactory)
+          : null,
+      onModelChange: () => {
+        this.renderer?.rebuildMetrics()
+        this.refreshContentSize()
+        this.render()
+      },
+      rebuildOverlays: () => {
+        if (this.sheet && this.renderer) void this.overlays.build(this.sheet, this.renderer, this.view)
+      },
+      emit: (event, payload) => this.hooks.onEditEvent(event, payload),
+    }
+    this.edit = new EditController(editHost)
+    this.editorHost = new CellEditorHost(els.editorSlot, (row, col) => this.rectOf(row, col))
   }
 
   /** 切表/换簿/主题变化: 清状态,重建渲染器,重置滚动,量尺寸,建叠加层,绘制,按需重跑查找 */
@@ -155,9 +213,16 @@ export class ViewerController {
     this.hooks.onTooltip(null)
     this.sortCol = -1
     this.sortDir = null
+    this.editorHost.unmount() // 卸掉活动编辑器
+    this.edit.reset() // 切表/换簿:命令栈 + 编辑态作废
+    const freshWorkbook = this.workbook !== workbook // 换新簿 vs 仅切表
 
     this.sheet = sheet
     this.workbook = workbook
+    if (freshWorkbook) {
+      this.edit.resetDirtyBaseline() // 换新簿:作废 baseline + 清脏(切表保留)
+      this.edit.refreshEngine() // 换新簿:为新簿重建公式引擎(切表不重建)
+    }
     this.activeIndex = Math.max(0, workbook.sheets.indexOf(sheet))
     this.rendererOpts = opts
     this.renderer = new CanvasRenderer(this.els.canvas, sheet, workbook, zoom, opts)
@@ -185,6 +250,7 @@ export class ViewerController {
     r.setSelection(this.getSelection())
     r.render(this.view)
     if (this.sheet) this.overlays.position(this.sheet, r, this.view)
+    this.editorHost.position() // 活动编辑器随滚动/缩放跟随(无则 no-op)
     this.hooks.onRenderTick()
   }
 
@@ -239,17 +305,43 @@ export class ViewerController {
     this.refreshContentSize()
     this.scheduleRender()
   }
-  /** 双击列边界: 自适应列宽 */
+  /** 双击列边界: 自适应列宽(editable 时入命令栈/发事件/记脏) */
   autoFitColumn(col: number): void {
+    if (this.editCfg.editable) this.beginResizeRecord('col', col)
     this.renderer?.autoFitColumn(col)
     this.refreshContentSize()
     this.render()
+    if (this.editCfg.editable) this.endResizeRecord('col', col)
   }
-  /** 双击行边界: 自适应行高 */
+  /** 双击行边界: 自适应行高(editable 时入命令栈/发事件/记脏) */
   autoFitRow(row: number): void {
+    if (this.editCfg.editable) this.beginResizeRecord('row', row)
     this.renderer?.autoFitRow(row)
     this.refreshContentSize()
     this.render()
+    if (this.editCfg.editable) this.endResizeRecord('row', row)
+  }
+
+  // ---- 维度 / 脏状态 命令式 API(E3.5) ----
+  /** 程序化设列宽(px,模型单位/非缩放);editable 时走命令栈(可撤销+发 dim-change+记脏)。 */
+  setColumnWidth(col: number, width: number): boolean {
+    return this.edit.setDimension('col', col, width)
+  }
+  /** 程序化设行高(px,模型单位/非缩放);editable 时走命令栈。 */
+  setRowHeight(row: number, height: number): boolean {
+    return this.edit.setDimension('row', row, height)
+  }
+  /** 公式引擎是否已就绪(recalc 开启 + 异步 warm 完成);未开重算恒 false。 */
+  isRecalcReady(): boolean {
+    return this.edit.isRecalcReady()
+  }
+  /** 当前是否有未保存修改(自加载/还原以来发生过编辑或 resize)。 */
+  isDirty(): boolean {
+    return this.edit.isDirty()
+  }
+  /** 放弃全部修改,还原到刚加载的原件;返回是否还原(无 baseline → false)。 */
+  resetToOriginal(): boolean {
+    return this.edit.resetToOriginal()
   }
 
   /** 单元格当前屏幕矩形(render-area 相对) */
@@ -270,6 +362,8 @@ export class ViewerController {
     if (this.rafId) cancelAnimationFrame(this.rafId)
     this.rafId = 0
     this.overlays.dispose()
+    this.editorHost.dispose()
+    this.edit.disposeEngine()
   }
 
   /** 内容总尺寸变化 → 量 + 直接撑 spacer(滚动范围由它决定) */
@@ -434,6 +528,19 @@ export class ViewerController {
         return
       }
     }
+    // 图片拖拽移动(editable;命中浮动图 → 进入 image 拖拽,优先于选区)
+    if (r && p && this.editCfg.editable && this.sheet) {
+      const imgIdx = this.imageHitAt(p)
+      if (imgIdx >= 0) {
+        this.dragMode = 'image'
+        this.imageDragIdx = imgIdx
+        this.imageDragStartRect = anchorRect(r.metrics, this.sheet.images[imgIdx])
+        this.imageDragStartMouse = { x: p.x, y: p.y }
+        this.imageDragBefore = cloneImageAnchor(this.sheet.images[imgIdx])
+        this.edit.ensureBaseline()
+        return
+      }
+    }
     // 表头边界拖拽改宽高(优先于选择)
     if (r && p) {
       if (p.y < r.metrics.colHeaderHeight) {
@@ -443,6 +550,7 @@ export class ViewerController {
           this.resizeTarget = b.col
           this.resizeStartPos = p.x
           this.resizeStartSize = r.metrics.colWidth(b.col)
+          this.beginResizeRecord('col', b.col)
           return
         }
       } else if (p.x < r.metrics.rowHeaderWidth) {
@@ -452,6 +560,7 @@ export class ViewerController {
           this.resizeTarget = b.row
           this.resizeStartPos = p.y
           this.resizeStartSize = r.metrics.rowHeight(b.row)
+          this.beginResizeRecord('row', b.row)
           return
         }
       }
@@ -482,6 +591,23 @@ export class ViewerController {
       const p = this.localXY(e)
       if (!r || !p) return
       this.dragMoved = true
+      if (this.dragMode === 'image' && this.imageDragStartRect && this.sheet) {
+        const dx = p.x - this.imageDragStartMouse.x
+        const dy = p.y - this.imageDragStartMouse.y
+        setImageRect(
+          this.sheet,
+          this.imageDragIdx,
+          {
+            left: this.imageDragStartRect.left + dx,
+            top: this.imageDragStartRect.top + dy,
+            width: this.imageDragStartRect.width,
+            height: this.imageDragStartRect.height,
+          },
+          this.view.zoom,
+        )
+        this.render() // 重定位叠加层(图片 el 按 index 重读锚点)
+        return
+      }
       if (this.dragMode === 'resize-col') {
         this.setColWidthPx(this.resizeTarget, this.resizeStartSize + (p.x - this.resizeStartPos))
         return
@@ -526,8 +652,63 @@ export class ViewerController {
         const link = r.cellHyperlink(hit.row, hit.col)
         if (link) this.hooks.onHyperlink(link, { row: hit.row, col: hit.col })
       }
+    } else if (this.dragMode === 'resize-col') {
+      this.endResizeRecord('col', this.resizeTarget)
+    } else if (this.dragMode === 'resize-row') {
+      this.endResizeRecord('row', this.resizeTarget)
+    } else if (this.dragMode === 'image') {
+      if (this.dragMoved && this.imageDragBefore && this.sheet) {
+        const after = cloneImageAnchor(this.sheet.images[this.imageDragIdx])
+        this.edit.recordImageEdit(this.imageDragIdx, this.imageDragBefore, after)
+      }
+      this.imageDragBefore = null
+      this.imageDragStartRect = null
+      this.imageDragIdx = -1
     }
     this.dragMode = 'none'
+  }
+
+  /** 命中最上层浮动图(editable;p 为 render-area 坐标含表头);返回 index 或 -1。 */
+  private imageHitAt(p: { x: number; y: number }): number {
+    const r = this.renderer
+    const s = this.sheet
+    if (!r || !s) return -1
+    const hw = r.metrics.rowHeaderWidth
+    const hh = r.metrics.colHeaderHeight
+    if (p.x < hw || p.y < hh) return -1 // 表头区不算
+    for (let i = s.images.length - 1; i >= 0; i--) {
+      const rect = anchorRect(r.metrics, s.images[i])
+      const x = hw + rect.left - this.view.scrollX
+      const y = hh + rect.top - this.view.scrollY
+      if (p.x >= x && p.x <= x + rect.width && p.y >= y && p.y <= y + rect.height) return i
+    }
+    return -1
+  }
+
+  // ---- resize → 命令栈记账(仅 editable;E3.5) ----
+  /** 拖拽起始:editable 时捕获 baseline + 起始维度信息(供 undo / dim-change)。 */
+  private beginResizeRecord(axis: 'col' | 'row', index: number): void {
+    if (!this.editCfg.editable || !this.sheet) return
+    this.edit.ensureBaseline()
+    if (axis === 'col') {
+      const info = this.sheet.columns.get(index)
+      this.resizeStartInfo = info ? { ...info } : null
+      this.resizeStartModelSize = info?.width ?? this.sheet.defaultColWidth
+    } else {
+      const info = this.sheet.rows.get(index)
+      this.resizeStartInfo = info ? { ...info } : null
+      this.resizeStartModelSize = info?.height ?? this.sheet.defaultRowHeight
+    }
+  }
+  /** 拖拽结束:模型已被 renderer 改完,补登一条 undo 项 + 发 dim-change。 */
+  private endResizeRecord(axis: 'col' | 'row', index: number): void {
+    if (!this.editCfg.editable || !this.sheet) return
+    const after =
+      axis === 'col'
+        ? (this.sheet.columns.get(index)?.width ?? this.sheet.defaultColWidth)
+        : (this.sheet.rows.get(index)?.height ?? this.sheet.defaultRowHeight)
+    this.edit.recordDimEdit(axis, index, this.resizeStartInfo, this.resizeStartModelSize, after)
+    this.resizeStartInfo = null
   }
 
   onMouseLeave(): void {
@@ -582,9 +763,11 @@ export class ViewerController {
     } else if (rowHit) {
       this.autoFitRow(rowHit.row)
     } else {
-      // 非边界 → 双击单元格事件
       const cell = r.cellAtScreen(this.view, p.x, p.y)
-      if (cell) this.hooks.onCellDblClick(cell.row, cell.col, r.cellText(cell.row, cell.col))
+      if (!cell) return
+      // 可编辑 → 双击进入编辑;否则发双击事件(向后兼容)
+      if (this.editCfg.editable && this.isCellEditable(cell.row, cell.col)) this.beginEdit(cell.row, cell.col)
+      else this.hooks.onCellDblClick(cell.row, cell.col, r.cellText(cell.row, cell.col))
     }
   }
 
@@ -597,6 +780,18 @@ export class ViewerController {
   }
 
   onKeyDown(e: KeyboardEvent): void {
+    // 编辑模式下的 撤销/重做(Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y)
+    if (this.editCfg.editable && (e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+      if (e.shiftKey) this.edit.redo()
+      else this.edit.undo()
+      e.preventDefault()
+      return
+    }
+    if (this.editCfg.editable && (e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+      this.edit.redo()
+      e.preventDefault()
+      return
+    }
     if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
       void this.copySelection()
       e.preventDefault()
@@ -607,6 +802,26 @@ export class ViewerController {
       this.render()
       e.preventDefault()
       return
+    }
+    // 编辑进入(可编辑活动格、当前未在编辑):F2 / 打字 / Delete-Backspace 清空
+    if (this.editCfg.editable && this.selActive && !this.isEditing()) {
+      const { row, col } = this.selActive
+      if (e.key === 'F2') {
+        this.beginEdit(row, col)
+        e.preventDefault()
+        return
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (this.isCellEditable(row, col)) this.edit.clearRange({ top: row, left: col, bottom: row, right: col })
+        e.preventDefault()
+        return
+      }
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (this.beginEdit(row, col, e.key)) {
+          e.preventDefault()
+          return
+        }
+      }
     }
     const r = this.renderer
     if (!r || !this.selActive) return
@@ -1039,6 +1254,192 @@ export class ViewerController {
     this.render()
   }
 
+  // ====================== 编辑配置(E0:闸门) ======================
+
+  /** 设置编辑配置(默认只读;壳在挂载 + props 变化时调) */
+  setEditConfig(cfg: EditConfig): void {
+    this.editCfg = cfg ?? {}
+    this.edit.refreshEngine() // recalc/formulaEngine 可能变了 → 重置引擎并按需点火
+  }
+
+  /** 该格当前是否可编辑(综合 editable + readOnlyRanges + cellReadOnly) */
+  isCellEditable(row: number, col: number): boolean {
+    return this.sheet ? resolveEditable(this.sheet, row, col, this.editCfg) : false
+  }
+
+  // ---- 命令式编辑 API(委托 EditController;E1) ----
+  editCell(row: number, col: number, value: CellValue): boolean {
+    return this.edit.editCell(row, col, value)
+  }
+  editRange(range: MergeRange, values: CellValue[][]): boolean {
+    return this.edit.editRange(range, values)
+  }
+  clearRange(range: MergeRange): boolean {
+    return this.edit.clearRange(range)
+  }
+  /** 给区域套样式覆盖(E5;粗体/对齐/填充等);editable 时走命令栈(可撤销 + 发 cell-change + 记脏) */
+  setStyle(range: MergeRange, patch: CellStyleOverride): boolean {
+    return this.edit.setStyle(range, patch)
+  }
+
+  // ---- 图片编辑(E6;浮动/嵌入 增删移改) ----
+  /** 读当前表全部图片锚点(克隆)。 */
+  getImages(): ImageAnchor[] {
+    return this.edit.getImages()
+  }
+  /** 加一张图(无 src 但有 bytes+mime 时自动生成 blob url);返回插入索引(失败 -1)。 */
+  addImage(anchor: ImageAnchor): number {
+    let a = anchor
+    if (!a.src && a.bytes && a.mime) {
+      a = { ...a, src: URL.createObjectURL(new Blob([a.bytes as BlobPart], { type: a.mime })) }
+    }
+    return this.edit.addImage(a)
+  }
+  /** 删一张图。 */
+  removeImage(index: number): boolean {
+    return this.edit.removeImage(index)
+  }
+  /** 移动图片(屏幕像素增量);editable 时入命令栈 + 发 image-change。 */
+  moveImage(index: number, dxPx: number, dyPx: number): boolean {
+    return this.editImageRect(index, (rect) => ({ ...rect, left: rect.left + dxPx, top: rect.top + dyPx }))
+  }
+  /** 缩放图片(目标屏幕像素宽高);editable 时入命令栈 + 发 image-change。 */
+  resizeImage(index: number, widthPx: number, heightPx: number): boolean {
+    return this.editImageRect(index, (rect) => ({ ...rect, width: Math.max(8, widthPx), height: Math.max(8, heightPx) }))
+  }
+  // ---- 行列结构编辑(E7;增删行列) ----
+  /** 在 at 处插入 count 行(原 at 行及之后下移)。 */
+  insertRows(at: number, count = 1): boolean {
+    return this.edit.insertRows(at, count)
+  }
+  /** 删除 [at, at+count) 行(与合并相交则警告,相交合并被移除)。 */
+  deleteRows(at: number, count = 1): boolean {
+    if (this.sheet && deleteIntersectsMerge(this.sheet, 'delete-rows', at, count))
+      console.warn('[ooxml-preview] 删除行与合并单元格相交,相交的合并将被移除')
+    return this.edit.deleteRows(at, count)
+  }
+  /** 在 at 处插入 count 列。 */
+  insertCols(at: number, count = 1): boolean {
+    return this.edit.insertCols(at, count)
+  }
+  /** 删除 [at, at+count) 列(与合并相交则警告)。 */
+  deleteCols(at: number, count = 1): boolean {
+    if (this.sheet && deleteIntersectsMerge(this.sheet, 'delete-cols', at, count))
+      console.warn('[ooxml-preview] 删除列与合并单元格相交,相交的合并将被移除')
+    return this.edit.deleteCols(at, count)
+  }
+
+  /** 移动/缩放公共路径:算当前矩形 → 变换 → setImageRect → 重定位 → 补登命令。 */
+  private editImageRect(
+    index: number,
+    fn: (rect: { left: number; top: number; width: number; height: number }) => { left: number; top: number; width: number; height: number },
+  ): boolean {
+    if (!this.editCfg.editable || !this.sheet || !this.renderer) return false
+    const img = this.sheet.images[index]
+    if (!img) return false
+    this.edit.ensureBaseline()
+    const before = cloneImageAnchor(img)
+    setImageRect(this.sheet, index, fn(anchorRect(this.renderer.metrics, img)), this.view.zoom)
+    this.render()
+    this.edit.recordImageEdit(index, before, cloneImageAnchor(this.sheet.images[index]))
+    return true
+  }
+  undo(): void {
+    this.edit.undo()
+  }
+  redo(): void {
+    this.edit.redo()
+  }
+  canUndo(): boolean {
+    return this.edit.canUndo()
+  }
+  canRedo(): boolean {
+    return this.edit.canRedo()
+  }
+  getEditingCell(): { row: number; col: number } | null {
+    return this.edit.getEditingCell()
+  }
+  getCellSnapshot(row: number, col: number): CellSnapshot | null {
+    return this.edit.getCellSnapshot(row, col)
+  }
+
+  // ---- 编辑器宿主(E2) ----
+  /** 壳注入合并后的编辑器解析器(plugin.editor + prop.editor) */
+  setEditorResolver(fn?: EditorResolver): void {
+    this.editorResolver = fn
+  }
+
+  /**
+   * 进入编辑:解析编辑器工厂(无自定义则用内置文本编辑器)→ 挂载。只读则不进入。
+   * initialText 为打字进入时的起始字符。返回是否进入。
+   */
+  beginEdit(row: number, col: number, initialText?: string): boolean {
+    if (!this.sheet || !this.workbook) return false
+    // 合并单元格 → 编辑落到锚点(左上格),编辑框盖住整片合并区(像 WPS/Excel)
+    const merge = this.renderer?.mergeAt(row, col) ?? null
+    const ar = merge ? merge.top : row
+    const ac = merge ? merge.left : col
+    if (!this.isCellEditable(ar, ac)) return false
+    const cell = this.sheet.cells.get(cellKey(ar, ac)) ?? null
+    const factory = this.editorResolver?.(cell, { row: ar, col: ac }) ?? defaultCellEditor // E3:内置兜底
+    const rect = merge ? this.rectOfRange(merge) : this.rectOf(ar, ac)
+    const snapshot = this.edit.getCellSnapshot(ar, ac)
+    if (!rect || !snapshot) return false
+    const ctx: CellEditorContext = {
+      snapshot,
+      rect,
+      sheet: this.sheet,
+      workbook: this.workbook,
+      permission: 'editable',
+      initialText,
+      commit: (v, move) => this.commitEdit(v, move),
+      cancel: () => this.cancelEdit(),
+    }
+    const rectOverride = merge ? () => this.rectOfRange(merge) : undefined
+    if (!this.editorHost.mount(ar, ac, factory, ctx, rectOverride)) return false
+    this.edit.setEditing({ row: ar, col: ac })
+    this.hooks.onEditEvent('edit-start', { cell: { row: ar, col: ac }, snapshot })
+    return true
+  }
+
+  /**
+   * 提交当前编辑(取值 → 命令栈 → 卸编辑器)。value 可为裸值或 {value,style}(样式 E5 起生效)。
+   * move 指示提交后活动格移动(Enter→down / Tab→right)。
+   */
+  commitEdit(value: EditorCommitValue, move?: 'down' | 'right'): void {
+    const editing = this.edit.getEditingCell()
+    if (!editing) return
+    const wrapped = value !== null && typeof value === 'object' && !(value instanceof Date) && 'value' in value
+    const val: CellValue = wrapped ? (value as { value: CellValue }).value : (value as CellValue)
+    const style = wrapped ? (value as { style?: CellStyleOverride }).style : undefined
+    this.edit.editCell(editing.row, editing.col, val)
+    // E5:编辑器可返 { value, style } → 顺带套自定义编辑样式(要求 2 端到端)
+    if (style) this.edit.setStyle({ top: editing.row, left: editing.col, bottom: editing.row, right: editing.col }, style)
+    this.hooks.onEditEvent('edit-commit', { cell: editing, value: val })
+    this.editorHost.unmount()
+    this.edit.setEditing(null)
+    // 提交后导航 + 让滚动容器重新拿焦点(以便继续键盘操作)
+    const r = this.renderer
+    if (move && r) {
+      const nr = move === 'down' ? Math.min(editing.row + 1, r.metrics.rows - 1) : editing.row
+      const nc = move === 'right' ? Math.min(editing.col + 1, r.metrics.cols - 1) : editing.col
+      this.selectCell(nr, nc)
+    }
+    this.els.scroller.focus()
+  }
+
+  /** 取消当前编辑(不改模型) */
+  cancelEdit(): void {
+    if (!this.editorHost.isActive()) return
+    this.editorHost.unmount()
+    this.edit.setEditing(null)
+  }
+
+  /** 当前是否有活动编辑器 */
+  isEditing(): boolean {
+    return this.editorHost.isActive()
+  }
+
   // ====================== 导出 / 打印(委托 WorkbookExporter) ======================
 
   exportImage(opts?: ImageExportOptions): Promise<Blob> {
@@ -1055,6 +1456,25 @@ export class ViewerController {
   }
   print(opts?: PrintOptions): Promise<void> {
     return this.exporter.print(opts)
+  }
+  // ---- 数据导出(E8;委托 WorkbookExporter,一份数据层 → xlsx/json/csv) ----
+  exportXlsx(opts?: XlsxExportOptions): Promise<Blob> {
+    return this.exporter.exportXlsx(opts)
+  }
+  downloadXlsx(opts?: XlsxExportOptions): Promise<void> {
+    return this.exporter.downloadXlsx(opts)
+  }
+  exportJson(opts?: SheetToJSONOptions): string {
+    return this.exporter.exportJson(opts)
+  }
+  downloadJson(opts?: SheetToJSONOptions): void {
+    this.exporter.downloadJson(opts)
+  }
+  exportCsv(opts?: { target?: number; format?: boolean }): string {
+    return this.exporter.exportCsv(opts)
+  }
+  downloadCsv(opts?: { target?: number; format?: boolean }): void {
+    this.exporter.downloadCsv(opts)
   }
 }
 

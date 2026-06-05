@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { ExcelViewer, type ExcelViewerHandle } from '@/react'
 import { definePlugin } from '@/core/plugin'
 import type { ExcelSource } from '@/core/loader'
+import { demoSelectEditor } from '@/demo-shared/demo-editor'
 
 // 跨框架插件:同一份 definePlugin 在 Vue / React 都能用。overlay 返回 DOM(框架无关)。
 const demoPlugin = definePlugin({
@@ -29,6 +30,7 @@ const demoPlugin = definePlugin({
 function Demo() {
   const [src, setSrc] = useState<ExcelSource | undefined>(undefined)
   const [fileName, setFileName] = useState('')
+  const [editMode, setEditMode] = useState(false) // E0: 编辑模式闸门
   const ref = useRef<ExcelViewerHandle>(null)
 
   // 开发期把命令式句柄挂 window,供 e2e 取几何/读数据(与 Vue demo 的 __excelViewer 对齐)
@@ -60,6 +62,51 @@ function Demo() {
           }}
         />
         <span style={{ color: '#888', fontSize: 13 }}>{fileName}</span>
+        <label style={{ fontSize: 13 }} title="开启编辑模式(E0:闸门)">
+          <input type="checkbox" checked={editMode} onChange={(e) => setEditMode(e.target.checked)} /> 编辑模式
+        </label>
+        {editMode && (
+          <button
+            onClick={() => {
+              const sel = ref.current?.getSelection()
+              if (sel) ref.current?.setStyle(sel, { font: { bold: true } })
+            }}
+            title="给选区加粗(E5:样式编辑)"
+          >
+            B 加粗选区
+          </button>
+        )}
+        {editMode && (
+          <button
+            onClick={() => {
+              const sel = ref.current?.getSelection()
+              if (sel) ref.current?.insertRows(sel.top, 1)
+            }}
+            title="选区上方插入行(E7)"
+          >
+            ＋行
+          </button>
+        )}
+        {editMode && (
+          <button
+            onClick={() => {
+              const sel = ref.current?.getSelection()
+              if (sel) ref.current?.deleteRows(sel.top, sel.bottom - sel.top + 1)
+            }}
+            title="删除选区行(E7)"
+          >
+            －行
+          </button>
+        )}
+        <button onClick={() => ref.current?.downloadXlsx()} title="导出 .xlsx(E8:从模型重建)">
+          ↓XLSX
+        </button>
+        <button onClick={() => ref.current?.downloadCsv()} title="导出 .csv(E8)">
+          ↓CSV
+        </button>
+        <button onClick={() => ref.current?.downloadJson()} title="导出 .json(E8)">
+          ↓JSON
+        </button>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
         <ExcelViewer
@@ -67,6 +114,25 @@ function Demo() {
           src={src}
           fileName={fileName}
           plugins={[demoPlugin]}
+          editable={editMode}
+          recalc={editMode}
+          readOnlyRanges={[{ top: 1, left: 0, bottom: 1, right: 4 }]}
+          editor={demoSelectEditor}
+          onCellChange={(p) => {
+            if (import.meta.env.DEV) (window as unknown as { __lastCellChange?: unknown }).__lastCellChange = p
+          }}
+          onDimChange={(p) => {
+            if (import.meta.env.DEV) (window as unknown as { __lastDimChange?: unknown }).__lastDimChange = p
+          }}
+          onDirtyChange={(p) => {
+            if (import.meta.env.DEV) (window as unknown as { __lastDirtyChange?: unknown }).__lastDirtyChange = p
+          }}
+          onImageChange={(p) => {
+            if (import.meta.env.DEV) (window as unknown as { __lastImageChange?: unknown }).__lastImageChange = p
+          }}
+          onStructChange={(p) => {
+            if (import.meta.env.DEV) (window as unknown as { __lastStructChange?: unknown }).__lastStructChange = p
+          }}
           onRendered={() => {
             // ref.current 此时已就绪,再挂一次保证 e2e 拿到
             if (import.meta.env.DEV) (window as unknown as { __excelViewerReact?: ExcelViewerHandle | null }).__excelViewerReact = ref.current

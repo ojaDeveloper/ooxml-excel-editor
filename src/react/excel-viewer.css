@@ -111,6 +111,17 @@
 .rxl-ov-slot > div > * {
   pointer-events: auto;
 }
+/* 单元格编辑器层(E2):在最上,容器穿透,编辑器接收交互 */
+.rxl-editor-slot {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  overflow: hidden;
+  pointer-events: none;
+}
+.rxl-editor-slot > * {
+  pointer-events: auto;
+}
 .rxl-tooltip {
   position: absolute;
   z-index: 6;

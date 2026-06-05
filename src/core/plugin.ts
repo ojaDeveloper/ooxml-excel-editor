@@ -13,11 +13,14 @@
  *   <ExcelViewer :plugins="[myPlugin]" />   // Vue
  *   <ExcelViewer plugins={[myPlugin]} />    // React —— 同一插件,两框架通用
  */
-import type { CellStyleFn, MergeRange, TransformModelFn, WorkbookModel } from './model/types'
+import type { CellStyleFn, CellStyleOverride, ImageAnchor, MergeRange, TransformModelFn, WorkbookModel } from './model/types'
 import type { CellValue, ReadOptions, SheetToJSONOptions } from './model/data-access'
+import type { CellSnapshot } from './model/snapshot'
+import type { EditorResolver } from './edit/editor-context'
 import type { ViewerTheme } from './render/theme'
 import type { ExcelSource } from './loader'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from './export/types'
+import type { XlsxExportOptions } from './export/xlsx-writer'
 
 export interface Rect {
   x: number
@@ -32,6 +35,13 @@ export type PluginEvent =
   | 'selection-change'
   | 'sheet-change'
   | 'hyperlink-click'
+  | 'cell-change'
+  | 'edit-start'
+  | 'edit-commit'
+  | 'dim-change'
+  | 'dirty-change'
+  | 'image-change'
+  | 'struct-change'
 
 /** 命令式 API(组件 ref 与插件 ctx 共用) */
 export interface ViewerApi {
@@ -44,6 +54,8 @@ export interface ViewerApi {
   rectOf(row: number, col: number): Rect | null
   rectOfRange(range: MergeRange): Rect | null
   redraw(): void
+  /** 该格当前是否可编辑(综合 editable + readOnlyRanges + cellReadOnly) */
+  isCellEditable(row: number, col: number): boolean
   /** 导出当前/指定表为图片 Blob(默认 png) */
   exportImage(opts?: ImageExportOptions): Promise<Blob>
   /** 导出为图片并触发下载 */
@@ -54,6 +66,19 @@ export interface ViewerApi {
   downloadPdf(opts?: PdfExportOptions): Promise<void>
   /** 打开系统打印(可在对话框另存为 PDF) */
   print(opts?: PrintOptions): Promise<void>
+  // ---- 数据导出(E8;一份数据层 → xlsx/json/csv) ----
+  /** 整簿 → .xlsx Blob(从编辑后模型重建,所见即所得;需可选依赖 exceljs) */
+  exportXlsx(opts?: XlsxExportOptions): Promise<Blob>
+  /** 导出 .xlsx 并触发下载 */
+  downloadXlsx(opts?: XlsxExportOptions): Promise<void>
+  /** 整簿 → JSON 文本(各表首行作 key) */
+  exportJson(opts?: SheetToJSONOptions): string
+  /** 导出 JSON 并触发下载 */
+  downloadJson(opts?: SheetToJSONOptions): void
+  /** 一张表 → CSV 文本(默认活动表、格式化显示值) */
+  exportCsv(opts?: { target?: number; format?: boolean }): string
+  /** 导出 CSV 并触发下载(带 UTF-8 BOM) */
+  downloadCsv(opts?: { target?: number; format?: boolean }): void
   // ---- 数据读取(自动用当前 workbook 的 date1904;sheetIndex 缺省=当前活动表) ----
   /** 单元格原始值 */
   getCellValue(row: number, col: number, sheetIndex?: number): CellValue
@@ -65,6 +90,57 @@ export interface ViewerApi {
   getSheetJSON(opts?: SheetToJSONOptions, sheetIndex?: number): Record<string, CellValue>[]
   /** 区域二维数组 */
   getRangeData(range: MergeRange, opts?: ReadOptions, sheetIndex?: number): CellValue[][]
+  // ---- 编辑(E1;需 editable 开启,只读格不生效) ----
+  /** 编辑单格;返回是否生效 */
+  editCell(row: number, col: number, value: CellValue): boolean
+  /** 区域批量设值(2D,左上对齐 range.top/left);跳过只读格 */
+  editRange(range: MergeRange, values: CellValue[][]): boolean
+  /** 清空区域(跳过只读) */
+  clearRange(range: MergeRange): boolean
+  undo(): void
+  redo(): void
+  canUndo(): boolean
+  canRedo(): boolean
+  /** 当前正在编辑的格(无则 null) */
+  getEditingCell(): { row: number; col: number } | null
+  /** 查询任意格的完整快照(底层结构 + raw/computed/text/style) */
+  getCellSnapshot(row: number, col: number): CellSnapshot | null
+  /** 进入编辑(需有 editor 工厂 + 可编辑);返回是否进入 */
+  beginEdit(row: number, col: number): boolean
+  /** 取消当前编辑(不改模型) */
+  cancelEdit(): void
+  /** 当前是否有活动编辑器 */
+  isEditing(): boolean
+  /** 给区域套样式覆盖(E5;粗体/对齐/填充等);editable 时入命令栈(可撤销 + 发 cell-change + 记脏) */
+  setStyle(range: MergeRange, patch: CellStyleOverride): boolean
+  /** 读当前表全部图片锚点(克隆;E6) */
+  getImages(): ImageAnchor[]
+  /** 加一张图(无 src 但有 bytes+mime 时自动生成 blob url);返回插入索引 */
+  addImage(anchor: ImageAnchor): number
+  /** 删一张图 */
+  removeImage(index: number): boolean
+  /** 移动图片(屏幕像素增量);editable 时入命令栈 + 发 image-change */
+  moveImage(index: number, dxPx: number, dyPx: number): boolean
+  /** 缩放图片(目标屏幕像素宽高);editable 时入命令栈 + 发 image-change */
+  resizeImage(index: number, widthPx: number, heightPx: number): boolean
+  /** 在 at 处插入 count 行(E7);editable 时入命令栈 + 发 struct-change */
+  insertRows(at: number, count?: number): boolean
+  /** 删除 [at, at+count) 行(与合并相交则相交合并被移除) */
+  deleteRows(at: number, count?: number): boolean
+  /** 在 at 处插入 count 列 */
+  insertCols(at: number, count?: number): boolean
+  /** 删除 [at, at+count) 列 */
+  deleteCols(at: number, count?: number): boolean
+  /** 程序化设列宽(px,模型单位);editable 时入命令栈(可撤销 + 发 dim-change + 记脏) */
+  setColumnWidth(col: number, width: number): boolean
+  /** 程序化设行高(px,模型单位);editable 时入命令栈 */
+  setRowHeight(row: number, height: number): boolean
+  /** 公式引擎是否已就绪(recalc 开启 + 异步 warm 完成);未开重算恒 false */
+  isRecalcReady(): boolean
+  /** 当前是否有未保存修改(自加载/还原以来发生过编辑或 resize) */
+  isDirty(): boolean
+  /** 放弃全部修改,还原到刚加载的原件;返回是否还原 */
+  resetToOriginal(): boolean
 }
 
 /** overlay 渲染上下文(随滚动/缩放,tick 变即重渲) */
@@ -124,6 +200,8 @@ export interface ExcelPlugin {
   events?: Partial<Record<PluginEvent, (payload: any) => void>>
   /** 在网格上叠加 UI(返回 DOM 节点,框架无关);随 tick 重渲。用 ctx.rectOf 定位单元格。 */
   overlay?: (ctx: OverlayContext) => OverlayNode
+  /** 按格自定义编辑控件(返回工厂;多插件数组序首个非空胜,组件 editor prop 覆盖);需 editable 开启。 */
+  editor?: EditorResolver
   /** 高级: 拿命令式 API、订阅事件;返回可选清理函数 */
   setup?: (ctx: ExcelPluginContext) => void | (() => void)
 }

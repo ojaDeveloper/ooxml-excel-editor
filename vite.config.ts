@@ -81,8 +81,8 @@ export default defineConfig(({ mode, command }) => {
             formats: ['es'],
           },
           rollupOptions: {
-            // jspdf 同 echarts: 可选 peer,运行时动态 import,不打进库
-            external: ['vue', 'react', 'react-dom', 'react/jsx-runtime', 'exceljs', 'echarts', 'jspdf'],
+            // jspdf/hyperformula 同 echarts: 可选 peer,运行时动态 import,不打进库
+            external: ['vue', 'react', 'react-dom', 'react/jsx-runtime', 'exceljs', 'echarts', 'jspdf', 'hyperformula'],
             output: {
               entryFileNames: '[name].js',
               chunkFileNames: 'chunks/[name]-[hash].js',
