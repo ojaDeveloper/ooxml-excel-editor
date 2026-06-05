@@ -19,6 +19,7 @@ import type { CellValue } from '../model/data-access'
 import type { CellSnapshot } from '../model/snapshot'
 import { CellEditorHost } from '../edit/editor-host'
 import type { CellEditorContext, EditorCommitValue, EditorResolver } from '../edit/editor-context'
+import { defaultCellEditor } from '../edit/default-editor'
 import { CanvasRenderer, type RendererOptions, type ViewState } from '../render/canvas-renderer'
 import { OverlayManager, type OverlayQuads } from './overlay-manager'
 import { WorkbookExporter, type ExporterHost } from '../export/exporter'
@@ -620,9 +621,11 @@ export class ViewerController {
     } else if (rowHit) {
       this.autoFitRow(rowHit.row)
     } else {
-      // 非边界 → 双击单元格事件
       const cell = r.cellAtScreen(this.view, p.x, p.y)
-      if (cell) this.hooks.onCellDblClick(cell.row, cell.col, r.cellText(cell.row, cell.col))
+      if (!cell) return
+      // 可编辑 → 双击进入编辑;否则发双击事件(向后兼容)
+      if (this.editCfg.editable && this.isCellEditable(cell.row, cell.col)) this.beginEdit(cell.row, cell.col)
+      else this.hooks.onCellDblClick(cell.row, cell.col, r.cellText(cell.row, cell.col))
     }
   }
 
@@ -657,6 +660,26 @@ export class ViewerController {
       this.render()
       e.preventDefault()
       return
+    }
+    // 编辑进入(可编辑活动格、当前未在编辑):F2 / 打字 / Delete-Backspace 清空
+    if (this.editCfg.editable && this.selActive && !this.isEditing()) {
+      const { row, col } = this.selActive
+      if (e.key === 'F2') {
+        this.beginEdit(row, col)
+        e.preventDefault()
+        return
+      }
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        if (this.isCellEditable(row, col)) this.edit.clearRange({ top: row, left: col, bottom: row, right: col })
+        e.preventDefault()
+        return
+      }
+      if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (this.beginEdit(row, col, e.key)) {
+          e.preventDefault()
+          return
+        }
+      }
     }
     const r = this.renderer
     if (!r || !this.selActive) return
@@ -1136,13 +1159,15 @@ export class ViewerController {
     this.editorResolver = fn
   }
 
-  /** 进入编辑:解析编辑器工厂 → 挂载。无工厂(如未提供 editor)或只读则不进入。返回是否进入。 */
-  beginEdit(row: number, col: number): boolean {
+  /**
+   * 进入编辑:解析编辑器工厂(无自定义则用内置文本编辑器)→ 挂载。只读则不进入。
+   * initialText 为打字进入时的起始字符。返回是否进入。
+   */
+  beginEdit(row: number, col: number, initialText?: string): boolean {
     if (!this.sheet || !this.workbook) return false
     if (!this.isCellEditable(row, col)) return false
     const cell = this.sheet.cells.get(cellKey(row, col)) ?? null
-    const factory = this.editorResolver?.(cell, { row, col })
-    if (!factory) return false
+    const factory = this.editorResolver?.(cell, { row, col }) ?? defaultCellEditor // E3:内置兜底
     const rect = this.rectOf(row, col)
     const snapshot = this.edit.getCellSnapshot(row, col)
     if (!rect || !snapshot) return false
@@ -1152,7 +1177,8 @@ export class ViewerController {
       sheet: this.sheet,
       workbook: this.workbook,
       permission: 'editable',
-      commit: (v) => this.commitEdit(v),
+      initialText,
+      commit: (v, move) => this.commitEdit(v, move),
       cancel: () => this.cancelEdit(),
     }
     if (!this.editorHost.mount(row, col, factory, ctx)) return false
@@ -1161,8 +1187,11 @@ export class ViewerController {
     return true
   }
 
-  /** 提交当前编辑(取值 → 命令栈 → 卸编辑器)。value 可为裸值或 {value,style}(样式 E5 起生效)。 */
-  commitEdit(value: EditorCommitValue): void {
+  /**
+   * 提交当前编辑(取值 → 命令栈 → 卸编辑器)。value 可为裸值或 {value,style}(样式 E5 起生效)。
+   * move 指示提交后活动格移动(Enter→down / Tab→right)。
+   */
+  commitEdit(value: EditorCommitValue, move?: 'down' | 'right'): void {
     const editing = this.edit.getEditingCell()
     if (!editing) return
     const val: CellValue =
@@ -1173,6 +1202,14 @@ export class ViewerController {
     this.hooks.onEditEvent('edit-commit', { cell: editing, value: val })
     this.editorHost.unmount()
     this.edit.setEditing(null)
+    // 提交后导航 + 让滚动容器重新拿焦点(以便继续键盘操作)
+    const r = this.renderer
+    if (move && r) {
+      const nr = move === 'down' ? Math.min(editing.row + 1, r.metrics.rows - 1) : editing.row
+      const nc = move === 'right' ? Math.min(editing.col + 1, r.metrics.cols - 1) : editing.col
+      this.selectCell(nr, nc)
+    }
+    this.els.scroller.focus()
   }
 
   /** 取消当前编辑(不改模型) */

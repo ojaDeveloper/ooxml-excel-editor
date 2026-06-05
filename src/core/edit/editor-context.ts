@@ -21,8 +21,10 @@ export interface CellEditorContext {
   sheet: SheetModel
   workbook: WorkbookModel
   permission: EditPermission
-  /** 提交编辑(走命令栈 + 事件);editor 自行决定何时调 */
-  commit(value: EditorCommitValue): void
+  /** 进入编辑的初始文本(打字进入时为该字符;否则 undefined → editor 用 snapshot.text) */
+  initialText?: string
+  /** 提交编辑(走命令栈 + 事件);move 指示提交后活动格移动方向 */
+  commit(value: EditorCommitValue, move?: 'down' | 'right'): void
   /** 取消编辑(不改模型) */
   cancel(): void
 }

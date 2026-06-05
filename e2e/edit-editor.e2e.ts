@@ -48,9 +48,12 @@ function run(label: string, url: string, canvasSel: string, handle: string) {
 
     // 只读格(表头行 1)→ beginEdit 返回 false、不弹
     expect(await handleCall(page, handle, 'beginEdit', 1, 0)).toBe(false)
-    // 无自定义编辑器的列(col 2,demo 只给 col 0)→ beginEdit 返回 false(E3 才有内置兜底)
-    expect(await handleCall(page, handle, 'beginEdit', 2, 2)).toBe(false)
     await expect(sel).toBeHidden()
+    // 无自定义编辑器的列(col 2,demo 只给 col 0)→ E3 起用内置文本编辑器,不是自定义 select
+    expect(await handleCall(page, handle, 'beginEdit', 2, 2)).toBe(true)
+    await expect(sel).toBeHidden() // 自定义 select 不出现
+    await expect(page.locator('input.ooxml-cell-editor')).toBeVisible() // 内置编辑器
+    await handleCall(page, handle, 'cancelEdit')
   })
 }
 
