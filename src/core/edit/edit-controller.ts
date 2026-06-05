@@ -7,7 +7,9 @@ import type { CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, S
 import type { CellValue } from '../model/data-access'
 import { buildCellSnapshot, type CellSnapshot } from '../model/snapshot'
 import { cloneWorkbook, restoreWorkbookInto } from '../model/clone'
-import { cloneImageAnchor, convertFloatToCellImage, convertCellImageToFloat } from '../model/mutations'
+import { cloneImageAnchor, convertFloatToCellImage, convertCellImageToFloat, setCellValue, applyStyleOverride, addImage } from '../model/mutations'
+import { pxToEmu } from '../layout/units'
+import type { ParsedClipboard } from './clipboard-html'
 import { applyCommand, affectedOf, isDimCommand, isImageCommand, isStructCommand, type CellPos, type DimAxis, type EditCommand } from './commands'
 import { applyStructOp, type StructOp } from '../model/structure'
 import { rewriteWorkbookFormulas } from '../formula/refs'
@@ -87,6 +89,20 @@ export interface EditControllerHost {
 function currentDimSize(sheet: SheetModel, axis: DimAxis, index: number): number {
   if (axis === 'col') return sheet.columns.get(index)?.width ?? sheet.defaultColWidth
   return sheet.rows.get(index)?.height ?? sheet.defaultRowHeight
+}
+
+/** data:image/png;base64,xxx → {bytes,mime}(粘贴 data-uri 图用);非法返 null */
+function dataUrlToBytes(dataUrl: string): { bytes: Uint8Array; mime: string } | null {
+  const m = /^data:([^;,]+)(;base64)?,(.*)$/s.exec(dataUrl)
+  if (!m || typeof atob === 'undefined') return null
+  try {
+    const bin = atob(m[3])
+    const bytes = new Uint8Array(bin.length)
+    for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i)
+    return { bytes, mime: m[1] || 'image/png' }
+  } catch {
+    return null
+  }
 }
 
 export class EditController {
@@ -199,6 +215,80 @@ export class EditController {
     }
     return !!inv
   }
+  /**
+   * 富粘贴(Excel/WPS 复制的 HTML 解析后):值 + 样式 + 合并 + 图片,**整体单次撤销**。
+   * start = 落点左上角。跳过只读格。一次 cloneWorkbook 快照 → 应用全部 → 压一条 restore-wb 逆。
+   */
+  pasteRich(start: { row: number; col: number }, parsed: ParsedClipboard): boolean {
+    if (!this.host.isEditingEnabled()) return false
+    const sheet = this.host.getSheet()
+    const wb = this.host.getWorkbook()
+    if (!sheet || !wb) return false
+    const { values, styles, merges, images } = parsed
+    if (!values.length && !styles.length && !merges.length && !images.length) return false
+    this.ensureBaseline()
+    const d = this.host.getDate1904()
+    const snap = cloneWorkbook(wb)
+
+    // 受影响格(值 + 样式覆盖)→ 先拍前态,应用后拍后态发 cell-change
+    const affectedKeys = new Set<string>()
+    const affected: CellPos[] = []
+    const mark = (row: number, col: number) => {
+      const k = `${row}:${col}`
+      if (!affectedKeys.has(k)) {
+        affectedKeys.add(k)
+        affected.push({ row, col })
+      }
+    }
+    for (let r = 0; r < values.length; r++)
+      for (let c = 0; c < values[r].length; c++) {
+        const row = start.row + r
+        const col = start.col + c
+        if (this.host.isEditable(row, col)) mark(row, col)
+      }
+    for (const s of styles) {
+      const row = start.row + s.row
+      const col = start.col + s.col
+      if (this.host.isEditable(row, col)) mark(row, col)
+    }
+    const before = affected.map((p) => buildCellSnapshot(sheet, p.row, p.col, d))
+
+    // 应用:值 → 样式 → 合并 → 图片
+    for (let r = 0; r < values.length; r++)
+      for (let c = 0; c < values[r].length; c++) {
+        const row = start.row + r
+        const col = start.col + c
+        if (this.host.isEditable(row, col)) setCellValue(sheet, row, col, values[r][c])
+      }
+    for (const s of styles) {
+      const row = start.row + s.row
+      const col = start.col + s.col
+      if (this.host.isEditable(row, col)) applyStyleOverride(sheet, row, col, s.patch)
+    }
+    for (const m of merges) {
+      const range = { top: start.row + m.top, left: start.col + m.left, bottom: start.row + m.bottom, right: start.col + m.right }
+      if (range.top !== range.bottom || range.left !== range.right) applyCommand(sheet, { kind: 'merge-cells', range })
+    }
+    for (const im of images) {
+      const row = start.row + im.row
+      const col = start.col + im.col
+      const dec = dataUrlToBytes(im.dataUrl)
+      if (!dec) continue
+      const idx = addImage(sheet, { src: im.dataUrl, bytes: dec.bytes, mime: dec.mime, from: { col, row, colOffEmu: 0, rowOffEmu: 0 }, extWidthEmu: pxToEmu(96), extHeightEmu: pxToEmu(96) })
+      convertFloatToCellImage(wb, sheet, idx, row, col) // 落进单元格(像 WPS 嵌入)
+    }
+
+    this.pushUndo({ kind: 'restore-wb', snapshot: snap }) // 整体单次撤销
+    this.markDirty()
+    this.host.onModelChange()
+    this.host.rebuildOverlays() // 图片增删 → 重建叠加层
+    if (this.host.isRecalcEnabled()) this.refreshEngine()
+    affected.forEach((p, i) =>
+      this.host.emit('cell-change', { before: before[i], after: buildCellSnapshot(sheet, p.row, p.col, d), source: 'api' } satisfies CellChangePayload),
+    )
+    return true
+  }
+
   /** 清空区域(跳过只读) */
   clearRange(range: MergeRange): boolean {
     const cells: { row: number; col: number; value: CellValue }[] = []

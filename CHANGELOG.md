@@ -7,6 +7,8 @@
 编辑 UX 补齐 + 性能 + 导出错误可见性(向后兼容)。
 
 ### 新增
+- **富粘贴(从 Excel/WPS 复制整块)**:`Ctrl+V` 现在优先读剪贴板 **text/html**,完美解析**字体/颜色/填充/边框/对齐/合并单元格**(与 WPS 一致),整块**单次撤销**(整簿快照逆)。值优先取 Excel 的 `x:num`/`x:fmla`(原始值),否则取文本交类型推断。无 html 时回退原 TSV(`pasteText`,不变)。新 `clipboard-html.ts parseClipboardHtml`;`EditController.pasteRich`;API `pasteRichHtml(html,at?)`。
+  - **图片(多通道,硬需求)**:① HTML 里的 data-uri `<img>` → 落格转内嵌图;② 剪贴板单张图片(`image/png` 等)→ 落活动格(`pasteImageBlob`);③ 拖图片文件进网格(消费方接 `pasteImageBlob`)。**已知边界**:Excel/WPS **区域复制的内嵌图一般进不了浏览器剪贴板**(只给 text/html+text/plain),所以"复制一整块带图、粘贴时图一起来"做不到 —— 这是浏览器固有限制,需用上述替代通道(单独复制一张图 / 拖文件)。
 - **图片点击放大 + 下载原图**:网格里的图(WPS 内嵌图 DISPIMG / 浮动图)可点开看大图、下载原始字节。框架无关 `LightboxHost`(body 级暗背景 + 居中大图 + 「下载原图」+ 点背景/Esc/关闭按钮)。触发:**只读模式单击图**放大;**编辑模式右键**「查看大图 / 下载原图」(不抢选区/编辑)。新 prop `imageLightbox`(默认 true);新 API `openImageLightbox(src,fileName?)` / `getCellImageAt(row,col)`。顺带给点击加 3px 拖拽死区(微抖不再被当拖动,单击语义更稳)。修了 Vue 布尔 prop 缺省被判 false 的坑(`imageLightbox` 加进 withDefaults)。
 - **虚拟空行/空列(滚动自动延伸,不动 dimension)**:滚到数据末尾下方仍有空行/空列可滚动、选中、编辑,像 Excel/WPS 的"无限网格";但**不写进 dimension/文件**(避免体积变大)——只有真去编辑某空格,它才靠 `growDimension` 变实。`GridMetrics` 加虚拟范围(`vRows/vCols/virtualWidth/Height`,封顶 Excel 上限 1048576×16384);`totalWidth/Height` 仍按 dimension(**导出/data-access 不含虚拟空行**);spacer 尺寸 / 可视区 / 命中夹取改用虚拟范围;控制器 `recomputeVirtualExtent()`(滚动/缩放/resize 时只增不减、按需延伸)。纯 core,双壳自动继承;新 API `getVirtualExtent()`。
 - **背景色 / 字体色(回显 + 修改)**:新 API `getActiveFillColor()` / `getActiveFontColor()`(回显活动格当前色,#RRGGBB)+ `setSelectionFill(color|null)` / `setSelectionFontColor(color)`(改选区,入命令栈)。两壳 demo 加 WPS 风格的背景/字体取色器 + 清除填充。

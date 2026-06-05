@@ -13,6 +13,7 @@
 import type { CellModel, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
 import { setImageRect, cloneImageAnchor } from '../model/mutations'
+import { pxToEmu } from '../layout/units'
 import { deleteIntersectsMerge } from '../model/structure'
 import { anchorRect } from '../overlay/anchor'
 import type { EditConfig } from '../edit/types'
@@ -23,11 +24,13 @@ import type { CellValue, SheetToJSONOptions } from '../model/data-access'
 import type { CellSnapshot } from '../model/snapshot'
 import { CellEditorHost } from '../edit/editor-host'
 import { ContextMenuHost, type MenuItem } from '../edit/context-menu'
+import { parseClipboardHtml } from '../edit/clipboard-html'
 import { LightboxHost } from './lightbox-host'
 import type { CellEditorContext, EditorCommitValue, EditorResolver } from '../edit/editor-context'
 import { defaultCellEditor } from '../edit/default-editor'
 import { CanvasRenderer, type CellImageFit, type RendererOptions, type ViewState } from '../render/canvas-renderer'
 import { MAX_GRID_ROWS, MAX_GRID_COLS } from '../layout/grid-metrics'
+import { toHex6 } from '../format/color'
 import { OverlayManager, type OverlayQuads } from './overlay-manager'
 import { WorkbookExporter, type ExporterHost } from '../export/exporter'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '../export/types'
@@ -1124,14 +1127,66 @@ export class ViewerController {
     }
   }
 
-  /** 从系统剪贴板粘贴(读 text/plain → TSV → 区域写入);需剪贴板读权限,无则静默返回 false。 */
+  /**
+   * 从系统剪贴板粘贴。优先 `clipboard.read()` 拿 **text/html**(Excel/WPS 复制 → 富粘贴:值+字体+颜色+
+   * 填充+边框+合并),否则单张图片 → 落格,再否则回退 **text/plain** TSV(`pasteText`)。需读权限/安全上下文,
+   * 受限时回退 readText;都失败返 false。
+   */
   async pasteFromClipboard(): Promise<boolean> {
+    if (!this.editCfg.editable) return false
+    type Clip = {
+      read?: () => Promise<Array<{ types: string[]; getType: (t: string) => Promise<Blob> }>>
+      readText?: () => Promise<string>
+    }
+    const clip = (navigator as unknown as { clipboard?: Clip }).clipboard
     try {
-      const text = await navigator.clipboard.readText()
-      return this.pasteText(text)
+      if (clip?.read) {
+        const items = await clip.read()
+        for (const it of items) {
+          if (it.types.includes('text/html')) {
+            const html = await (await it.getType('text/html')).text()
+            if (this.pasteRichHtml(html)) return true
+          }
+        }
+        for (const it of items) {
+          const imgType = it.types.find((t) => t.startsWith('image/'))
+          if (imgType && (await this.pasteImageBlob(await it.getType(imgType)))) return true
+        }
+      }
+    } catch {
+      /* read 受限/无权限 → 回退 readText */
+    }
+    try {
+      const text = await clip?.readText?.()
+      return text ? this.pasteText(text) : false
     } catch {
       return false
     }
+  }
+
+  /**
+   * 解析 Excel/WPS 复制的剪贴板 HTML(text/html)→ 富粘贴:值 + 字体/颜色/填充/边框/对齐 + 合并 + data-uri 图,
+   * **整体单次撤销**。无 `<table>` 返 false(调用方回退 TSV)。at 缺省用活动格。
+   */
+  pasteRichHtml(html: string, at?: { row: number; col: number }): boolean {
+    if (!this.editCfg.editable || !this.sheet) return false
+    const parsed = parseClipboardHtml(html)
+    if (!parsed) return false
+    const sel = this.getSelection()
+    const start = at ?? this.selActive ?? (sel ? { row: sel.top, col: sel.left } : null)
+    if (!start) return false
+    return this.edit.pasteRich(start, parsed)
+  }
+
+  /** 把一张图片 blob 落到活动格(转内嵌图);剪贴板单图粘贴 / 拖文件进网格用。 */
+  async pasteImageBlob(blob: Blob, at?: { row: number; col: number }): Promise<boolean> {
+    if (!this.editCfg.editable || !this.sheet) return false
+    const sel = this.getSelection()
+    const start = at ?? this.selActive ?? (sel ? { row: sel.top, col: sel.left } : { row: 0, col: 0 })
+    const bytes = new Uint8Array(await blob.arrayBuffer())
+    const mime = blob.type || 'image/png'
+    const idx = this.addImage({ src: '', bytes, mime, from: { col: start.col, row: start.row, colOffEmu: 0, rowOffEmu: 0 }, extWidthEmu: pxToEmu(96), extHeightEmu: pxToEmu(96) })
+    return idx >= 0 ? this.convertImageToCell(idx, start.row, start.col) : false
   }
 
   /**
@@ -1806,22 +1861,6 @@ type Hit =
 
 function cellRange(c: Cell): MergeRange {
   return { top: c.row, left: c.col, bottom: c.row, right: c.col }
-}
-
-/** css 颜色 → #RRGGBB(供 <input type=color> 回显);#RRGGBB[AA] 取前 6 位,rgb(a)(...) 转十六进制;识别不了返 ''。 */
-function toHex6(css: string | undefined): string {
-  if (!css) return ''
-  const m = /^#([0-9a-f]{6})(?:[0-9a-f]{2})?$/i.exec(css)
-  if (m) return '#' + m[1].toUpperCase()
-  const rgb = /rgba?\(([^)]+)\)/i.exec(css)
-  if (rgb) {
-    const p = rgb[1].split(',').map((s) => parseInt(s.trim(), 10))
-    if (p.length >= 3 && p.slice(0, 3).every((n) => Number.isFinite(n))) {
-      const h = (n: number) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, '0')
-      return ('#' + h(p[0]) + h(p[1]) + h(p[2])).toUpperCase()
-    }
-  }
-  return ''
 }
 
 function escapeHtml(s: string): string {

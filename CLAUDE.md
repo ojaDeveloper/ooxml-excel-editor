@@ -35,7 +35,7 @@ src/react(React 壳)→ dist/react.js:ExcelViewer.tsx + use-excel-document
 
 ## 不可破坏的硬约束
 
-- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **219 单测 + 58 e2e(Vue + React 双覆盖)**。
+- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **219 单测 + 60 e2e(Vue + React 双覆盖)**。
 - **core 不依赖框架**:`src/core/**` 不得出现 `from 'vue'` / `'react'`(构建后 `dist/core.js` 也不得 import vue/react/hyperformula/exceljs —— 重依赖全动态懒加载)。
 - **两壳同构**:给 `ViewerController` 加能力后,Vue 壳(components/ExcelViewer.vue)与 React 壳(react/ExcelViewer.tsx)都要接上,e2e 各自覆盖。
 - **默认只读、零回归**:`editable` 关闭时行为与历史完全一致;编辑能力(单元格/样式/列宽行高/图片/增删行列/公式重算/导出回写)是 **opt-in**,全建在框架无关 core 的命令栈 + 前后快照事件上(见 README「编辑」章节)。

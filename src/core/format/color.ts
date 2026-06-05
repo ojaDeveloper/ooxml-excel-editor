@@ -32,6 +32,28 @@ export function argbToCss(argb: string | undefined): CssColor | undefined {
   return undefined
 }
 
+/**
+ * 任意 css 颜色 → `#RRGGBB`(大写);供 <input type=color> 回显 / 粘贴样式解析。
+ * 支持 #RGB / #RRGGBB / #RRGGBBAA / rgb()/rgba();识别不了返 ''。
+ */
+export function toHex6(css: string | undefined): string {
+  if (!css) return ''
+  const s = css.trim()
+  let m = /^#([0-9a-f]{3})$/i.exec(s) // #RGB → #RRGGBB
+  if (m) return ('#' + m[1].split('').map((c) => c + c).join('')).toUpperCase()
+  m = /^#([0-9a-f]{6})(?:[0-9a-f]{2})?$/i.exec(s) // #RRGGBB[AA]
+  if (m) return '#' + m[1].toUpperCase()
+  const rgb = /rgba?\(([^)]+)\)/i.exec(s)
+  if (rgb) {
+    const p = rgb[1].split(',').map((x) => parseInt(x.trim(), 10))
+    if (p.length >= 3 && p.slice(0, 3).every((n) => Number.isFinite(n))) {
+      const h = (n: number) => Math.max(0, Math.min(255, n)).toString(16).padStart(2, '0')
+      return ('#' + h(p[0]) + h(p[1]) + h(p[2])).toUpperCase()
+    }
+  }
+  return ''
+}
+
 export function indexedToCss(idx: number): CssColor | undefined {
   if (idx >= 0 && idx < INDEXED_PALETTE.length) return INDEXED_PALETTE[idx]
   return undefined
