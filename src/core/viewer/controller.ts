@@ -115,6 +115,12 @@ export class ViewerController {
   private rendererOpts: RendererOptions = {}
   /** 下载默认文件名(壳可随 props 更新) */
   fileName: string | undefined = undefined
+  /** 原始 .xlsx 字节(壳加载时注入;供高保真 overlay 导出重载原件) */
+  private sourceBuffer: ArrayBuffer | null = null
+  /** 壳在加载后注入原始字节(供 exportXlsx({fidelity:'overlay'}) 重载原件叠加编辑) */
+  setSourceBuffer(buf: ArrayBuffer | null): void {
+    this.sourceBuffer = buf
+  }
   private exporter: WorkbookExporter
 
   // ---- 选区模型 ----
@@ -172,6 +178,7 @@ export class ViewerController {
       getLiveRenderer: () => this.renderer,
       getRendererOpts: () => this.rendererOpts,
       getFileName: () => this.fileName,
+      getSourceBuffer: () => this.sourceBuffer,
     }
     this.exporter = new WorkbookExporter(host)
 

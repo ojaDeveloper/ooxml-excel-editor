@@ -35,6 +35,8 @@ export interface ExporterHost {
   getRendererOpts(): RendererOptions
   /** 文件名(下载默认名;缺省回退表名 / 'workbook') */
   getFileName(): string | undefined
+  /** 原始 .xlsx 字节(高保真 overlay 导出重载原件用;无则返回 null,overlay 回退 rebuild) */
+  getSourceBuffer?(): ArrayBuffer | null
 }
 
 export class WorkbookExporter {
@@ -337,11 +339,16 @@ export class WorkbookExporter {
     downloadBlob(new Blob(['﻿' + this.exportCsv(opts)], { type: 'text/csv;charset=utf-8' }), `${this.baseName()}.csv`)
   }
 
-  /** 整簿 → .xlsx Blob(从编辑后模型重建,所见即所得;懒加载 exceljs)。 */
+  /** 整簿 → .xlsx Blob(默认从模型重建;`fidelity:'overlay'` 重载原件叠加编辑,保真更高)。 */
   exportXlsx(opts?: XlsxExportOptions): Promise<Blob> {
     const wb = this.host.getWorkbook()
     if (!wb) throw new Error('无工作簿可导出')
-    return workbookToXlsxBlob(wb, opts)
+    const o: XlsxExportOptions = { ...opts }
+    if (o.fidelity === 'overlay' && !o.sourceBuffer) {
+      const buf = this.host.getSourceBuffer?.() ?? null
+      if (buf) o.sourceBuffer = buf // 注入原件;无则 writer 自动回退 rebuild
+    }
+    return workbookToXlsxBlob(wb, o)
   }
   async downloadXlsx(opts?: XlsxExportOptions): Promise<void> {
     downloadBlob(await this.exportXlsx(opts), `${this.baseName()}.xlsx`)

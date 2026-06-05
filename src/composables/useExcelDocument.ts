@@ -10,12 +10,15 @@ export function useExcelDocument() {
   const error = ref<string | null>(null)
   const workbook = shallowRef<WorkbookModel | null>(null)
   const progress = ref<ParseProgress | null>(null)
+  /** 原始字节(高保真 overlay 导出用;worker 解析为结构化克隆不 transfer,原 buffer 保留) */
+  const sourceBuffer = shallowRef<ArrayBuffer | null>(null)
 
   async function load(src: ExcelSource, transform?: TransformModelFn) {
     loading.value = true
     error.value = null
     if (workbook.value) revokeImages(workbook.value) // 释放上一份图片 blob
     workbook.value = null
+    sourceBuffer.value = null
     progress.value = { stage: 'read', ratio: 0 }
     try {
       const buffer = await loadArrayBuffer(src, (loaded, total) => {
@@ -33,6 +36,7 @@ export function useExcelDocument() {
       })
       if (transform) model = transform(model) ?? model // 数据钩子: 改模型再渲染
       finalizeImages(model)
+      sourceBuffer.value = buffer.slice(0) // 留一份原件副本(overlay 高保真导出用)
       workbook.value = model
     } catch (e: any) {
       // detectFormat 抛的已是友好文案，直接用;底层异常再翻译
@@ -44,5 +48,5 @@ export function useExcelDocument() {
     }
   }
 
-  return { loading, error, workbook, load, progress }
+  return { loading, error, workbook, load, progress, sourceBuffer }
 }

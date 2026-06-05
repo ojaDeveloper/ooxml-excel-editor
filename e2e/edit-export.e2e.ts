@@ -44,6 +44,14 @@ function run(label: string, url: string, canvasSel: string, handle: string) {
     expect(meta.size).toBeGreaterThan(1000) // 真实 xlsx zip 有体量
     expect(meta.type).toContain('spreadsheetml')
     // 值存活(写→重解析)由 xlsx-writer 单测覆盖,此处验真实下载链路产出合法 xlsx blob
+
+    // F3:高保真 overlay 模式(重载原件叠加)—— 验证 sourceBuffer 端到端贯通、产合法 blob
+    const ov = await page.evaluate(async (h) => {
+      const blob: Blob = await (window as any)[h].exportXlsx({ fidelity: 'overlay' })
+      return { size: blob.size, type: blob.type }
+    }, handle)
+    expect(ov.size).toBeGreaterThan(1000)
+    expect(ov.type).toContain('spreadsheetml')
   })
 }
 

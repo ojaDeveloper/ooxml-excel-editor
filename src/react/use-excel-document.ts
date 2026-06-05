@@ -11,6 +11,8 @@ export interface ExcelDocument {
   workbook: WorkbookModel | null
   progress: ParseProgress | null
   load: (src: ExcelSource, transform?: TransformModelFn) => Promise<void>
+  /** 原始字节(高保真 overlay 导出用) */
+  sourceBuffer: ArrayBuffer | null
 }
 
 /**
@@ -22,6 +24,7 @@ export function useExcelDocument(): ExcelDocument {
   const [error, setError] = useState<string | null>(null)
   const [workbook, setWorkbook] = useState<WorkbookModel | null>(null)
   const [progress, setProgress] = useState<ParseProgress | null>(null)
+  const [sourceBuffer, setSourceBuffer] = useState<ArrayBuffer | null>(null)
   const wbRef = useRef<WorkbookModel | null>(null)
 
   const load = useCallback(async (src: ExcelSource, transform?: TransformModelFn) => {
@@ -30,6 +33,7 @@ export function useExcelDocument(): ExcelDocument {
     if (wbRef.current) revokeImages(wbRef.current) // 释放上一份图片 blob
     wbRef.current = null
     setWorkbook(null)
+    setSourceBuffer(null)
     setProgress({ stage: 'read', ratio: 0 })
     try {
       const buffer = await loadArrayBuffer(src, (loaded, total) =>
@@ -43,6 +47,7 @@ export function useExcelDocument(): ExcelDocument {
       let model = await parseInWorker(buffer, (p) => setProgress(p))
       if (transform) model = transform(model) ?? model
       finalizeImages(model)
+      setSourceBuffer(buffer.slice(0)) // 留一份原件副本(overlay 高保真导出用)
       wbRef.current = model
       setWorkbook(model)
     } catch (e: unknown) {
@@ -55,5 +60,5 @@ export function useExcelDocument(): ExcelDocument {
     }
   }, [])
 
-  return { loading, error, workbook, progress, load }
+  return { loading, error, workbook, progress, load, sourceBuffer }
 }

@@ -1,8 +1,16 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import ExcelJS from 'exceljs'
 import { workbookToXlsxBlob } from '../xlsx-writer'
+import { parseWorkbook } from '../../parser/index'
 import type { CellStyle, SheetModel, WorkbookModel } from '../../model/types'
 import { cellKey } from '../../model/types'
+
+function loadSample(): ArrayBuffer {
+  const buf = readFileSync(join(__dirname, '..', '..', '..', '..', 'public', 'sample.xlsx'))
+  return buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength)
+}
 
 function style(over: Partial<CellStyle> = {}): CellStyle {
   return {
@@ -88,5 +96,33 @@ describe('xlsx-writer 往返(从模型重建 → 重解析,值/样式/合并/几
     const oneCell = imgs.find((i) => !i.range.br)!
     expect(twoCell.range.br!.nativeCol).toBe(3) // br 到第 4 列
     expect(oneCell.range.tl.nativeColOff).toBeGreaterThan(0) // 子格 EMU 偏移保真(非 0)
+  })
+})
+
+describe('xlsx-writer overlay 高保真(重载原件叠加;F3)', () => {
+  it('overlay 保留原件条件格式;rebuild 丢失;两者都反映编辑值', async () => {
+    const src = loadSample()
+    const model = await parseWorkbook(src) // 样例首表有 2 条条件格式
+    model.sheets[0].cells.set(cellKey(2, 1), { row: 2, col: 1, type: 'number', raw: 88888, styleId: 0 } as never)
+
+    // overlay:CF 保留 + 编辑值生效
+    const ov = new ExcelJS.Workbook()
+    await ov.xlsx.load(await (await workbookToXlsxBlob(model, { fidelity: 'overlay', sourceBuffer: src })).arrayBuffer())
+    const ovCF = (ov.worksheets[0] as unknown as { conditionalFormattings?: unknown[] }).conditionalFormattings ?? []
+    expect(ovCF.length).toBeGreaterThan(0) // 条件格式存活
+    expect(ov.worksheets[0].getCell(3, 2).value).toBe(88888) // 编辑值叠加生效
+
+    // rebuild:CF 丢失(我们不建模 CF),但编辑值仍在
+    const rb = new ExcelJS.Workbook()
+    await rb.xlsx.load(await (await workbookToXlsxBlob(model, {})).arrayBuffer())
+    const rbCF = (rb.worksheets[0] as unknown as { conditionalFormattings?: unknown[] }).conditionalFormattings ?? []
+    expect(rbCF.length).toBe(0) // rebuild 丢条件格式
+    expect(rb.worksheets[0].getCell(3, 2).value).toBe(88888)
+  })
+
+  it('overlay 缺 sourceBuffer → 回退 rebuild(不报错)', async () => {
+    const model = await parseWorkbook(loadSample())
+    const blob = await workbookToXlsxBlob(model, { fidelity: 'overlay' }) // 无 sourceBuffer
+    expect(blob.size).toBeGreaterThan(1000)
   })
 })
