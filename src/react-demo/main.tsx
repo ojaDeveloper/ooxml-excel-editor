@@ -73,6 +73,9 @@ function Demo() {
           plugins={[demoPlugin]}
           editable={editMode}
           readOnlyRanges={[{ top: 1, left: 0, bottom: 1, right: 4 }]}
+          onCellChange={(p) => {
+            if (import.meta.env.DEV) (window as unknown as { __lastCellChange?: unknown }).__lastCellChange = p
+          }}
           onRendered={() => {
             // ref.current 此时已就绪,再挂一次保证 e2e 拿到
             if (import.meta.env.DEV) (window as unknown as { __excelViewerReact?: ExcelViewerHandle | null }).__excelViewerReact = ref.current

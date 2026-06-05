@@ -36,6 +36,12 @@ async function loadSample() {
 const lastEvent = ref('')
 const viewerRef = ref<ViewerApi | null>(null)
 
+// 编辑变更:记录到状态栏 + (DEV)挂 window 供 e2e 校验前后快照
+function onCellChange(p: { before: { text: string }; after: { text: string }; source: string }) {
+  lastEvent.value = `[${p.source}] R?C? "${p.before.text}" → "${p.after.text}"`
+  if (import.meta.env.DEV) (window as unknown as { __lastCellChange?: unknown }).__lastCellChange = p
+}
+
 // 开发环境把命令式 API 挂到 window,便于 e2e 计算 canvas 上的几何(如筛选按钮位置)
 if (import.meta.env.DEV) {
   watch(viewerRef, (v) => {
@@ -160,6 +166,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         :read-only-ranges="[{ top: 1, left: 0, bottom: 1, right: 4 }]"
         :toolbar="['find', 'filter', 'clear-filter', 'separator', 'copy', 'freeze', 'separator', 'zoom', 'export']"
         @selection-change="(s) => (lastEvent = `选区 ${s.range.top + 1},${s.range.left + 1} → ${s.range.bottom + 1},${s.range.right + 1}`)"
+        @cell-change="onCellChange"
       >
         <!-- 分层 UI 演示: B3 上叠一个可点徽标,随滚动跟随 -->
         <template #overlay="{ rectOf, tick }">

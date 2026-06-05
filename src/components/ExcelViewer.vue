@@ -20,6 +20,7 @@ import { CanvasRenderer, type ViewState } from '@/core/render/canvas-renderer'
 import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { ViewerController, type TooltipState, type FindState } from '@/core/viewer/controller'
 import type { EditConfig } from '@/core/edit/types'
+import type { CellChangePayload } from '@/core/edit/edit-controller'
 import { revokeImages } from '@/core/finalize'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '@/core/export'
 import ViewerToolbar from './ViewerToolbar.vue'
@@ -110,6 +111,12 @@ const emit = defineEmits<{
   (e: 'sheet-change', payload: { index: number; name: string }): void
   /** 单击超链接(openLinks=false 时由你处理跳转) */
   (e: 'hyperlink-click', payload: { url: string; cell: { row: number; col: number } }): void
+  /** 单元格变更(编辑/撤销/重做;含前后完整快照) */
+  (e: 'cell-change', payload: CellChangePayload): void
+  /** 进入编辑 */
+  (e: 'edit-start', payload: unknown): void
+  /** 提交编辑 */
+  (e: 'edit-commit', payload: unknown): void
 }>()
 
 const { loading, error, workbook, load, progress } = useExcelDocument()
@@ -204,6 +211,7 @@ onMounted(() => {
         onTooltip: (tip) => (tooltip.value = tip),
         onFindChange: () => findVersion.value++,
         onFilterChange: () => filterVersion.value++,
+        onEditEvent: (event, payload) => fire(event, payload),
       },
     )
     view.value = controller.view // 壳与控制器共享同一 view 对象(现有 view.value 读法不变)
@@ -481,6 +489,15 @@ const viewerApi: ViewerApi = {
   rectOfRange,
   redraw: () => doRender(),
   isCellEditable: (row, col) => controller?.isCellEditable(row, col) ?? false,
+  editCell: (row, col, value) => controller?.editCell(row, col, value) ?? false,
+  editRange: (range, values) => controller?.editRange(range, values) ?? false,
+  clearRange: (range) => controller?.clearRange(range) ?? false,
+  undo: () => controller?.undo(),
+  redo: () => controller?.redo(),
+  canUndo: () => controller?.canUndo() ?? false,
+  canRedo: () => controller?.canRedo() ?? false,
+  getEditingCell: () => controller?.getEditingCell() ?? null,
+  getCellSnapshot: (row, col) => controller?.getCellSnapshot(row, col) ?? null,
   exportImage,
   downloadImage,
   exportPdf,

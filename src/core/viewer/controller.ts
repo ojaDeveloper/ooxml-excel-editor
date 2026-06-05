@@ -14,6 +14,9 @@ import type { CellModel, MergeRange, RowInfo, SheetModel, WorkbookModel } from '
 import { cellKey } from '../model/types'
 import type { EditConfig } from '../edit/types'
 import { resolveEditable } from '../edit/permissions'
+import { EditController, type EditControllerHost, type EditEventName } from '../edit/edit-controller'
+import type { CellValue } from '../model/data-access'
+import type { CellSnapshot } from '../model/snapshot'
 import { CanvasRenderer, type RendererOptions, type ViewState } from '../render/canvas-renderer'
 import { OverlayManager, type OverlayQuads } from './overlay-manager'
 import { WorkbookExporter, type ExporterHost } from '../export/exporter'
@@ -78,6 +81,8 @@ export interface ViewerControllerHooks {
   onFindChange: () => void
   /** 筛选状态/浮层变化(壳据此 +1 让 FilterPopup / 工具栏重算) */
   onFilterChange: () => void
+  /** 编辑事件(cell-change/edit-start/edit-commit;壳转 emit + 插件派发) */
+  onEditEvent: (event: EditEventName, payload: unknown) => void
 }
 
 const BLANK = '(空白)'
@@ -132,6 +137,8 @@ export class ViewerController {
 
   // ---- 编辑配置(默认只读;E0 只做闸门,后续阶段在此扩展) ----
   private editCfg: EditConfig = {}
+  /** 编辑底座(命令栈/快照/事件;E1) */
+  readonly edit: EditController
 
   constructor(
     private els: ViewerControllerEls,
@@ -146,6 +153,19 @@ export class ViewerController {
       getFileName: () => this.fileName,
     }
     this.exporter = new WorkbookExporter(host)
+
+    const editHost: EditControllerHost = {
+      getSheet: () => this.sheet,
+      getDate1904: () => this.workbook?.date1904 ?? false,
+      isEditable: (row, col) => this.isCellEditable(row, col),
+      onModelChange: () => {
+        this.renderer?.rebuildMetrics()
+        this.refreshContentSize()
+        this.render()
+      },
+      emit: (event, payload) => this.hooks.onEditEvent(event, payload),
+    }
+    this.edit = new EditController(editHost)
   }
 
   /** 切表/换簿/主题变化: 清状态,重建渲染器,重置滚动,量尺寸,建叠加层,绘制,按需重跑查找 */
@@ -160,6 +180,7 @@ export class ViewerController {
     this.hooks.onTooltip(null)
     this.sortCol = -1
     this.sortDir = null
+    this.edit.reset() // 切表/换簿:命令栈 + 编辑态作废
 
     this.sheet = sheet
     this.workbook = workbook
@@ -602,6 +623,18 @@ export class ViewerController {
   }
 
   onKeyDown(e: KeyboardEvent): void {
+    // 编辑模式下的 撤销/重做(Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y)
+    if (this.editCfg.editable && (e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+      if (e.shiftKey) this.edit.redo()
+      else this.edit.undo()
+      e.preventDefault()
+      return
+    }
+    if (this.editCfg.editable && (e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+      this.edit.redo()
+      e.preventDefault()
+      return
+    }
     if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
       void this.copySelection()
       e.preventDefault()
@@ -1054,6 +1087,35 @@ export class ViewerController {
   /** 该格当前是否可编辑(综合 editable + readOnlyRanges + cellReadOnly) */
   isCellEditable(row: number, col: number): boolean {
     return this.sheet ? resolveEditable(this.sheet, row, col, this.editCfg) : false
+  }
+
+  // ---- 命令式编辑 API(委托 EditController;E1) ----
+  editCell(row: number, col: number, value: CellValue): boolean {
+    return this.edit.editCell(row, col, value)
+  }
+  editRange(range: MergeRange, values: CellValue[][]): boolean {
+    return this.edit.editRange(range, values)
+  }
+  clearRange(range: MergeRange): boolean {
+    return this.edit.clearRange(range)
+  }
+  undo(): void {
+    this.edit.undo()
+  }
+  redo(): void {
+    this.edit.redo()
+  }
+  canUndo(): boolean {
+    return this.edit.canUndo()
+  }
+  canRedo(): boolean {
+    return this.edit.canRedo()
+  }
+  getEditingCell(): { row: number; col: number } | null {
+    return this.edit.getEditingCell()
+  }
+  getCellSnapshot(row: number, col: number): CellSnapshot | null {
+    return this.edit.getCellSnapshot(row, col)
   }
 
   // ====================== 导出 / 打印(委托 WorkbookExporter) ======================

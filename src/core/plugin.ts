@@ -15,6 +15,7 @@
  */
 import type { CellStyleFn, MergeRange, TransformModelFn, WorkbookModel } from './model/types'
 import type { CellValue, ReadOptions, SheetToJSONOptions } from './model/data-access'
+import type { CellSnapshot } from './model/snapshot'
 import type { ViewerTheme } from './render/theme'
 import type { ExcelSource } from './loader'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from './export/types'
@@ -32,6 +33,9 @@ export type PluginEvent =
   | 'selection-change'
   | 'sheet-change'
   | 'hyperlink-click'
+  | 'cell-change'
+  | 'edit-start'
+  | 'edit-commit'
 
 /** 命令式 API(组件 ref 与插件 ctx 共用) */
 export interface ViewerApi {
@@ -67,6 +71,21 @@ export interface ViewerApi {
   getSheetJSON(opts?: SheetToJSONOptions, sheetIndex?: number): Record<string, CellValue>[]
   /** 区域二维数组 */
   getRangeData(range: MergeRange, opts?: ReadOptions, sheetIndex?: number): CellValue[][]
+  // ---- 编辑(E1;需 editable 开启,只读格不生效) ----
+  /** 编辑单格;返回是否生效 */
+  editCell(row: number, col: number, value: CellValue): boolean
+  /** 区域批量设值(2D,左上对齐 range.top/left);跳过只读格 */
+  editRange(range: MergeRange, values: CellValue[][]): boolean
+  /** 清空区域(跳过只读) */
+  clearRange(range: MergeRange): boolean
+  undo(): void
+  redo(): void
+  canUndo(): boolean
+  canRedo(): boolean
+  /** 当前正在编辑的格(无则 null) */
+  getEditingCell(): { row: number; col: number } | null
+  /** 查询任意格的完整快照(底层结构 + raw/computed/text/style) */
+  getCellSnapshot(row: number, col: number): CellSnapshot | null
 }
 
 /** overlay 渲染上下文(随滚动/缩放,tick 变即重渲) */

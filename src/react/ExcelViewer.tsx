@@ -15,6 +15,9 @@ import {
 } from 'react'
 import type { CellModel, CellStyleFn, MergeRange, SheetModel, TransformModelFn, WorkbookModel } from '@/core/model/types'
 import type { EditConfig } from '@/core/edit/types'
+import type { CellChangePayload } from '@/core/edit/edit-controller'
+import type { CellSnapshot } from '@/core/model/snapshot'
+import type { CellValue } from '@/core/model/data-access'
 import type { ViewerTheme } from '@/core/render/theme'
 import type { ExcelSource } from '@/core/loader'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '@/core/export'
@@ -58,6 +61,10 @@ export interface ExcelViewerProps {
   onSelectionChange?: (p: { range: MergeRange; active: Cell }) => void
   onHyperlinkClick?: (p: { url: string; cell: Cell }) => void
   onSheetChange?: (p: { index: number; name: string }) => void
+  /** 单元格变更(编辑/撤销/重做;含前后完整快照) */
+  onCellChange?: (p: CellChangePayload) => void
+  onEditStart?: (p: unknown) => void
+  onEditCommit?: (p: unknown) => void
 }
 
 /** 命令式句柄(与 Vue ref / ViewerApi 对齐) */
@@ -72,6 +79,15 @@ export interface ExcelViewerHandle {
   rectOfRange: (range: MergeRange) => { x: number; y: number; w: number; h: number } | null
   redraw: () => void
   isCellEditable: (row: number, col: number) => boolean
+  editCell: (row: number, col: number, value: CellValue) => boolean
+  editRange: (range: MergeRange, values: CellValue[][]) => boolean
+  clearRange: (range: MergeRange) => boolean
+  undo: () => void
+  redo: () => void
+  canUndo: () => boolean
+  canRedo: () => boolean
+  getEditingCell: () => { row: number; col: number } | null
+  getCellSnapshot: (row: number, col: number) => CellSnapshot | null
   exportImage: (opts?: ImageExportOptions) => Promise<Blob>
   downloadImage: (opts?: ImageExportOptions) => Promise<void>
   exportPdf: (opts?: PdfExportOptions) => Promise<Blob>
@@ -206,6 +222,12 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
         },
         onFindChange: () => force(),
         onFilterChange: () => force(),
+        onEditEvent: (event, payload) => {
+          if (event === 'cell-change') propsRef.current.onCellChange?.(payload as CellChangePayload)
+          else if (event === 'edit-start') propsRef.current.onEditStart?.(payload)
+          else if (event === 'edit-commit') propsRef.current.onEditCommit?.(payload)
+          firePlugin(event, payload)
+        },
       },
     )
     controller.fileName = propsRef.current.fileName
@@ -309,6 +331,15 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       rectOfRange: (range) => controllerRef.current?.rectOfRange(range) ?? null,
       redraw: () => controllerRef.current?.render(),
       isCellEditable: (row, col) => controllerRef.current?.isCellEditable(row, col) ?? false,
+      editCell: (row, col, value) => controllerRef.current?.editCell(row, col, value) ?? false,
+      editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
+      clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
+      undo: () => controllerRef.current?.undo(),
+      redo: () => controllerRef.current?.redo(),
+      canUndo: () => controllerRef.current?.canUndo() ?? false,
+      canRedo: () => controllerRef.current?.canRedo() ?? false,
+      getEditingCell: () => controllerRef.current?.getEditingCell() ?? null,
+      getCellSnapshot: (row, col) => controllerRef.current?.getCellSnapshot(row, col) ?? null,
       exportImage: (opts) => controllerRef.current!.exportImage(opts),
       downloadImage: (opts) => controllerRef.current!.downloadImage(opts),
       exportPdf: (opts) => controllerRef.current!.exportPdf(opts),
@@ -355,6 +386,15 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     rectOfRange: (range) => controllerRef.current?.rectOfRange(range) ?? null,
     redraw: () => controllerRef.current?.render(),
     isCellEditable: (row, col) => controllerRef.current?.isCellEditable(row, col) ?? false,
+    editCell: (row, col, value) => controllerRef.current?.editCell(row, col, value) ?? false,
+    editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
+    clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
+    undo: () => controllerRef.current?.undo(),
+    redo: () => controllerRef.current?.redo(),
+    canUndo: () => controllerRef.current?.canUndo() ?? false,
+    canRedo: () => controllerRef.current?.canRedo() ?? false,
+    getEditingCell: () => controllerRef.current?.getEditingCell() ?? null,
+    getCellSnapshot: (row, col) => controllerRef.current?.getCellSnapshot(row, col) ?? null,
     exportImage: (opts) => controllerRef.current!.exportImage(opts),
     downloadImage: (opts) => controllerRef.current!.downloadImage(opts),
     exportPdf: (opts) => controllerRef.current!.exportPdf(opts),
