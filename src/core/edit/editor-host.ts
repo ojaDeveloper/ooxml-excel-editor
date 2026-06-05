@@ -10,6 +10,8 @@ interface ActiveEditor {
   destroy?: () => void
   row: number
   col: number
+  /** 可选定位覆盖:合并单元格编辑时返回整片合并区,而非单格 */
+  rectOverride?: () => Rect | null
 }
 
 export class CellEditorHost {
@@ -27,8 +29,17 @@ export class CellEditorHost {
     return this.active ? { row: this.active.row, col: this.active.col } : null
   }
 
-  /** 挂载一个编辑器(先卸旧)。返回是否成功(工厂产出有效 DOM)。 */
-  mount(row: number, col: number, factory: CellEditorFactory, ctx: CellEditorContext): boolean {
+  /**
+   * 挂载一个编辑器(先卸旧)。返回是否成功(工厂产出有效 DOM)。
+   * rectOverride 给定时用它定位(合并单元格 → 整片合并区),否则按单格 rectOf。
+   */
+  mount(
+    row: number,
+    col: number,
+    factory: CellEditorFactory,
+    ctx: CellEditorContext,
+    rectOverride?: () => Rect | null,
+  ): boolean {
     this.unmount()
     let el: HTMLElement
     let destroy: (() => void) | undefined
@@ -46,7 +57,7 @@ export class CellEditorHost {
     el.style.position = 'absolute'
     el.style.boxSizing = 'border-box'
     this.container.appendChild(el)
-    this.active = { el, destroy, row, col }
+    this.active = { el, destroy, row, col, rectOverride }
     this.position()
     return true
   }
@@ -55,12 +66,14 @@ export class CellEditorHost {
   position(): void {
     const a = this.active
     if (!a) return
-    const r = this.rectOf(a.row, a.col)
+    const r = a.rectOverride ? a.rectOverride() : this.rectOf(a.row, a.col)
     if (!r) return
     a.el.style.left = r.x + 'px'
     a.el.style.top = r.y + 'px'
-    a.el.style.minWidth = r.w + 'px'
-    a.el.style.minHeight = r.h + 'px'
+    // 精确贴合单元格(像 WPS:编辑框正好盖住该格,不放大)。
+    // 用 width/height 而非 min-*,否则 <input> 等控件会按自身固有尺寸(~20 字符)撑大。
+    a.el.style.width = r.w + 'px'
+    a.el.style.height = r.h + 'px'
   }
 
   /** 卸载活动编辑器 */

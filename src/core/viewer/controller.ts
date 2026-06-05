@@ -1165,11 +1165,15 @@ export class ViewerController {
    */
   beginEdit(row: number, col: number, initialText?: string): boolean {
     if (!this.sheet || !this.workbook) return false
-    if (!this.isCellEditable(row, col)) return false
-    const cell = this.sheet.cells.get(cellKey(row, col)) ?? null
-    const factory = this.editorResolver?.(cell, { row, col }) ?? defaultCellEditor // E3:内置兜底
-    const rect = this.rectOf(row, col)
-    const snapshot = this.edit.getCellSnapshot(row, col)
+    // 合并单元格 → 编辑落到锚点(左上格),编辑框盖住整片合并区(像 WPS/Excel)
+    const merge = this.renderer?.mergeAt(row, col) ?? null
+    const ar = merge ? merge.top : row
+    const ac = merge ? merge.left : col
+    if (!this.isCellEditable(ar, ac)) return false
+    const cell = this.sheet.cells.get(cellKey(ar, ac)) ?? null
+    const factory = this.editorResolver?.(cell, { row: ar, col: ac }) ?? defaultCellEditor // E3:内置兜底
+    const rect = merge ? this.rectOfRange(merge) : this.rectOf(ar, ac)
+    const snapshot = this.edit.getCellSnapshot(ar, ac)
     if (!rect || !snapshot) return false
     const ctx: CellEditorContext = {
       snapshot,
@@ -1181,9 +1185,10 @@ export class ViewerController {
       commit: (v, move) => this.commitEdit(v, move),
       cancel: () => this.cancelEdit(),
     }
-    if (!this.editorHost.mount(row, col, factory, ctx)) return false
-    this.edit.setEditing({ row, col })
-    this.hooks.onEditEvent('edit-start', { cell: { row, col }, snapshot })
+    const rectOverride = merge ? () => this.rectOfRange(merge) : undefined
+    if (!this.editorHost.mount(ar, ac, factory, ctx, rectOverride)) return false
+    this.edit.setEditing({ row: ar, col: ac })
+    this.hooks.onEditEvent('edit-start', { cell: { row: ar, col: ac }, snapshot })
     return true
   }
 

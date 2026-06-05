@@ -39,6 +39,12 @@ function run(label: string, url: string, canvasSel: string, renderAreaSel: strin
     await page.mouse.dblclick(c21.x, c21.y)
     await expect(input).toBeVisible()
 
+    // 编辑框精确贴合单元格(不放大):尺寸应约等于该格 rect(±1px 容差,排除取整)
+    const rect21 = (await call(page, handle, 'rectOf', 2, 1)) as { w: number; h: number }
+    const ib = (await input.boundingBox())!
+    expect(Math.abs(ib.width - rect21.w)).toBeLessThanOrEqual(1)
+    expect(Math.abs(ib.height - rect21.h)).toBeLessThanOrEqual(1)
+
     // 改 999 + Enter → 提交(保留货币格式)+ 编辑器关 + cell-change
     await input.fill('999')
     await input.press('Enter')
@@ -63,6 +69,21 @@ function run(label: string, url: string, canvasSel: string, renderAreaSel: strin
     const c11 = await cellCenter(page, renderAreaSel, handle, 1, 1)
     await page.mouse.dblclick(c11.x, c11.y)
     await expect(input).toBeHidden()
+
+    // 合并单元格(A1:E1)从被覆盖格(0,3)进入 → 落到锚点(0,0):
+    // 锚点在第 0 列 → demo 给的是自定义 <select> 编辑器(顺带验证"覆盖格→锚点"重定向),
+    // 且编辑框盖住整片合并区(宽 ≈ A..E 之和,不是单格)。
+    const mergeEd = page.locator('select.demo-cell-editor')
+    expect(await call(page, handle, 'beginEdit', 0, 3)).toBe(true)
+    await expect(mergeEd).toBeVisible()
+    const r00 = (await call(page, handle, 'rectOf', 0, 0)) as { w: number }
+    let mergeW = 0
+    for (let c = 0; c < 5; c++) mergeW += ((await call(page, handle, 'rectOf', 0, c)) as { w: number }).w
+    const mb = (await mergeEd.boundingBox())!
+    expect(mb.width).toBeGreaterThan(r00.w * 2) // 明显比单格宽
+    expect(Math.abs(mb.width - mergeW)).toBeLessThanOrEqual(1) // ≈ 整片合并区宽
+    await call(page, handle, 'cancelEdit')
+    await expect(mergeEd).toBeHidden()
   })
 }
 

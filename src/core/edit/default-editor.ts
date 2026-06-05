@@ -7,15 +7,20 @@ import type { CellEditorContext, CellEditorFactory } from './editor-context'
 const CSS_PT_TO_PX = 96 / 72
 
 export const defaultCellEditor: CellEditorFactory = (ctx: CellEditorContext) => {
+  const st = ctx.snapshot.style
+  // 背景跟随单元格填充(像 WPS:编辑时不变白),solid 取 fgColor,pattern 取底色,无填充才白
+  const fill = st?.fill
+  const bg = fill && fill.type !== 'none' ? (fill.fgColor ?? fill.bgColor ?? '#fff') : '#fff'
+
   const input = document.createElement('input')
   input.type = 'text'
   input.className = 'ooxml-cell-editor'
   input.value = ctx.initialText ?? ctx.snapshot.text
   input.style.cssText =
-    'box-sizing:border-box;border:2px solid #21a366;outline:none;padding:0 3px;margin:0;background:#fff;font-family:sans-serif;'
+    'box-sizing:border-box;border:2px solid #21a366;outline:none;padding:0 3px;margin:0;font-family:sans-serif;'
+  input.style.background = bg
 
   // 贴合单元格样式(字号/粗斜/对齐/颜色)
-  const st = ctx.snapshot.style
   input.style.fontSize = (st?.font?.size ? st.font.size * CSS_PT_TO_PX : 14) + 'px'
   if (st?.font?.bold) input.style.fontWeight = 'bold'
   if (st?.font?.italic) input.style.fontStyle = 'italic'
