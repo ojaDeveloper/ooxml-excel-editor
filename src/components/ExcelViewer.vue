@@ -424,6 +424,7 @@ async function onExportPdfVector() {
 }
 function reportExportError(e: unknown) {
   const msg = (e as Error)?.message || String(e)
+  console.error('[ooxml-excel-editor] 导出失败:', e)
   emit('error', msg)
   if (typeof window !== 'undefined' && window.alert) window.alert(msg)
 }
