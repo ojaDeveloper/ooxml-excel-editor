@@ -7,6 +7,7 @@
 编辑 UX 补齐 + 性能 + 导出错误可见性(向后兼容)。
 
 ### 新增
+- **虚拟空行/空列(滚动自动延伸,不动 dimension)**:滚到数据末尾下方仍有空行/空列可滚动、选中、编辑,像 Excel/WPS 的"无限网格";但**不写进 dimension/文件**(避免体积变大)——只有真去编辑某空格,它才靠 `growDimension` 变实。`GridMetrics` 加虚拟范围(`vRows/vCols/virtualWidth/Height`,封顶 Excel 上限 1048576×16384);`totalWidth/Height` 仍按 dimension(**导出/data-access 不含虚拟空行**);spacer 尺寸 / 可视区 / 命中夹取改用虚拟范围;控制器 `recomputeVirtualExtent()`(滚动/缩放/resize 时只增不减、按需延伸)。纯 core,双壳自动继承;新 API `getVirtualExtent()`。
 - **背景色 / 字体色(回显 + 修改)**:新 API `getActiveFillColor()` / `getActiveFontColor()`(回显活动格当前色,#RRGGBB)+ `setSelectionFill(color|null)` / `setSelectionFontColor(color)`(改选区,入命令栈)。两壳 demo 加 WPS 风格的背景/字体取色器 + 清除填充。
 - **修复内嵌图"灰底"**:DISPIMG 图加载中 / 缺登记项时,之前画 `#f2f4f7` 灰底盖住了单元格自身填充色(白),看着像默认灰。改为加载中不画底色(露出单元格白填充),仅缺图时画个淡图标、不盖色。
 - **公式栏(Fx 内容条)可编辑 + 联动**:顶部公式栏从只读改为可编辑 `<input>`(editable + 该格非只读时)。在栏里输入提交(回车下移、Esc 取消、失焦提交)→ 改活动格;切选区 / 格内编辑 → 栏即时反映。栏显示**可编辑字符串**:公式 `=...`、数值原始数字串(非格式化,避免编辑货币/千分位被当文本)、布尔 TRUE/FALSE。新 API:`getCellEditString()` / `canEditActiveCell()` / `commitActiveCellValue(value, move?)`。仅值真变化才入命令栈。两壳同构(React 顺带补:`cell-change` 触发 chrome 重渲)。

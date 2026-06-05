@@ -4,9 +4,19 @@
  */
 import type { SheetModel } from '../model/types'
 
+/** Excel/WPS 网格上限:行 1,048,576 / 列 16,384(虚拟外推封顶,防失控) */
+export const MAX_GRID_ROWS = 1048576
+export const MAX_GRID_COLS = 16384
+
 export class GridMetrics {
   readonly cols: number
   readonly rows: number
+  /**
+   * 虚拟行/列上限(≥ dimension,≤ Excel 上限)。**仅**用于"滚动出空行"的 spacer 尺寸 /
+   * 可视区范围 / 命中夹取 / 表头;**不**改 totalWidth/Height(导出与 data-access 仍按 dimension)。
+   */
+  readonly vRows: number
+  readonly vCols: number
   /** 行表头(显示行号)宽度 px */
   readonly rowHeaderWidth: number
   /** 列表头(显示列字母)高度 px */
@@ -20,13 +30,15 @@ export class GridMetrics {
   /** 当前缩放比例(几何与字体同步按它缩放，保证缩放后排版一致) */
   readonly zoom: number
 
-  constructor(private sheet: SheetModel, zoom = 1) {
+  constructor(private sheet: SheetModel, zoom = 1, virtualRows = 0, virtualCols = 0) {
     this.zoom = zoom
     this.cols = Math.max(sheet.dimension.cols, 1)
     this.rows = Math.max(sheet.dimension.rows, 1)
+    this.vRows = Math.min(Math.max(this.rows, virtualRows), MAX_GRID_ROWS)
+    this.vCols = Math.min(Math.max(this.cols, virtualCols), MAX_GRID_COLS)
     this.colHeaderHeight = Math.round(22 * zoom)
-    // 行表头宽度随最大行号位数自适应
-    this.rowHeaderWidth = Math.round(Math.max(40, String(this.rows).length * 8 + 16) * zoom)
+    // 行表头宽度随最大行号位数自适应(按虚拟行数,留足位数)
+    this.rowHeaderWidth = Math.round(Math.max(40, String(this.vRows).length * 8 + 16) * zoom)
 
     this.colWidths = new Array(this.cols)
     this.colLefts = new Array(this.cols + 1)
@@ -79,6 +91,13 @@ export class GridMetrics {
   get totalHeight(): number {
     return this.rowTops[this.rows]
   }
+  /** 含虚拟外推的总宽/高(spacer 尺寸用;= totalWidth + 虚拟列外推) */
+  get virtualWidth(): number {
+    return this.colLeft(this.vCols)
+  }
+  get virtualHeight(): number {
+    return this.rowTop(this.vRows)
+  }
 
   /** 给定网格 x 坐标，返回所在列。超出数据范围按默认列宽外推。 */
   colAt(x: number): number {
@@ -94,16 +113,16 @@ export class GridMetrics {
     return clampSearch(this.rowTops, y, this.rows)
   }
 
-  /** 数据单元格的可视区列区间(end 限制在数据范围内，避免画空 cell) */
+  /** 数据单元格的可视区列区间(end 夹到虚拟范围 vCols-1,允许滚动出空列;空格 paint 为 no-op) */
   visibleColRange(scrollX: number, viewW: number): [number, number] {
     const start = this.colAt(scrollX)
     const end = this.colAt(scrollX + viewW)
-    return [Math.min(start, this.cols - 1), Math.min(end + 1, this.cols - 1)]
+    return [Math.min(start, this.vCols - 1), Math.min(end + 1, this.vCols - 1)]
   }
   visibleRowRange(scrollY: number, viewH: number): [number, number] {
     const start = this.rowAt(scrollY)
     const end = this.rowAt(scrollY + viewH)
-    return [Math.min(start, this.rows - 1), Math.min(end + 1, this.rows - 1)]
+    return [Math.min(start, this.vRows - 1), Math.min(end + 1, this.vRows - 1)]
   }
 
   /** 网格线/表头的可视区列区间(可超出数据范围，铺满视口，模拟 Excel) */

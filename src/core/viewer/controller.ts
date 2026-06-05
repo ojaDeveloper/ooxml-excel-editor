@@ -26,6 +26,7 @@ import { ContextMenuHost, type MenuItem } from '../edit/context-menu'
 import type { CellEditorContext, EditorCommitValue, EditorResolver } from '../edit/editor-context'
 import { defaultCellEditor } from '../edit/default-editor'
 import { CanvasRenderer, type CellImageFit, type RendererOptions, type ViewState } from '../render/canvas-renderer'
+import { MAX_GRID_ROWS, MAX_GRID_COLS } from '../layout/grid-metrics'
 import { OverlayManager, type OverlayQuads } from './overlay-manager'
 import { WorkbookExporter, type ExporterHost } from '../export/exporter'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '../export/types'
@@ -109,6 +110,9 @@ export class ViewerController {
   private rafId = 0
   private contentW = 0
   private contentH = 0
+  /** 虚拟外推行/列数(滚动出空行/空列;只增不减,封顶 Excel 上限)。不动 dimension/文件。 */
+  private virtualRows = 0
+  private virtualCols = 0
 
   // ---- 导出上下文(供 WorkbookExporter 取数) ----
   private workbook: WorkbookModel | null = null
@@ -243,6 +247,8 @@ export class ViewerController {
     this.view.zoom = zoom
     this.view.scrollX = 0
     this.view.scrollY = 0
+    this.virtualRows = 0 // 换表/换簿:虚拟范围归零,measure() 据新视口重算
+    this.virtualCols = 0
     this.els.scroller.scrollLeft = 0
     this.els.scroller.scrollTop = 0
     this.refreshContentSize()
@@ -280,12 +286,14 @@ export class ViewerController {
   measure(): void {
     this.view.width = this.els.renderArea.clientWidth
     this.view.height = this.els.renderArea.clientHeight
+    this.recomputeVirtualExtent() // 视口变 → 至少留一屏空行/列可滚
   }
 
   /** 同步滚动量(壳的 scroll 事件里调) */
   setScroll(scrollX: number, scrollY: number): void {
     this.view.scrollX = scrollX
     this.view.scrollY = scrollY
+    this.recomputeVirtualExtent() // 滚到底自动延伸出更多空行/列(spacer 增长 → 无限感)
     this.scheduleRender()
   }
 
@@ -298,6 +306,7 @@ export class ViewerController {
     const ratioY = this.contentH ? (sc.scrollTop + sc.clientHeight / 2) / this.contentH : 0
     r.setZoom(zoom)
     this.view.zoom = zoom
+    this.recomputeVirtualExtent() // 缩放改变可见行列数 → 虚拟范围按需延伸
     this.refreshContentSize() // 先把 spacer 撑到新尺寸,再设滚动(无需等框架 tick)
     sc.scrollLeft = Math.max(0, ratioX * this.contentW - sc.clientWidth / 2)
     sc.scrollTop = Math.max(0, ratioY * this.contentH - sc.clientHeight / 2)
@@ -388,6 +397,32 @@ export class ViewerController {
     this.contentH = r.contentHeight
     this.els.spacer.style.width = this.contentW + 'px'
     this.els.spacer.style.height = this.contentH + 'px'
+  }
+
+  /**
+   * 据当前滚动+视口算"虚拟范围"(滚到数据下方仍有空行/空列可滚动/选中/编辑)。
+   * 只增不减(防 spacer 抖动)、封顶 Excel 上限。**不动 dimension/文件**;编辑虚拟格才靠 growDimension 变实。
+   * 仅当范围真变化时重建 GridMetrics + 刷 spacer。
+   */
+  recomputeVirtualExtent(): void {
+    const r = this.renderer
+    if (!r) return
+    const m = r.metrics
+    // 视口可见内容底部/右缘落在哪行哪列,再各加一屏缓冲(滚到底时已经有下一屏空行)
+    const bottomRow = m.rowAt(this.view.scrollY + this.view.height - m.colHeaderHeight) + 30
+    const rightCol = m.colAt(this.view.scrollX + this.view.width - m.rowHeaderWidth) + 10
+    const nextRows = Math.min(MAX_GRID_ROWS, Math.max(this.virtualRows, bottomRow))
+    const nextCols = Math.min(MAX_GRID_COLS, Math.max(this.virtualCols, rightCol))
+    if (nextRows === this.virtualRows && nextCols === this.virtualCols) return
+    this.virtualRows = nextRows
+    this.virtualCols = nextCols
+    if (r.setVirtualExtent(nextRows, nextCols)) this.refreshContentSize()
+  }
+
+  /** 当前虚拟范围(含 dimension 兜底);供调试/e2e。 */
+  getVirtualExtent(): { rows: number; cols: number } {
+    const m = this.renderer?.metrics
+    return { rows: m?.vRows ?? 0, cols: m?.vCols ?? 0 }
   }
 
   // ====================== 选区模型 ======================

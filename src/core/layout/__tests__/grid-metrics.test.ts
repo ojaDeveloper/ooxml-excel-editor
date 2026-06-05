@@ -50,3 +50,31 @@ describe('GridMetrics 几何', () => {
     expect(z.rowTop(1)).toBe(40)
   })
 })
+
+describe('GridMetrics 虚拟范围(滚动出空行/列)', () => {
+  const sheet = makeSheet({ dimension: { rows: 10, cols: 5 } }) // 默认 64×20
+  it('virtualWidth/Height 含外推,而 totalWidth/Height 仍按 dimension 不变', () => {
+    const m = new GridMetrics(sheet, 1, 100, 20) // 虚拟 100 行 / 20 列
+    expect(m.totalWidth).toBe(320) // 5 列 × 64,不受虚拟影响(导出/数据安全)
+    expect(m.totalHeight).toBe(200) // 10 行 × 20
+    expect(m.virtualWidth).toBe(20 * 64) // 20 虚拟列
+    expect(m.virtualHeight).toBe(100 * 20) // 100 虚拟行
+    expect(m.vRows).toBe(100)
+    expect(m.vCols).toBe(20)
+  })
+  it('虚拟数 < dimension 时取 dimension(只增不减)', () => {
+    const m = new GridMetrics(sheet, 1, 3, 2)
+    expect(m.vRows).toBe(10) // max(dim 10, 虚拟 3)
+    expect(m.vCols).toBe(5)
+  })
+  it('封顶 Excel 上限', () => {
+    const m = new GridMetrics(sheet, 1, 9_999_999, 99_999)
+    expect(m.vRows).toBe(1048576)
+    expect(m.vCols).toBe(16384)
+  })
+  it('可视区范围夹到虚拟范围(允许画/选空行)', () => {
+    const m = new GridMetrics(sheet, 1, 100, 20)
+    const [, r1] = m.visibleRowRange(0, 100000) // 视口很高
+    expect(r1).toBe(99) // vRows-1,而非 dimension 的 9
+  })
+})

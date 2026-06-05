@@ -613,6 +613,7 @@ const viewerApi: ViewerApi = {
   setColumnWidth: (col, width) => controller?.setColumnWidth(col, width) ?? false,
   setRowHeight: (row, height) => controller?.setRowHeight(row, height) ?? false,
   isRecalcReady: () => controller?.isRecalcReady() ?? false,
+  getVirtualExtent: () => controller?.getVirtualExtent() ?? { rows: 0, cols: 0 },
   isDirty: () => controller?.isDirty() ?? false,
   resetToOriginal: () => controller?.resetToOriginal() ?? false,
   exportImage,

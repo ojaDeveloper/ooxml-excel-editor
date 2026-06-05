@@ -114,6 +114,9 @@ export class CanvasRenderer {
   private cellStyleHook?: CellStyleFn
   private onNeedsRedraw?: () => void
   private cellImageFit: CellImageFit
+  /** 虚拟外推行/列数(滚动出空行用;0 = 仅按 dimension)。透传给 GridMetrics,不影响导出。 */
+  private virtualRows = 0
+  private virtualCols = 0
   /** WPS 单元格内嵌图解码缓存: blob src → 已加载的 HTMLImageElement(complete 才画) */
   private cellImageCache = new Map<string, HTMLImageElement>()
 
@@ -133,7 +136,7 @@ export class CanvasRenderer {
     this.ctx = ctx
     // 先做自动行高(撑高换行溢出的行)，再据此建几何
     autoFitRowHeights(sheet, workbook, ctx)
-    this.metrics = new GridMetrics(sheet, zoom)
+    this.metrics = new GridMetrics(sheet, zoom, this.virtualRows, this.virtualCols)
     this.merges = new MergeIndex(sheet)
     this.freeze = computeFreeze(sheet, this.metrics)
     this.cond = new ConditionalEngine(sheet)
@@ -150,16 +153,29 @@ export class CanvasRenderer {
   /** 改变缩放: 重建几何(列宽行高表头按 zoom 缩放)。合并/条件格式无需重建。 */
   setZoom(zoom: number): void {
     if (zoom === this.metrics.zoom) return
-    this.metrics = new GridMetrics(this.sheet, zoom)
+    this.metrics = new GridMetrics(this.sheet, zoom, this.virtualRows, this.virtualCols)
     this.freeze = computeFreeze(this.sheet, this.metrics)
   }
 
-  /** 内容总尺寸(含表头)，给外层滚动容器用 */
+  /**
+   * 设虚拟外推行/列数(滚动出空行/空列);仅当变化时重建 GridMetrics,返回是否变了(变了需重绘 + 刷 spacer)。
+   * 不影响 dimension / 导出 / data-access。
+   */
+  setVirtualExtent(rows: number, cols: number): boolean {
+    if (rows === this.virtualRows && cols === this.virtualCols) return false
+    this.virtualRows = rows
+    this.virtualCols = cols
+    this.metrics = new GridMetrics(this.sheet, this.metrics.zoom, rows, cols)
+    this.freeze = computeFreeze(this.sheet, this.metrics)
+    return true
+  }
+
+  /** 内容总尺寸(含表头)，给外层滚动容器用(用虚拟范围 → 可滚动出空行/列) */
   get contentWidth(): number {
-    return this.metrics.rowHeaderWidth + this.metrics.totalWidth
+    return this.metrics.rowHeaderWidth + this.metrics.virtualWidth
   }
   get contentHeight(): number {
-    return this.metrics.colHeaderHeight + this.metrics.totalHeight
+    return this.metrics.colHeaderHeight + this.metrics.virtualHeight
   }
   get freezeGeometry(): FreezeGeometry {
     return this.freeze
@@ -244,8 +260,9 @@ export class CanvasRenderer {
     const fh = this.freeze.frozenHeight
     const cx = x < hw + fw ? x - hw : x - hw + view.scrollX
     const cy = y < hh + fh ? y - hh : y - hh + view.scrollY
-    const col = Math.min(Math.max(this.metrics.colAt(cx), 0), this.metrics.cols - 1)
-    const row = Math.min(Math.max(this.metrics.rowAt(cy), 0), this.metrics.rows - 1)
+    // 夹到虚拟范围(vCols/vRows-1) → 允许点选滚动出来的空行/空列
+    const col = Math.min(Math.max(this.metrics.colAt(cx), 0), this.metrics.vCols - 1)
+    const row = Math.min(Math.max(this.metrics.rowAt(cy), 0), this.metrics.vRows - 1)
     return { row, col }
   }
 
@@ -255,7 +272,7 @@ export class CanvasRenderer {
     if (y < hh) return -1
     const fh = this.freeze.frozenHeight
     const cy = y < hh + fh ? y - hh : y - hh + view.scrollY
-    return Math.min(Math.max(this.metrics.rowAt(cy), 0), this.metrics.rows - 1)
+    return Math.min(Math.max(this.metrics.rowAt(cy), 0), this.metrics.vRows - 1)
   }
   /** 屏幕 x → 列(用于点列标选整列);落在行表头返回 -1 */
   colAtScreen(view: ViewState, x: number): number {
@@ -263,7 +280,7 @@ export class CanvasRenderer {
     if (x < hw) return -1
     const fw = this.freeze.frozenWidth
     const cx = x < hw + fw ? x - hw : x - hw + view.scrollX
-    return Math.min(Math.max(this.metrics.colAt(cx), 0), this.metrics.cols - 1)
+    return Math.min(Math.max(this.metrics.colAt(cx), 0), this.metrics.vCols - 1)
   }
 
   /** 该 cell 所属的合并区(用于选区/复制时按整块处理) */
@@ -349,7 +366,7 @@ export class CanvasRenderer {
 
   /** 列宽/行高变化后重建几何 */
   rebuildMetrics(): void {
-    this.metrics = new GridMetrics(this.sheet, this.metrics.zoom)
+    this.metrics = new GridMetrics(this.sheet, this.metrics.zoom, this.virtualRows, this.virtualCols)
     this.freeze = computeFreeze(this.sheet, this.metrics)
     this.merges = new MergeIndex(this.sheet) // 结构编辑(增删行列)会改 merges → 同步重建索引
   }
