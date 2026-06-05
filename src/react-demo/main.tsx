@@ -77,6 +77,16 @@ function Demo() {
           </button>
         )}
         {editMode && (
+          <button onClick={() => { const s = ref.current?.getSelection(); if (s) ref.current?.mergeCells(s) }} title="合并选区(G1)">
+            合并
+          </button>
+        )}
+        {editMode && (
+          <button onClick={() => { const s = ref.current?.getSelection(); if (s) ref.current?.unmergeCells(s) }} title="拆分选区(G1)">
+            拆分
+          </button>
+        )}
+        {editMode && (
           <button
             onClick={() => {
               const sel = ref.current?.getSelection()

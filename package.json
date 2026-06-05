@@ -1,6 +1,6 @@
 {
   "name": "ooxml-excel-editor",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "High-fidelity OOXML (.xlsx) preview & editor — canvas renderer, framework-agnostic core with Vue 3 and React shells. Read-only by default; opt-in editing with undo/redo, formula recalc, and export back to .xlsx/JSON/CSV.",
   "type": "module",
   "license": "MIT",

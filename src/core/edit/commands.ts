@@ -2,7 +2,7 @@
  * 编辑命令(框架无关)。每个命令 apply 时**捕获逆向载荷**,逆向统一为 restore-cells
  * (精确还原一组格的底层 CellModel),于是 undo/redo 跨 值/区域/清空(及后续样式/图片)同一套栈。
  */
-import type { CellModel, CellStyleOverride, ColumnInfo, ImageAnchor, RowInfo, SheetModel, WorkbookModel } from '../model/types'
+import type { CellModel, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
 import type { CellValue } from '../model/data-access'
 import { cloneCell } from '../model/snapshot'
@@ -34,6 +34,9 @@ export type EditCommand =
   | { kind: 'image-remove'; index: number }
   | { kind: 'struct-edit'; op: StructOp; at: number; count: number }
   | { kind: 'restore-wb'; snapshot: WorkbookModel }
+  | { kind: 'merge-cells'; range: MergeRange }
+  | { kind: 'unmerge-cells'; range: MergeRange }
+  | { kind: 'restore-merges'; merges: MergeRange[]; cells: { row: number; col: number; cell: CellModel | null }[] }
 
 /** dim 命令(列宽/行高)— 仅维度族,无格位置 */
 export type DimCommand = Extract<EditCommand, { kind: 'set-dim' } | { kind: 'restore-dim' }>
@@ -71,6 +74,10 @@ export function affectedOf(cmd: EditCommand): CellPos[] {
       return cmd.cells.map((c) => ({ row: c.row, col: c.col }))
     case 'set-style':
       return cmd.cells.map((c) => ({ row: c.row, col: c.col }))
+    case 'merge-cells':
+      return coveredOf(cmd.range) // 合并清空的被覆盖格 → 发 cell-change
+    case 'restore-merges':
+      return cmd.cells.map((c) => ({ row: c.row, col: c.col }))
     case 'set-dim':
     case 'restore-dim':
     case 'image-set':
@@ -78,8 +85,20 @@ export function affectedOf(cmd: EditCommand): CellPos[] {
     case 'image-remove':
     case 'struct-edit':
     case 'restore-wb':
+    case 'unmerge-cells':
       return []
   }
+}
+
+/** 区域内"被覆盖格"(除左上锚点);合并时这些格的值被清空。 */
+function coveredOf(range: MergeRange): CellPos[] {
+  const out: CellPos[] = []
+  for (let r = range.top; r <= range.bottom; r++)
+    for (let c = range.left; c <= range.right; c++) if (!(r === range.top && c === range.left)) out.push({ row: r, col: c })
+  return out
+}
+function mergesIntersect(a: MergeRange, b: MergeRange): boolean {
+  return !(a.bottom < b.top || a.top > b.bottom || a.right < b.left || a.left > b.right)
 }
 
 /** 捕获一个列/行当前维度信息(克隆,供逆向还原;无项 → null) */
@@ -124,6 +143,28 @@ export function applyCommand(sheet: SheetModel, cmd: EditCommand): ApplyResult {
     const prior = cloneImageAnchor(sheet.images[cmd.index])
     removeImage(sheet, cmd.index)
     return { inverse: { kind: 'image-add', anchor: prior, index: cmd.index }, affected }
+  }
+  // 合并族:逆=restore-merges(整张 merges 数组 + 被清空格的前态),覆盖 合并/拆分/还原 三向
+  if (cmd.kind === 'merge-cells') {
+    const priorMerges = sheet.merges.map((m) => ({ ...m }))
+    const covered = coveredOf(cmd.range)
+    const priorCells = capture(sheet, covered)
+    sheet.merges = sheet.merges.filter((m) => !mergesIntersect(m, cmd.range)) // 吸收相交的旧合并
+    for (const p of covered) sheet.cells.delete(cellKey(p.row, p.col)) // 清空被覆盖格(只留锚点)
+    sheet.merges.push({ ...cmd.range })
+    return { inverse: { kind: 'restore-merges', merges: priorMerges, cells: priorCells }, affected }
+  }
+  if (cmd.kind === 'unmerge-cells') {
+    const priorMerges = sheet.merges.map((m) => ({ ...m }))
+    sheet.merges = sheet.merges.filter((m) => !mergesIntersect(m, cmd.range))
+    return { inverse: { kind: 'restore-merges', merges: priorMerges, cells: [] }, affected }
+  }
+  if (cmd.kind === 'restore-merges') {
+    const curMerges = sheet.merges.map((m) => ({ ...m }))
+    const curCells = capture(sheet, cmd.cells.map((c) => ({ row: c.row, col: c.col })))
+    sheet.merges = cmd.merges.map((m) => ({ ...m }))
+    for (const { row, col, cell } of cmd.cells) restoreCell(sheet, row, col, cell)
+    return { inverse: { kind: 'restore-merges', merges: curMerges, cells: curCells }, affected }
   }
   // 结构族(增删行列)由 EditController.exec 直接处理(需 workbook 级快照 + 跨表公式重写),不走这里
   // 单元格族:逆=restore-cells(捕获前态;set-style 也走它 → 空格上色的逆=删格)

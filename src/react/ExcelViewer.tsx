@@ -101,6 +101,9 @@ export interface ExcelViewerHandle {
   editRange: (range: MergeRange, values: CellValue[][]) => boolean
   clearRange: (range: MergeRange) => boolean
   setStyle: (range: MergeRange, patch: CellStyleOverride) => boolean
+  mergeCells: (range: MergeRange) => boolean
+  unmergeCells: (range: MergeRange) => boolean
+  pasteText: (text: string, at?: { row: number; col: number }) => boolean
   getImages: () => ImageAnchor[]
   addImage: (anchor: ImageAnchor) => number
   removeImage: (index: number) => boolean
@@ -231,6 +234,13 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   /** 派发交互事件给插件(props 回调在各 hook 里另外调) */
   const firePlugin = (event: PluginEvent, payload: unknown) =>
     pluginHandlersRef.current.get(event)?.forEach((h) => h(payload))
+  // 导出失败:始终 console.error(没接 onError 也能看到原因,如"请先安装 jspdf")+ 转 onError + alert(与 Vue 壳一致)
+  const onExportError = (e: unknown) => {
+    const msg = String((e as Error)?.message ?? e)
+    console.error('[ooxml-excel-editor] 导出失败:', e)
+    propsRef.current.onError?.(msg)
+    if (typeof window !== 'undefined' && window.alert) window.alert(msg)
+  }
   function renderPluginOverlays() {
     const host = pluginHostRef.current
     const controller = controllerRef.current
@@ -410,6 +420,9 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
       clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
       setStyle: (range, patch) => controllerRef.current?.setStyle(range, patch) ?? false,
+      mergeCells: (range) => controllerRef.current?.mergeCells(range) ?? false,
+      unmergeCells: (range) => controllerRef.current?.unmergeCells(range) ?? false,
+      pasteText: (text, at) => controllerRef.current?.pasteText(text, at) ?? false,
       getImages: () => controllerRef.current?.getImages() ?? [],
       addImage: (a) => controllerRef.current?.addImage(a) ?? -1,
       removeImage: (i) => controllerRef.current?.removeImage(i) ?? false,
@@ -489,6 +502,9 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
     clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
     setStyle: (range, patch) => controllerRef.current?.setStyle(range, patch) ?? false,
+    mergeCells: (range) => controllerRef.current?.mergeCells(range) ?? false,
+    unmergeCells: (range) => controllerRef.current?.unmergeCells(range) ?? false,
+    pasteText: (text, at) => controllerRef.current?.pasteText(text, at) ?? false,
     getImages: () => controllerRef.current?.getImages() ?? [],
     addImage: (a) => controllerRef.current?.addImage(a) ?? -1,
     removeImage: (i) => controllerRef.current?.removeImage(i) ?? false,
@@ -631,10 +647,8 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
           <button disabled={!selection} onClick={() => void controllerRef.current?.copySelection()} title="复制 (Ctrl+C)">
             复制
           </button>
-          <button onClick={() => void controllerRef.current?.downloadImage()}>导出 PNG</button>
-          <button onClick={() => void controllerRef.current?.downloadPdf().catch((e) => propsRef.current.onError?.(String((e as Error)?.message ?? e)))}>
-            导出 PDF
-          </button>
+          <button onClick={() => void controllerRef.current?.downloadImage().catch(onExportError)}>导出 PNG</button>
+          <button onClick={() => void controllerRef.current?.downloadPdf().catch(onExportError)}>导出 PDF</button>
           <select value={Math.round(zoom * 100)} onChange={(e) => setZoom(Number(e.target.value) / 100)} title="缩放">
             {[50, 75, 100, 125, 150, 200].map((p) => (
               <option key={p} value={p}>
@@ -687,6 +701,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
           onMouseLeave={() => controllerRef.current?.onMouseLeave()}
           onDoubleClick={(e) => controllerRef.current?.onDblClick(e.nativeEvent)}
           onKeyDown={(e) => controllerRef.current?.onKeyDown(e.nativeEvent)}
+          onContextMenu={(e) => controllerRef.current?.onContextMenu(e.nativeEvent)}
         >
           <div className="rxl-spacer" ref={spacerRef} />
         </div>

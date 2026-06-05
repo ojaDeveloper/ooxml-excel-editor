@@ -366,6 +366,9 @@ function fmtNum(n: number): string {
 function onMouseDown(e: MouseEvent) {
   controller?.onMouseDown(e)
 }
+function onContextMenu(e: MouseEvent) {
+  controller?.onContextMenu(e)
+}
 function onMouseMove(e: MouseEvent) {
   controller?.onMouseMove(e)
 }
@@ -421,6 +424,7 @@ async function onExportPdfVector() {
 }
 function reportExportError(e: unknown) {
   const msg = (e as Error)?.message || String(e)
+  console.error('[ooxml-excel-editor] 导出失败:', e)
   emit('error', msg)
   if (typeof window !== 'undefined' && window.alert) window.alert(msg)
 }
@@ -526,6 +530,9 @@ const viewerApi: ViewerApi = {
   editRange: (range, values) => controller?.editRange(range, values) ?? false,
   clearRange: (range) => controller?.clearRange(range) ?? false,
   setStyle: (range, patch) => controller?.setStyle(range, patch) ?? false,
+  mergeCells: (range) => controller?.mergeCells(range) ?? false,
+  unmergeCells: (range) => controller?.unmergeCells(range) ?? false,
+  pasteText: (text, at) => controller?.pasteText(text, at) ?? false,
   getImages: () => controller?.getImages() ?? [],
   addImage: (a) => controller?.addImage(a) ?? -1,
   removeImage: (i) => controller?.removeImage(i) ?? false,
@@ -813,6 +820,7 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
         @mouseleave="onMouseLeave"
         @dblclick="onDblClick"
         @keydown="onKeyDown"
+        @contextmenu="onContextMenu"
       >
         <div class="spacer" ref="spacerEl" />
       </div>

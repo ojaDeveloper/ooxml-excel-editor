@@ -22,6 +22,7 @@ import { defaultFormulaEngineFactory } from '../formula/hyperformula-adapter'
 import type { CellValue, SheetToJSONOptions } from '../model/data-access'
 import type { CellSnapshot } from '../model/snapshot'
 import { CellEditorHost } from '../edit/editor-host'
+import { ContextMenuHost, type MenuItem } from '../edit/context-menu'
 import type { CellEditorContext, EditorCommitValue, EditorResolver } from '../edit/editor-context'
 import { defaultCellEditor } from '../edit/default-editor'
 import { CanvasRenderer, type RendererOptions, type ViewState } from '../render/canvas-renderer'
@@ -115,6 +116,8 @@ export class ViewerController {
   private rendererOpts: RendererOptions = {}
   /** 下载默认文件名(壳可随 props 更新) */
   fileName: string | undefined = undefined
+  /** 右键上下文菜单宿主(G3;body 级 DOM,框架无关) */
+  private menuHost = new ContextMenuHost()
   /** 原始 .xlsx 字节(壳加载时注入;供高保真 overlay 导出重载原件) */
   private sourceBuffer: ArrayBuffer | null = null
   /** 壳在加载后注入原始字节(供 exportXlsx({fidelity:'overlay'}) 重载原件叠加编辑) */
@@ -370,6 +373,7 @@ export class ViewerController {
     this.rafId = 0
     this.overlays.dispose()
     this.editorHost.dispose()
+    this.menuHost.dispose()
     this.edit.disposeEngine()
   }
 
@@ -722,6 +726,43 @@ export class ViewerController {
     this.hooks.onTooltip(null)
   }
 
+  /** 右键上下文菜单(G3;仅 editable;只读用浏览器默认菜单)。壳把 contextmenu 事件转给它。 */
+  onContextMenu(e: MouseEvent): void {
+    if (!this.editCfg.editable) return
+    const r = this.renderer
+    const p = this.localXY(e)
+    if (!r || !p) return
+    // 右键点在内容格上且不在当前选区 → 先选中该格(仿 Excel)
+    const hit = r.cellAtScreen(this.view, p.x, p.y)
+    let sel = this.getSelection()
+    if (hit && (!sel || hit.row < sel.top || hit.row > sel.bottom || hit.col < sel.left || hit.col > sel.right)) {
+      this.selectCell(hit.row, hit.col)
+      this.render()
+      sel = this.getSelection()
+    }
+    if (!sel) return
+    const range = { ...sel }
+    const rows = range.bottom - range.top + 1
+    const cols = range.right - range.left + 1
+    const single = range.top === range.bottom && range.left === range.right
+    const items: MenuItem[] = [
+      { label: '复制', action: () => void this.copySelection() },
+      { label: '粘贴', action: () => void this.pasteFromClipboard() },
+      { separator: true },
+      { label: `在上方插入 ${rows} 行`, action: () => this.insertRows(range.top, rows) },
+      { label: `在左侧插入 ${cols} 列`, action: () => this.insertCols(range.left, cols) },
+      { label: `删除 ${rows} 行`, action: () => this.deleteRows(range.top, rows) },
+      { label: `删除 ${cols} 列`, action: () => this.deleteCols(range.left, cols) },
+      { separator: true },
+      { label: '合并单元格', disabled: single, action: () => this.mergeCells(range) },
+      { label: '拆分单元格', action: () => this.unmergeCells(range) },
+      { separator: true },
+      { label: '清除内容', action: () => this.clearRange(range) },
+    ]
+    e.preventDefault()
+    this.menuHost.show(e.clientX, e.clientY, items)
+  }
+
   private updateHover(e: MouseEvent): void {
     const r = this.renderer
     const sc = this.els.scroller
@@ -801,6 +842,11 @@ export class ViewerController {
     }
     if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
       void this.copySelection()
+      e.preventDefault()
+      return
+    }
+    if (this.editCfg.editable && (e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
+      void this.pasteFromClipboard() // G2:Ctrl+V 粘贴(读剪贴板 → 区域写入)
       e.preventDefault()
       return
     }
@@ -941,6 +987,34 @@ export class ViewerController {
     } catch {
       /* 某些环境无剪贴板权限，静默忽略 */
     }
+  }
+
+  /** 从系统剪贴板粘贴(读 text/plain → TSV → 区域写入);需剪贴板读权限,无则静默返回 false。 */
+  async pasteFromClipboard(): Promise<boolean> {
+    try {
+      const text = await navigator.clipboard.readText()
+      return this.pasteText(text)
+    } catch {
+      return false
+    }
+  }
+
+  /**
+   * 把 TSV(Excel/表格复制的制表符分隔文本)粘到选区左上角(无 at 时用活动格)。
+   * 值类型自动推断(纯数字串→数字、`=`→公式)、跳过只读格;入命令栈可撤销。返回是否有改动。
+   */
+  pasteText(text: string, at?: { row: number; col: number }): boolean {
+    if (!this.editCfg.editable || !this.sheet) return false
+    const grid = parseClipboardGrid(text)
+    if (!grid.length) return false
+    const sel = this.getSelection()
+    const start = at ?? this.selActive ?? (sel ? { row: sel.top, col: sel.left } : null)
+    if (!start) return false
+    const top = start.row
+    const left = start.col
+    const bottom = top + grid.length - 1
+    const right = left + Math.max(1, ...grid.map((r) => r.length)) - 1
+    return this.edit.editRange({ top, left, bottom, right }, grid)
   }
 
   // ====================== 查找 ======================
@@ -1288,6 +1362,14 @@ export class ViewerController {
   setStyle(range: MergeRange, patch: CellStyleOverride): boolean {
     return this.edit.setStyle(range, patch)
   }
+  /** 合并区域(G1;清空被覆盖格,只留左上锚点);editable 时入命令栈 */
+  mergeCells(range: MergeRange): boolean {
+    return this.edit.mergeCells(range)
+  }
+  /** 拆分区域内的合并(G1);editable 时入命令栈 */
+  unmergeCells(range: MergeRange): boolean {
+    return this.edit.unmergeCells(range)
+  }
 
   // ---- 图片编辑(E6;浮动/嵌入 增删移改) ----
   /** 读当前表全部图片锚点(克隆)。 */
@@ -1499,6 +1581,15 @@ function cellRange(c: Cell): MergeRange {
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+/** 剪贴板文本 → 2D 网格(行用换行、列用制表符;去掉末尾换行)。空文本 → []。 */
+function parseClipboardGrid(text: string): string[][] {
+  if (!text) return []
+  let t = text.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+  if (t.endsWith('\n')) t = t.slice(0, -1)
+  if (t === '') return []
+  return t.split('\n').map((line) => line.split('\t'))
 }
 
 /** 排序用:空值判定(null / 空串 / undefined) */

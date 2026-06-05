@@ -119,6 +119,38 @@ describe('EditController(命令式编辑 + 前后快照事件 + undo/redo)', () 
     expect(sheet.cells.get(cellKey(0, 0))!.styleId).toBe(0) // styleId 还原
   })
 
+  it('mergeCells:清空被覆盖格、加合并;undo 还原格与合并(G1)', () => {
+    const { sheet, ec } = setup()
+    for (const [r, c, v] of [[0, 0, 'A'], [0, 1, 'B'], [1, 0, 'C'], [1, 1, 'D']] as const)
+      sheet.cells.set(cellKey(r, c), { row: r, col: c, type: 'string', raw: v, styleId: 0 } as never)
+    expect(ec.mergeCells({ top: 0, left: 0, bottom: 1, right: 1 })).toBe(true)
+    expect(sheet.merges).toHaveLength(1)
+    expect(sheet.cells.get(cellKey(0, 0))!.raw).toBe('A') // 锚点保留
+    expect(sheet.cells.has(cellKey(0, 1))).toBe(false) // 被覆盖格清空
+    expect(sheet.cells.has(cellKey(1, 1))).toBe(false)
+    ec.undo()
+    expect(sheet.merges).toHaveLength(0) // 合并撤销
+    expect(sheet.cells.get(cellKey(1, 1))!.raw).toBe('D') // 被清格还原
+  })
+
+  it('mergeCells:吸收相交旧合并 + 单格不合并', () => {
+    const { sheet, ec } = setup()
+    sheet.merges.push({ top: 0, left: 0, bottom: 0, right: 1 })
+    expect(ec.mergeCells({ top: 0, left: 0, bottom: 1, right: 1 })).toBe(true)
+    expect(sheet.merges).toHaveLength(1) // 旧的被吸收,只剩新的
+    expect(sheet.merges[0]).toMatchObject({ bottom: 1, right: 1 })
+    expect(ec.mergeCells({ top: 5, left: 5, bottom: 5, right: 5 })).toBe(false) // 单格不合并
+  })
+
+  it('unmergeCells:移除相交合并;undo 还原', () => {
+    const { sheet, ec } = setup()
+    sheet.merges.push({ top: 2, left: 0, bottom: 2, right: 3 })
+    expect(ec.unmergeCells({ top: 2, left: 1, bottom: 2, right: 1 })).toBe(true)
+    expect(sheet.merges).toHaveLength(0)
+    ec.undo()
+    expect(sheet.merges).toHaveLength(1) // 还原
+  })
+
   it('setStyle:跳过只读格', () => {
     const { sheet, ec } = setup(new Set(['0:0']))
     sheet.cells.set(cellKey(0, 0), { row: 0, col: 0, type: 'string', raw: 'x', styleId: 0 } as never)

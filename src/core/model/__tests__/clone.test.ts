@@ -22,6 +22,24 @@ function workbook(): WorkbookModel {
   return { sheets: [sheet], activeSheet: 0, themeColors: [], date1904: false } as unknown as WorkbookModel
 }
 
+describe('clone — 轻量快照:重负载共享、可变部分克隆(性能)', () => {
+  it('图片字节/图表 按引用共享,锚点与格 克隆(不深拷重负载)', () => {
+    const bytes = new Uint8Array([1, 2, 3, 4])
+    const chart = { type: 'bar', series: [] }
+    const wb = workbook()
+    const s = wb.sheets[0] as any
+    s.images = [{ src: 'x', bytes, mime: 'image/png', from: { col: 0, colOffEmu: 0, row: 0, rowOffEmu: 0 } }]
+    s.charts = [chart]
+    const c = cloneWorkbook(wb)
+    const cs = c.sheets[0] as any
+    expect(cs.images[0].bytes).toBe(bytes) // 字节共享(不深拷,省内存)
+    expect(cs.images[0]).not.toBe(s.images[0]) // 锚点对象克隆(结构编辑挪锚点不污染快照)
+    expect(cs.charts).toBe(s.charts) // 图表整体共享(编辑期间不可变)
+    expect(cs.cells.get(cellKey(0, 0))).not.toBe(s.cells.get(cellKey(0, 0))) // 格克隆
+    expect(cs.styles).not.toBe(s.styles) // styles 新数组(防 internStyle 追加污染)
+  })
+})
+
 describe('clone — cloneWorkbook + restoreWorkbookInto(脏状态还原;E3.5)', () => {
   it('cloneWorkbook 深克隆(改克隆不影响原件)', () => {
     const wb = workbook()
