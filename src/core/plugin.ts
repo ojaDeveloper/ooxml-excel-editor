@@ -13,7 +13,7 @@
  *   <ExcelViewer :plugins="[myPlugin]" />   // Vue
  *   <ExcelViewer plugins={[myPlugin]} />    // React —— 同一插件,两框架通用
  */
-import type { CellStyleFn, MergeRange, TransformModelFn, WorkbookModel } from './model/types'
+import type { CellStyleFn, CellStyleOverride, MergeRange, TransformModelFn, WorkbookModel } from './model/types'
 import type { CellValue, ReadOptions, SheetToJSONOptions } from './model/data-access'
 import type { CellSnapshot } from './model/snapshot'
 import type { EditorResolver } from './edit/editor-context'
@@ -95,6 +95,8 @@ export interface ViewerApi {
   cancelEdit(): void
   /** 当前是否有活动编辑器 */
   isEditing(): boolean
+  /** 给区域套样式覆盖(E5;粗体/对齐/填充等);editable 时入命令栈(可撤销 + 发 cell-change + 记脏) */
+  setStyle(range: MergeRange, patch: CellStyleOverride): boolean
   /** 程序化设列宽(px,模型单位);editable 时入命令栈(可撤销 + 发 dim-change + 记脏) */
   setColumnWidth(col: number, width: number): boolean
   /** 程序化设行高(px,模型单位);editable 时入命令栈 */

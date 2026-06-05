@@ -50,6 +50,12 @@ function onDimChange(p: { axis: string; index: number; before: number; after: nu
 function onDirtyChange(p: { dirty: boolean }) {
   if (import.meta.env.DEV) (window as unknown as { __lastDirtyChange?: unknown }).__lastDirtyChange = p
 }
+// E5: 给当前选区加粗(样式编辑演示)
+function boldSelection() {
+  const v = viewerRef.value
+  const sel = v?.getSelection()
+  if (v && sel) v.setStyle(sel, { font: { bold: true } })
+}
 
 // 开发环境把命令式 API 挂到 window,便于 e2e 计算 canvas 上的几何(如筛选按钮位置)
 if (import.meta.env.DEV) {
@@ -163,6 +169,9 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
       <label v-if="src" class="edit-toggle" title="开启编辑模式(E0:闸门)">
         <input type="checkbox" v-model="editMode" /> 编辑模式
       </label>
+      <button v-if="src && editMode" class="sample-btn" @click="boldSelection" title="给选区加粗(E5:样式编辑)">
+        B 加粗选区
+      </button>
     </header>
 
     <main class="app-body">

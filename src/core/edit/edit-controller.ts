@@ -3,7 +3,7 @@
  * 发"前后完整快照"事件、暴露命令式编辑 API + 查询 API。组合进 ViewerController(非继承)。
  * 这是要求 5("一切都有 API/事件")的承重墙:UI/公式/导出都建在它上面。
  */
-import type { ColumnInfo, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
+import type { CellStyleOverride, ColumnInfo, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import type { CellValue } from '../model/data-access'
 import { buildCellSnapshot, type CellSnapshot } from '../model/snapshot'
 import { cloneWorkbook, restoreWorkbookInto } from '../model/clone'
@@ -186,6 +186,22 @@ export class EditController {
     return !!inv
   }
 
+  /** 给区域套样式覆盖(E5;跳过只读格)。返回是否有改动。前后 style 不同 → 发 cell-change。 */
+  setStyle(range: MergeRange, patch: CellStyleOverride): boolean {
+    if (!this.host.isEditingEnabled()) return false
+    const cells: CellPos[] = []
+    for (let r = range.top; r <= range.bottom; r++)
+      for (let c = range.left; c <= range.right; c++) if (this.host.isEditable(r, c)) cells.push({ row: r, col: c })
+    if (!cells.length) return false
+    this.ensureBaseline()
+    const inv = this.exec({ kind: 'set-style', cells, patch }, 'api')
+    if (inv) {
+      this.pushUndo(inv)
+      this.markDirty()
+    }
+    return !!inv
+  }
+
   // ---- 维度编辑(列宽/行高;E3.5:resize 入命令栈) ----
   /** 程序化设列宽/行高(API 路径:apply-via-command)。返回是否生效。 */
   setDimension(axis: DimAxis, index: number, size: number): boolean {
@@ -304,9 +320,10 @@ export class EditController {
 
     // 公式重算(开启 + 引擎就绪):同步进引擎 → 拿级联脏格 → 写回计算值。
     // 依赖格(非直接编辑)在写回前拍前态,写回后拍后态,逐格发 cell-change。
+    // set-style 不改内容(只改 styleId)→ 跳过重算,省引擎往返。
     let deps: CellPos[] = []
     let depBefore: CellSnapshot[] = []
-    if (this.engineReady()) {
+    if (cmd.kind !== 'set-style' && this.engineReady()) {
       const wb = this.host.getWorkbook()!
       const si = this.host.getActiveSheetIndex()
       const dirty = collectDirty(this.engine!, wb, si, affected)

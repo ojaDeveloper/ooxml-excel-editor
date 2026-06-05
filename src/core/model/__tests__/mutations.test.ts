@@ -8,11 +8,13 @@ import {
   setColumnWidth,
   setRowHeight,
   restoreDimension,
+  applyStyleOverride,
+  mergeStyleOverride,
 } from '../mutations'
 import type { CellStyle, SheetModel } from '../types'
 import { cellKey } from '../types'
 
-const styleA = { font: {}, numFmt: 'General' } as unknown as CellStyle
+const styleA = { font: {}, fill: { type: 'none' }, numFmt: 'General' } as unknown as CellStyle
 function sheet(): SheetModel {
   return {
     cells: new Map(),
@@ -115,5 +117,35 @@ describe('mutations 维度(列宽/行高;E3.5)', () => {
     expect(s.columns.has(0)).toBe(false) // null → 删项
     restoreDimension(s, 'row', 3, { height: 22, hidden: false })
     expect(s.rows.get(3)).toMatchObject({ height: 22 })
+  })
+})
+
+describe('mutations 样式编辑(E5)', () => {
+  it('mergeStyleOverride:font/fill 浅合并,其余覆盖', () => {
+    const base = { font: { size: 11, color: '#000' }, fill: { type: 'none' }, hAlign: 'left', numFmt: 'General' } as unknown as CellStyle
+    const merged = mergeStyleOverride(base, { font: { bold: true }, hAlign: 'center' })
+    expect(merged.font).toMatchObject({ size: 11, color: '#000', bold: true }) // 浅合并保留旧字段
+    expect(merged.hAlign).toBe('center') // 覆盖
+  })
+
+  it('applyStyleOverride:既有格改 styleId + intern 去重', () => {
+    const s = sheet()
+    s.cells.set(cellKey(0, 0), { row: 0, col: 0, type: 'string', raw: 'x', styleId: 0 } as never)
+    s.cells.set(cellKey(0, 1), { row: 0, col: 1, type: 'string', raw: 'y', styleId: 0 } as never)
+    applyStyleOverride(s, 0, 0, { font: { bold: true } })
+    const id0 = s.cells.get(cellKey(0, 0))!.styleId
+    expect(id0).not.toBe(0) // 改了 styleId
+    expect((s.styles[id0].font as { bold?: boolean }).bold).toBe(true)
+    applyStyleOverride(s, 0, 1, { font: { bold: true } }) // 同基同补丁 → intern 复用
+    expect(s.cells.get(cellKey(0, 1))!.styleId).toBe(id0)
+  })
+
+  it('applyStyleOverride:空格上色 → 新建 type=empty 格承载 styleId + 增长 dimension', () => {
+    const s = sheet()
+    applyStyleOverride(s, 5, 5, { fill: { type: 'solid', fgColor: '#ff0' } })
+    const cell = s.cells.get(cellKey(5, 5))!
+    expect(cell.type).toBe('empty')
+    expect((s.styles[cell.styleId].fill as { fgColor?: string }).fgColor).toBe('#ff0')
+    expect(s.dimension).toMatchObject({ rows: 6, cols: 6 })
   })
 })

@@ -102,6 +102,27 @@ describe('EditController(命令式编辑 + 前后快照事件 + undo/redo)', () 
     expect(sheet.cells.get(cellKey(0, 1))).toMatchObject({ raw: 20 }) // 可编辑改了
   })
 
+  it('setStyle:改 styleId + 发 cell-change(前后 style.font.bold 不同);undo 还原', () => {
+    const { sheet, ec, events } = setup()
+    sheet.cells.set(cellKey(0, 0), { row: 0, col: 0, type: 'string', raw: 'x', styleId: 0 } as never)
+    const ok = ec.setStyle({ top: 0, left: 0, bottom: 0, right: 0 }, { font: { bold: true } })
+    expect(ok).toBe(true)
+    const cc = events.filter((e) => e.event === 'cell-change')
+    const last = cc.at(-1)!
+    expect(last.payload.before.style.font.bold).toBeFalsy() // 前态非粗
+    expect(last.payload.after.style.font.bold).toBe(true) // 后态粗体
+    expect(sheet.cells.get(cellKey(0, 0))!.styleId).not.toBe(0)
+    ec.undo()
+    expect(sheet.cells.get(cellKey(0, 0))!.styleId).toBe(0) // styleId 还原
+  })
+
+  it('setStyle:跳过只读格', () => {
+    const { sheet, ec } = setup(new Set(['0:0']))
+    sheet.cells.set(cellKey(0, 0), { row: 0, col: 0, type: 'string', raw: 'x', styleId: 0 } as never)
+    expect(ec.setStyle({ top: 0, left: 0, bottom: 0, right: 0 }, { font: { bold: true } })).toBe(false)
+    expect(sheet.cells.get(cellKey(0, 0))!.styleId).toBe(0)
+  })
+
   it('getCellSnapshot 查询:含 raw/computed/text/完整 cell', () => {
     const { ec } = setup()
     ec.editCell(0, 0, 7)

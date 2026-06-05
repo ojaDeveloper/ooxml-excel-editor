@@ -13,7 +13,7 @@ import {
   useState,
   type CSSProperties,
 } from 'react'
-import type { CellModel, CellStyleFn, MergeRange, SheetModel, TransformModelFn, WorkbookModel } from '@/core/model/types'
+import type { CellModel, CellStyleFn, CellStyleOverride, MergeRange, SheetModel, TransformModelFn, WorkbookModel } from '@/core/model/types'
 import type { EditConfig } from '@/core/edit/types'
 import type { FormulaEngineFactory } from '@/core/formula/engine'
 import type { CellChangePayload, DimChangePayload, DirtyChangePayload } from '@/core/edit/edit-controller'
@@ -94,6 +94,7 @@ export interface ExcelViewerHandle {
   editCell: (row: number, col: number, value: CellValue) => boolean
   editRange: (range: MergeRange, values: CellValue[][]) => boolean
   clearRange: (range: MergeRange) => boolean
+  setStyle: (range: MergeRange, patch: CellStyleOverride) => boolean
   undo: () => void
   redo: () => void
   canUndo: () => boolean
@@ -384,6 +385,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       editCell: (row, col, value) => controllerRef.current?.editCell(row, col, value) ?? false,
       editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
       clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
+      setStyle: (range, patch) => controllerRef.current?.setStyle(range, patch) ?? false,
       undo: () => controllerRef.current?.undo(),
       redo: () => controllerRef.current?.redo(),
       canUndo: () => controllerRef.current?.canUndo() ?? false,
@@ -447,6 +449,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     editCell: (row, col, value) => controllerRef.current?.editCell(row, col, value) ?? false,
     editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
     clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
+    setStyle: (range, patch) => controllerRef.current?.setStyle(range, patch) ?? false,
     undo: () => controllerRef.current?.undo(),
     redo: () => controllerRef.current?.redo(),
     canUndo: () => controllerRef.current?.canUndo() ?? false,

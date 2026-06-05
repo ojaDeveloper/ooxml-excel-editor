@@ -520,6 +520,7 @@ const viewerApi: ViewerApi = {
   editCell: (row, col, value) => controller?.editCell(row, col, value) ?? false,
   editRange: (range, values) => controller?.editRange(range, values) ?? false,
   clearRange: (range) => controller?.clearRange(range) ?? false,
+  setStyle: (range, patch) => controller?.setStyle(range, patch) ?? false,
   undo: () => controller?.undo(),
   redo: () => controller?.redo(),
   canUndo: () => controller?.canUndo() ?? false,

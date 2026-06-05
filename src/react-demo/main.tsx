@@ -65,6 +65,17 @@ function Demo() {
         <label style={{ fontSize: 13 }} title="开启编辑模式(E0:闸门)">
           <input type="checkbox" checked={editMode} onChange={(e) => setEditMode(e.target.checked)} /> 编辑模式
         </label>
+        {editMode && (
+          <button
+            onClick={() => {
+              const sel = ref.current?.getSelection()
+              if (sel) ref.current?.setStyle(sel, { font: { bold: true } })
+            }}
+            title="给选区加粗(E5:样式编辑)"
+          >
+            B 加粗选区
+          </button>
+        )}
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
         <ExcelViewer

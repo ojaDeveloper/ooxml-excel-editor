@@ -3,9 +3,10 @@
  * 渲染顺序(每个 pane 内): 网格线 → 填充/条件背景 → 数据条 → 边框 → 文本/图标 → 筛选按钮。
  * 表头(行号/列字母)最后绘制，覆盖在最上层。
  */
-import type { BorderEdge, CellModel, CellStyle, CellStyleFn, CellStyleOverride, MergeRange, SheetModel, Sparkline, WorkbookModel } from '../model/types'
+import type { BorderEdge, CellModel, CellStyle, CellStyleFn, MergeRange, SheetModel, Sparkline, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
 import { cellDisplayText } from '../model/data-access'
+import { mergeStyleOverride } from '../model/mutations'
 import { type ViewerTheme, mergeTheme } from './theme'
 import { GridMetrics, colIndexToLetters } from '../layout/grid-metrics'
 import { MergeIndex } from '../layout/merges'
@@ -1248,18 +1249,7 @@ export class CanvasRenderer {
     const base = this.sheet.styles[cell.styleId]
     if (!this.cellStyleHook) return base
     const over = this.cellStyleHook(cell, { row: cell.row, col: cell.col })
-    return over ? applyStyleOverride(base, over) : base
-  }
-}
-
-/** 合并 cellStyle 钩子返回的部分样式: font/fill/borders 浅合并,其余覆盖 */
-function applyStyleOverride(base: CellStyle, over: CellStyleOverride): CellStyle {
-  return {
-    ...base,
-    ...over,
-    font: over.font ? { ...base.font, ...over.font } : base.font,
-    fill: over.fill ? { ...base.fill, ...over.fill } : base.fill,
-    borders: over.borders ? { ...base.borders, ...over.borders } : base.borders,
+    return over ? mergeStyleOverride(base, over) : base
   }
 }
 

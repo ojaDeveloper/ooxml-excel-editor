@@ -10,7 +10,7 @@
  * onSelectionChange(壳据此 +1 让选区相关计算属性重算)、onCellClick/onCellDblClick/onHyperlink/onFilterButton/onTooltip
  * (交互回调,壳决定 emit / 插件派发 / 策略)。壳不需镜像 contentSize/selection —— 直接读控制器。
  */
-import type { CellModel, ColumnInfo, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
+import type { CellModel, CellStyleOverride, ColumnInfo, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
 import type { EditConfig } from '../edit/types'
 import { resolveEditable } from '../edit/permissions'
@@ -1210,6 +1210,10 @@ export class ViewerController {
   clearRange(range: MergeRange): boolean {
     return this.edit.clearRange(range)
   }
+  /** 给区域套样式覆盖(E5;粗体/对齐/填充等);editable 时走命令栈(可撤销 + 发 cell-change + 记脏) */
+  setStyle(range: MergeRange, patch: CellStyleOverride): boolean {
+    return this.edit.setStyle(range, patch)
+  }
   undo(): void {
     this.edit.undo()
   }
@@ -1275,11 +1279,12 @@ export class ViewerController {
   commitEdit(value: EditorCommitValue, move?: 'down' | 'right'): void {
     const editing = this.edit.getEditingCell()
     if (!editing) return
-    const val: CellValue =
-      value !== null && typeof value === 'object' && !(value instanceof Date) && 'value' in value
-        ? (value as { value: CellValue }).value
-        : (value as CellValue)
+    const wrapped = value !== null && typeof value === 'object' && !(value instanceof Date) && 'value' in value
+    const val: CellValue = wrapped ? (value as { value: CellValue }).value : (value as CellValue)
+    const style = wrapped ? (value as { style?: CellStyleOverride }).style : undefined
     this.edit.editCell(editing.row, editing.col, val)
+    // E5:编辑器可返 { value, style } → 顺带套自定义编辑样式(要求 2 端到端)
+    if (style) this.edit.setStyle({ top: editing.row, left: editing.col, bottom: editing.row, right: editing.col }, style)
     this.hooks.onEditEvent('edit-commit', { cell: editing, value: val })
     this.editorHost.unmount()
     this.edit.setEditing(null)

@@ -2,11 +2,18 @@
  * 编辑命令(框架无关)。每个命令 apply 时**捕获逆向载荷**,逆向统一为 restore-cells
  * (精确还原一组格的底层 CellModel),于是 undo/redo 跨 值/区域/清空(及后续样式/图片)同一套栈。
  */
-import type { CellModel, ColumnInfo, RowInfo, SheetModel } from '../model/types'
+import type { CellModel, CellStyleOverride, ColumnInfo, RowInfo, SheetModel } from '../model/types'
 import { cellKey } from '../model/types'
 import type { CellValue } from '../model/data-access'
 import { cloneCell } from '../model/snapshot'
-import { setCellValue, restoreCell, setColumnWidth, setRowHeight, restoreDimension } from '../model/mutations'
+import {
+  setCellValue,
+  restoreCell,
+  setColumnWidth,
+  setRowHeight,
+  restoreDimension,
+  applyStyleOverride,
+} from '../model/mutations'
 
 export type CellPos = { row: number; col: number }
 export type DimAxis = 'col' | 'row'
@@ -17,6 +24,7 @@ export type EditCommand =
   | { kind: 'restore-cells'; cells: { row: number; col: number; cell: CellModel | null }[] }
   | { kind: 'set-dim'; axis: DimAxis; index: number; size: number }
   | { kind: 'restore-dim'; axis: DimAxis; index: number; info: ColumnInfo | RowInfo | null }
+  | { kind: 'set-style'; cells: CellPos[]; patch: CellStyleOverride }
 
 /** dim 命令(列宽/行高)— 仅维度族,无格位置 */
 export type DimCommand = Extract<EditCommand, { kind: 'set-dim' } | { kind: 'restore-dim' }>
@@ -39,6 +47,8 @@ export function affectedOf(cmd: EditCommand): CellPos[] {
     case 'set-cells':
       return cmd.cells.map((c) => ({ row: c.row, col: c.col }))
     case 'restore-cells':
+      return cmd.cells.map((c) => ({ row: c.row, col: c.col }))
+    case 'set-style':
       return cmd.cells.map((c) => ({ row: c.row, col: c.col }))
     case 'set-dim':
     case 'restore-dim':
@@ -74,7 +84,7 @@ export function applyCommand(sheet: SheetModel, cmd: EditCommand): ApplyResult {
     }
     return { inverse: { kind: 'restore-dim', axis: cmd.axis, index: cmd.index, info: priorInfo }, affected }
   }
-  // 单元格族:逆=restore-cells(捕获前态)
+  // 单元格族:逆=restore-cells(捕获前态;set-style 也走它 → 空格上色的逆=删格)
   const prior = capture(sheet, affected)
   switch (cmd.kind) {
     case 'set-value':
@@ -85,6 +95,9 @@ export function applyCommand(sheet: SheetModel, cmd: EditCommand): ApplyResult {
       break
     case 'restore-cells':
       for (const { row, col, cell } of cmd.cells) restoreCell(sheet, row, col, cell)
+      break
+    case 'set-style':
+      for (const { row, col } of cmd.cells) applyStyleOverride(sheet, row, col, cmd.patch)
       break
   }
   return { inverse: { kind: 'restore-cells', cells: prior }, affected }

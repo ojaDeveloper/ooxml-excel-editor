@@ -3,7 +3,7 @@
  * 只改 SheetModel,不碰渲染;调用方负责重绘(同 sortColumn 的"改完重绘")。
  * 全部以"前态可逆"为原则:返回旧值供命令栈做 undo。
  */
-import type { CellModel, CellStyle, ColumnInfo, MergeRange, RowInfo, SheetModel } from './types'
+import type { CellModel, CellStyle, CellStyleOverride, ColumnInfo, MergeRange, RowInfo, SheetModel } from './types'
 import { cellKey } from './types'
 import type { CellValue } from './data-access'
 
@@ -109,4 +109,33 @@ export function internStyle(sheet: SheetModel, style: CellStyle): number {
   for (let i = 0; i < sheet.styles.length; i++) if (JSON.stringify(sheet.styles[i]) === json) return i
   sheet.styles.push(style)
   return sheet.styles.length - 1
+}
+
+/** 合并样式覆盖到完整样式: font/fill/borders 浅合并,其余字段覆盖(单一真相源,渲染与编辑共用)。 */
+export function mergeStyleOverride(base: CellStyle, over: CellStyleOverride): CellStyle {
+  return {
+    ...base,
+    ...over,
+    font: over.font ? { ...base.font, ...over.font } : base.font,
+    fill: over.fill ? { ...base.fill, ...over.fill } : base.fill,
+    borders: over.borders ? { ...base.borders, ...over.borders } : base.borders,
+  }
+}
+
+/**
+ * 给一个格套样式覆盖(E5):取基样式 → 合并 → intern → 改 styleId。
+ * 空格(不在 Map)→ 以默认样式为基,新建一个 type='empty' 的格承载 styleId(像 Excel 给空格上色)。
+ */
+export function applyStyleOverride(sheet: SheetModel, row: number, col: number, patch: CellStyleOverride): void {
+  const key = cellKey(row, col)
+  const cell = sheet.cells.get(key)
+  const base = (cell ? sheet.styles[cell.styleId] : sheet.styles[0]) ?? sheet.styles[0]
+  if (!base) return // 无任何样式表(极端防御)
+  const styleId = internStyle(sheet, mergeStyleOverride(base, patch))
+  if (cell) {
+    cell.styleId = styleId
+  } else {
+    sheet.cells.set(key, { row, col, type: 'empty', raw: null, styleId })
+    growDimension(sheet, row, col)
+  }
 }
