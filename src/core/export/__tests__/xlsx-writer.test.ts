@@ -69,4 +69,24 @@ describe('xlsx-writer 往返(从模型重建 → 重解析,值/样式/合并/几
     await wb2.xlsx.load(await (await workbookToXlsxBlob(wb)).arrayBuffer())
     expect(wb2.getWorksheet('S1')!.getCell(2, 1).value).toBe('EDITED')
   })
+
+  it('图片导出:twoCell 锚出 br(随格缩放),oneCell 锚出 ext(F2)', async () => {
+    const PNG = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+    const wb = workbook()
+    const s = wb.sheets[0] as any
+    s.defaultColWidth = 64
+    s.defaultRowHeight = 20
+    s.images = [
+      { src: PNG, from: { col: 1, colOffEmu: 0, row: 1, rowOffEmu: 0 }, to: { col: 3, colOffEmu: 0, row: 2, rowOffEmu: 0 } }, // twoCell
+      { src: PNG, from: { col: 0, colOffEmu: 95250, row: 0, rowOffEmu: 0 }, extWidthEmu: 952500, extHeightEmu: 952500 }, // oneCell + 偏移
+    ]
+    const wb2 = new ExcelJS.Workbook()
+    await wb2.xlsx.load(await (await workbookToXlsxBlob(wb)).arrayBuffer())
+    const imgs = wb2.getWorksheet('S1')!.getImages()
+    expect(imgs).toHaveLength(2)
+    const twoCell = imgs.find((i) => i.range.br)!
+    const oneCell = imgs.find((i) => !i.range.br)!
+    expect(twoCell.range.br!.nativeCol).toBe(3) // br 到第 4 列
+    expect(oneCell.range.tl.nativeColOff).toBeGreaterThan(0) // 子格 EMU 偏移保真(非 0)
+  })
 })

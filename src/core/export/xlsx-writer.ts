@@ -117,24 +117,38 @@ function addImageTo(wb: { addImage(o: unknown): number }, ws: { addImage(id: num
     imgOpts = { base64: anchor.src.slice(comma + 1), extension: extOfMime(meta) }
   } else return // blob: / http url 同步读不了,跳过
   const id = wb.addImage(imgOpts)
-  const rect = anchorRect(metrics, anchor) // px@zoom1
-  const frac = (sizeAt: (i: number) => number, base: number, offPx: number) => {
-    let i = base
-    let off = offPx
-    while (off > 0) {
-      const sz = sizeAt(i)
-      if (sz <= 0 || off < sz) break
-      off -= sz
-      i++
-    }
-    const sz = sizeAt(i)
-    return i + (sz > 0 ? off / sz : 0)
+  // 单元格 + EMU 偏移 → ExcelJS 分数列/行(整数部=格,小数部=该格内偏移比例;ExcelJS 据列宽换回 EMU)
+  const fracCol = (col: number, offEmu: number) => fractional((c) => metrics.colWidth(c), col, emuToPx(offEmu))
+  const fracRow = (row: number, offEmu: number) => fractional((r) => metrics.rowHeight(r), row, emuToPx(offEmu))
+  const tl = { col: fracCol(anchor.from.col, anchor.from.colOffEmu), row: fracRow(anchor.from.row, anchor.from.rowOffEmu) }
+  const editAs =
+    anchor.editAs === 'oneCell' || anchor.editAs === 'absolute' || anchor.editAs === 'twoCell'
+      ? anchor.editAs
+      : anchor.to
+        ? 'twoCell'
+        : 'oneCell'
+  if (anchor.to) {
+    // 双格锚:tl + br(随单元格缩放,保真原始 twoCellAnchor)
+    ws.addImage(id, { tl, br: { col: fracCol(anchor.to.col, anchor.to.colOffEmu), row: fracRow(anchor.to.row, anchor.to.rowOffEmu) }, editAs })
+  } else {
+    // 单格锚:tl + 像素尺寸(origin 归一/oneCellAnchor)
+    const rect = anchorRect(metrics, anchor)
+    ws.addImage(id, { tl, ext: { width: rect.width, height: rect.height }, editAs })
   }
-  ws.addImage(id, {
-    tl: { col: frac((c) => metrics.colWidth(c), anchor.from.col, emuToPx(anchor.from.colOffEmu)), row: frac((r) => metrics.rowHeight(r), anchor.from.row, emuToPx(anchor.from.rowOffEmu)) },
-    ext: { width: rect.width, height: rect.height },
-    editAs: 'oneCell',
-  })
+}
+
+/** 单元格 base + 像素偏移 → ExcelJS 分数索引(走列/行宽累减,跨格进位)。 */
+function fractional(sizeAt: (i: number) => number, base: number, offPx: number): number {
+  let i = base
+  let off = offPx
+  while (off > 0) {
+    const sz = sizeAt(i)
+    if (sz <= 0 || off < sz) break
+    off -= sz
+    i++
+  }
+  const sz = sizeAt(i)
+  return i + (sz > 0 ? off / sz : 0)
 }
 
 /** 重建一个工作表到 ExcelJS。 */
