@@ -266,8 +266,8 @@ const myEditor: EditorResolver = (cell, pos) => {
 
 ### v1 已知限制
 
-- 增删行列**不自动重写公式引用文本**(`=A5` 删一行后仍是 `=A5`,缓存值随格移动);开 `recalc` 时引擎按新结构重建。
-- 图片导出忽略部分子格 EMU 偏移;写回 .xlsx 丢 VBA/工作表保护/复杂 DrawingML(见 [导出保真边界](#导出--打印))。
+- 增删行列**会自动重写公式引用**(`=A5` 上方插一行 → `=A6`,删被引用行 → `#REF!`,含跨表 `Sheet1!A5`)。
+- 写回 .xlsx 默认从模型重建,丢 VBA/工作表保护/复杂 DrawingML 等;需要更高保真可用 `exportXlsx({ fidelity: 'overlay' })` **重载原件叠加编辑**(见 [导出保真边界](#导出--打印))。
 
 ## 扩展 API(不改源码定制)
 
@@ -312,11 +312,16 @@ const myEditor: EditorResolver = (cell, pos) => {
 | `exportPdf(opts?)` | → `Promise<Blob>`,分页 PDF(需可选依赖 `jspdf`) |
 | `downloadPdf(opts?)` | 导出 PDF 并触发下载 |
 | `print(opts?)` | 打开系统打印对话框(可另存为 PDF,零依赖) |
-| `exportXlsx(opts?)` / `downloadXlsx(opts?)` | → `Promise<Blob>` / 下载 **.xlsx**(从编辑后模型重建,所见即所得;需可选依赖 `exceljs`) |
+| `exportXlsx(opts?)` / `downloadXlsx(opts?)` | → `Promise<Blob>` / 下载 **.xlsx**(默认从模型重建;`{fidelity:'overlay'}` 重载原件叠加,保真更高;需可选依赖 `exceljs`) |
 | `exportJson(opts?)` / `downloadJson(opts?)` | → `string` / 下载 **.json**(各表首行作 key 的对象数组,raw 类型值) |
 | `exportCsv(opts?)` / `downloadCsv(opts?)` | → `string` / 下载 **.csv**(格式化显示值,带 UTF-8 BOM;`opts.target` 指定表,默认当前表) |
 
-**编辑后导出(.xlsx / JSON / CSV)** —— 三种格式都建在**同一份内存数据层**上(`WorkbookModel`:读 `data-access` + 写 `mutations`),无需为每种格式各写一遍解析,故与渲染所见、彼此之间天然一致。.xlsx 走"**从编辑后模型重建**":遍历 cells/公式/样式(字体/填充/边框/对齐/数字格式)/合并/行高列宽/冻结/图片 重组成 ExcelJS 工作簿。**保真边界**:重建覆盖上述结构,但**丢失** VBA 宏、工作表保护、复杂 DrawingML(图表/形状以位图另算)、条件格式细节、公式引用在增删行列后的自动重写。JSON 默认输出 raw 类型值(`{format:true}` 可改显示串);CSV 默认输出格式化显示值(WYSIWYG)。
+**编辑后导出(.xlsx / JSON / CSV)** —— 三种格式都建在**同一份内存数据层**上(`WorkbookModel`:读 `data-access` + 写 `mutations`),无需为每种格式各写一遍解析,故与渲染所见、彼此之间天然一致。JSON 默认输出 raw 类型值(`{format:true}` 可改显示串);CSV 默认输出格式化显示值(WYSIWYG)。
+
+**.xlsx 两种保真模式**:
+
+- **`rebuild`(默认)** —— **从编辑后模型完整重建**:遍历 cells/公式/样式(字体/填充/边框/对齐/数字格式)/合并/行高列宽/冻结/图片 重组成 ExcelJS 工作簿。干净、所见即所得,但**丢失**原件里我们不建模的部分(条件格式、数据验证、VBA 宏、工作表保护、复杂 DrawingML/图表 等)。图片导出区分 oneCell/twoCell 锚点 + 子格 EMU 偏移。
+- **`overlay`(`exportXlsx({ fidelity: 'overlay' })`)** —— **重载原始 .xlsx,只把编辑后的 值/样式/合并/行高列宽/冻结 叠加上去**,**保留** ExcelJS 能往返的其余部分(条件格式 / 数据验证 / 打印设置 / 定义名 / 图表 等)。组件加载时自动留存原件字节供其使用;缺原件时自动回退 `rebuild`。注:overlay 不反映**增删行列 / 图片**编辑(那类用 `rebuild`)。
 
 公共选项:`target`(`'active'`(默认)/`'all'`/索引/索引数组)、`range`(限定单元格区域)、`scale`(清晰度,默认 2)、`includeHeaders`、`gridlines`、`background`;PDF/打印另有 `format`(a4/a3/letter/`[宽,高]mm`)、`orientation`、`margin`(mm)、`fitToWidth`。
 

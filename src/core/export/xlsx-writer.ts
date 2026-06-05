@@ -7,13 +7,22 @@
  * 接口留口 `fidelity`:日后可加"重载原 ArrayBuffer 叠加"高保真模式,API 不破。
  */
 import type { CellModel, CellStyle, ImageAnchor, SheetModel, WorkbookModel } from '../model/types'
+import { cellKey } from '../model/types'
 import { GridMetrics } from '../layout/grid-metrics'
 import { anchorRect } from '../overlay/anchor'
 import { emuToPx, DEFAULT_MDW, PX_PER_POINT } from '../layout/units'
 
 export interface XlsxExportOptions {
-  /** 保真模式:'rebuild'(默认,从模型重建)。预留 'overlay'(重载原件叠加)日后实现。 */
-  fidelity?: 'rebuild'
+  /**
+   * 保真模式:
+   * - `'rebuild'`(默认):从编辑后模型完整重建(干净,但丢原件里我们不建模的部分:条件格式/数据验证/VBA…)。
+   * - `'overlay'`:重载原始 .xlsx,只把编辑后的 值/样式/合并/行高列宽/冻结 叠加上去,**保留** ExcelJS
+   *   能往返的其余部分(条件格式/数据验证/打印设置/定义名/图表等)。需 `sourceBuffer`(壳自动注入);
+   *   缺原件时自动回退 rebuild。注:overlay 不反映 结构增删行列 / 图片 编辑(那类用 rebuild)。
+   */
+  fidelity?: 'rebuild' | 'overlay'
+  /** 原始 .xlsx 字节(overlay 模式用;由 exporter 从 host 注入,用方一般不直接传) */
+  sourceBuffer?: ArrayBuffer
 }
 
 /** css 颜色 → ExcelJS ARGB('FFRRGGBB');无法识别返 undefined。 */
@@ -117,24 +126,38 @@ function addImageTo(wb: { addImage(o: unknown): number }, ws: { addImage(id: num
     imgOpts = { base64: anchor.src.slice(comma + 1), extension: extOfMime(meta) }
   } else return // blob: / http url 同步读不了,跳过
   const id = wb.addImage(imgOpts)
-  const rect = anchorRect(metrics, anchor) // px@zoom1
-  const frac = (sizeAt: (i: number) => number, base: number, offPx: number) => {
-    let i = base
-    let off = offPx
-    while (off > 0) {
-      const sz = sizeAt(i)
-      if (sz <= 0 || off < sz) break
-      off -= sz
-      i++
-    }
-    const sz = sizeAt(i)
-    return i + (sz > 0 ? off / sz : 0)
+  // 单元格 + EMU 偏移 → ExcelJS 分数列/行(整数部=格,小数部=该格内偏移比例;ExcelJS 据列宽换回 EMU)
+  const fracCol = (col: number, offEmu: number) => fractional((c) => metrics.colWidth(c), col, emuToPx(offEmu))
+  const fracRow = (row: number, offEmu: number) => fractional((r) => metrics.rowHeight(r), row, emuToPx(offEmu))
+  const tl = { col: fracCol(anchor.from.col, anchor.from.colOffEmu), row: fracRow(anchor.from.row, anchor.from.rowOffEmu) }
+  const editAs =
+    anchor.editAs === 'oneCell' || anchor.editAs === 'absolute' || anchor.editAs === 'twoCell'
+      ? anchor.editAs
+      : anchor.to
+        ? 'twoCell'
+        : 'oneCell'
+  if (anchor.to) {
+    // 双格锚:tl + br(随单元格缩放,保真原始 twoCellAnchor)
+    ws.addImage(id, { tl, br: { col: fracCol(anchor.to.col, anchor.to.colOffEmu), row: fracRow(anchor.to.row, anchor.to.rowOffEmu) }, editAs })
+  } else {
+    // 单格锚:tl + 像素尺寸(origin 归一/oneCellAnchor)
+    const rect = anchorRect(metrics, anchor)
+    ws.addImage(id, { tl, ext: { width: rect.width, height: rect.height }, editAs })
   }
-  ws.addImage(id, {
-    tl: { col: frac((c) => metrics.colWidth(c), anchor.from.col, emuToPx(anchor.from.colOffEmu)), row: frac((r) => metrics.rowHeight(r), anchor.from.row, emuToPx(anchor.from.rowOffEmu)) },
-    ext: { width: rect.width, height: rect.height },
-    editAs: 'oneCell',
-  })
+}
+
+/** 单元格 base + 像素偏移 → ExcelJS 分数索引(走列/行宽累减,跨格进位)。 */
+function fractional(sizeAt: (i: number) => number, base: number, offPx: number): number {
+  let i = base
+  let off = offPx
+  while (off > 0) {
+    const sz = sizeAt(i)
+    if (sz <= 0 || off < sz) break
+    off -= sz
+    i++
+  }
+  const sz = sizeAt(i)
+  return i + (sz > 0 ? off / sz : 0)
 }
 
 /** 重建一个工作表到 ExcelJS。 */
@@ -181,10 +204,73 @@ function writeSheet(ws: any, sheet: SheetModel, wb: any): void {
   }
 }
 
-/** WorkbookModel → .xlsx Blob(懒加载 exceljs)。 */
-export async function workbookToXlsxBlob(workbook: WorkbookModel, _opts: XlsxExportOptions = {}): Promise<Blob> {
+const XLSX_MIME = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+
+/** overlay:把编辑后模型的 值/样式/合并/行高列宽/冻结 叠加到已加载的原始工作表(保留其余原件部分)。 */
+function applyModelOntoSheet(ws: any, sheet: SheetModel): void {
+  const live = new Set(sheet.cells.keys())
+  // 清掉原件里有、模型里没有的格(被删/清空)
+  ws.eachRow({ includeEmpty: false }, (row: any, rNum: number) => {
+    row.eachCell({ includeEmpty: false }, (cell: any, cNum: number) => {
+      if (!live.has(cellKey(rNum - 1, cNum - 1))) cell.value = null
+    })
+  })
+  // 套模型格(值 + 样式)
+  for (const cell of sheet.cells.values()) {
+    const ec = ws.getCell(cell.row + 1, cell.col + 1)
+    ec.value = cell.type !== 'empty' ? cellValue(cell) : null
+    const st = sheet.styles[cell.styleId]
+    if (st) applyStyle(ec, st)
+  }
+  // 合并:先拆原有,再按模型合
+  for (const m of [...(ws.model?.merges ?? [])]) {
+    try {
+      ws.unMergeCells(m)
+    } catch {
+      /* 忽略 */
+    }
+  }
+  for (const m of sheet.merges) {
+    try {
+      ws.mergeCells(m.top + 1, m.left + 1, m.bottom + 1, m.right + 1)
+    } catch {
+      /* 忽略 */
+    }
+  }
+  for (const [c, info] of sheet.columns) {
+    const col = ws.getColumn(c + 1)
+    col.width = Math.max(0, (info.width - 5) / DEFAULT_MDW)
+    if (info.hidden) col.hidden = true
+  }
+  for (const [r, info] of sheet.rows) {
+    const row = ws.getRow(r + 1)
+    row.height = info.height / PX_PER_POINT
+    if (info.hidden) row.hidden = true
+  }
+  if (sheet.freeze && (sheet.freeze.frozenRows || sheet.freeze.frozenCols)) {
+    ws.views = [{ state: 'frozen', xSplit: sheet.freeze.frozenCols, ySplit: sheet.freeze.frozenRows }]
+  }
+}
+
+/** WorkbookModel → .xlsx Blob(懒加载 exceljs)。overlay 模式重载原件叠加编辑,否则从模型重建。 */
+export async function workbookToXlsxBlob(workbook: WorkbookModel, opts: XlsxExportOptions = {}): Promise<Blob> {
   const mod = await import('exceljs')
   const ExcelJS = ((mod as { default?: unknown }).default ?? mod) as { Workbook: new () => any }
+
+  // 高保真 overlay:重载原件 + 叠加编辑(保留 ExcelJS 能往返的原件部分)
+  if (opts.fidelity === 'overlay' && opts.sourceBuffer) {
+    const wb = new ExcelJS.Workbook()
+    await wb.xlsx.load(opts.sourceBuffer as any)
+    for (let i = 0; i < workbook.sheets.length; i++) {
+      const sheet = workbook.sheets[i]
+      const ws = wb.worksheets[i] ?? wb.getWorksheet(sheet.name) ?? wb.addWorksheet(sheet.name || `Sheet${i + 1}`)
+      applyModelOntoSheet(ws, sheet)
+    }
+    const buf = await wb.xlsx.writeBuffer()
+    return new Blob([buf], { type: XLSX_MIME })
+  }
+
+  // 默认:从模型完整重建
   const wb = new ExcelJS.Workbook()
   wb.properties.date1904 = workbook.date1904
   for (const sheet of workbook.sheets) {
@@ -194,5 +280,5 @@ export async function workbookToXlsxBlob(workbook: WorkbookModel, _opts: XlsxExp
     writeSheet(ws, sheet, wb)
   }
   const buf = await wb.xlsx.writeBuffer()
-  return new Blob([buf], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+  return new Blob([buf], { type: XLSX_MIME })
 }

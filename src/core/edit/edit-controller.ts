@@ -9,7 +9,8 @@ import { buildCellSnapshot, type CellSnapshot } from '../model/snapshot'
 import { cloneWorkbook, restoreWorkbookInto } from '../model/clone'
 import { cloneImageAnchor } from '../model/mutations'
 import { applyCommand, affectedOf, isDimCommand, isImageCommand, isStructCommand, type CellPos, type DimAxis, type EditCommand } from './commands'
-import type { StructOp } from '../model/structure'
+import { applyStructOp, type StructOp } from '../model/structure'
+import { rewriteWorkbookFormulas } from '../formula/refs'
 import type { FormulaEngine, FormulaEngineFactory } from '../formula/engine'
 import { collectDirty, writeDirty, dependentsOnSheet } from '../formula/recalc'
 
@@ -415,12 +416,25 @@ export class EditController {
       this.host.emit('image-change', { index, before, after, source } satisfies ImageChangePayload)
       return inverse
     }
-    // 结构族(增删行列):全表重建(几何+合并索引+叠加层),引擎按新结构重建
+    // 结构族(增删行列):整簿快照逆 + 跨表公式引用重写;全表重建(几何+合并索引+叠加层)
     if (isStructCommand(cmd)) {
-      const { inverse } = applyCommand(sheet, cmd)
+      const wb = this.host.getWorkbook()
+      if (!wb) return null
+      const si = this.host.getActiveSheetIndex()
+      let inverse: EditCommand
+      if (cmd.kind === 'struct-edit') {
+        const snap = cloneWorkbook(wb) // 整簿快照(跨表公式重写也要可撤销)
+        applyStructOp(wb.sheets[si], cmd.op, cmd.at, cmd.count)
+        rewriteWorkbookFormulas(wb, si, cmd.op, cmd.at, cmd.count) // F1:全簿公式引用重写
+        inverse = { kind: 'restore-wb', snapshot: snap }
+      } else {
+        const cur = cloneWorkbook(wb)
+        restoreWorkbookInto(wb, cmd.snapshot)
+        inverse = { kind: 'restore-wb', snapshot: cur }
+      }
       this.host.onModelChange() // rebuildMetrics(含 merges 索引)+ 重绘
       this.host.rebuildOverlays() // 图片随结构移位/移除
-      if (this.host.isRecalcEnabled()) this.refreshEngine() // v1:引擎重建(不重写公式引用文本)
+      if (this.host.isRecalcEnabled()) this.refreshEngine() // 引擎按新结构 + 新公式文本重建
       const payload: StructChangePayload =
         cmd.kind === 'struct-edit'
           ? { op: cmd.op, at: cmd.at, count: cmd.count, source }

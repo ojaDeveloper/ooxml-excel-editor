@@ -24,6 +24,23 @@ const win = (page: Page, key: string) => page.evaluate((k) => (window as any)[k]
 
 // E7:行列结构编辑 —— 第 2 行(0-based)= 首数据行(B3=5999),第 3 行(B4=399)。
 function run(label: string, url: string, canvasSel: string, handle: string) {
+  test(`${label}: 插入行后公式引用自动重写(B3*C3 → B4*C4)+ undo 还原(F1)`, async ({ page }) => {
+    await page.goto(url)
+    await ready(page, canvasSel, handle)
+    // 样例 D 列(col 3)= B*C 公式;首数据行 D3(row 2)公式引用 B3/C3
+    const d3 = (await call(page, handle, 'getCellSnapshot', 2, 3)) as { cell: { formula: string } }
+    expect(d3.cell.formula).toContain('B3') // 重写前引用第 3 行
+
+    await call(page, handle, 'insertRows', 2, 1) // 第 2 行上方插入 → D3 下移到 D4,引用 B3→B4
+    const d4 = (await call(page, handle, 'getCellSnapshot', 3, 3)) as { cell: { formula: string } }
+    expect(d4.cell.formula).toContain('B4') // 引用已重写到第 4 行
+    expect(d4.cell.formula).not.toContain('B3')
+
+    await call(page, handle, 'undo') // 还原:公式回到 D3 + 引用 B3
+    const back = (await call(page, handle, 'getCellSnapshot', 2, 3)) as { cell: { formula: string } }
+    expect(back.cell.formula).toContain('B3')
+  })
+
   test(`${label}: insertRows 下移 + struct-change + undo;deleteRows 上移 + undo`, async ({ page }) => {
     await page.goto(url)
     await ready(page, canvasSel, handle)

@@ -148,7 +148,7 @@ function fmtNum(n: number): string {
 }
 
 export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(function ExcelViewer(props, ref) {
-  const { loading, error, workbook, progress, load } = useExcelDocument()
+  const { loading, error, workbook, progress, load, sourceBuffer } = useExcelDocument()
   const [activeSheet, setActiveSheet] = useState(0)
   const [zoom, setZoom] = useState(1)
   const [findOpen, setFindOpen] = useState(false)
@@ -360,12 +360,13 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     const sheet: SheetModel | null = workbook.sheets[activeSheet] ?? workbook.sheets[0] ?? null
     if (!sheet) return
     controller.rebuild(sheet, workbook, zoom, buildRendererOpts())
+    controller.setSourceBuffer(sourceBuffer) // 注入原件字节(overlay 高保真导出)
     renderPluginOverlays()
     const payload = { index: activeSheet, name: sheet.name }
     propsRef.current.onSheetChange?.(payload)
     firePlugin('sheet-change', payload)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workbook, activeSheet, props.theme, props.cellStyle, props.plugins])
+  }, [workbook, activeSheet, props.theme, props.cellStyle, props.plugins, sourceBuffer])
 
   // ---- 缩放 ----
   useEffect(() => {

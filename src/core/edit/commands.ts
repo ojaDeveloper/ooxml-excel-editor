@@ -2,7 +2,7 @@
  * 编辑命令(框架无关)。每个命令 apply 时**捕获逆向载荷**,逆向统一为 restore-cells
  * (精确还原一组格的底层 CellModel),于是 undo/redo 跨 值/区域/清空(及后续样式/图片)同一套栈。
  */
-import type { CellModel, CellStyleOverride, ColumnInfo, ImageAnchor, RowInfo, SheetModel } from '../model/types'
+import type { CellModel, CellStyleOverride, ColumnInfo, ImageAnchor, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
 import type { CellValue } from '../model/data-access'
 import { cloneCell } from '../model/snapshot'
@@ -17,7 +17,7 @@ import {
   removeImage,
   cloneImageAnchor,
 } from '../model/mutations'
-import { applyStructOp, captureStructure, restoreStructure, type StructOp, type StructSnapshot } from '../model/structure'
+import type { StructOp } from '../model/structure'
 
 export type CellPos = { row: number; col: number }
 export type DimAxis = 'col' | 'row'
@@ -33,7 +33,7 @@ export type EditCommand =
   | { kind: 'image-add'; anchor: ImageAnchor; index?: number }
   | { kind: 'image-remove'; index: number }
   | { kind: 'struct-edit'; op: StructOp; at: number; count: number }
-  | { kind: 'restore-struct'; snapshot: StructSnapshot }
+  | { kind: 'restore-wb'; snapshot: WorkbookModel }
 
 /** dim 命令(列宽/行高)— 仅维度族,无格位置 */
 export type DimCommand = Extract<EditCommand, { kind: 'set-dim' } | { kind: 'restore-dim' }>
@@ -47,10 +47,10 @@ export function isImageCommand(cmd: EditCommand): cmd is ImageCommand {
   return cmd.kind === 'image-set' || cmd.kind === 'image-add' || cmd.kind === 'image-remove'
 }
 
-/** struct 命令(增删行列)— 无格位置,发 struct-change,全表重建 */
-export type StructCommand = Extract<EditCommand, { kind: 'struct-edit' } | { kind: 'restore-struct' }>
+/** struct 命令(增删行列)— 无格位置,发 struct-change,整簿快照逆(支持跨表公式重写撤销) */
+export type StructCommand = Extract<EditCommand, { kind: 'struct-edit' } | { kind: 'restore-wb' }>
 export function isStructCommand(cmd: EditCommand): cmd is StructCommand {
-  return cmd.kind === 'struct-edit' || cmd.kind === 'restore-struct'
+  return cmd.kind === 'struct-edit' || cmd.kind === 'restore-wb'
 }
 
 export interface ApplyResult {
@@ -77,7 +77,7 @@ export function affectedOf(cmd: EditCommand): CellPos[] {
     case 'image-add':
     case 'image-remove':
     case 'struct-edit':
-    case 'restore-struct':
+    case 'restore-wb':
       return []
   }
 }
@@ -125,17 +125,7 @@ export function applyCommand(sheet: SheetModel, cmd: EditCommand): ApplyResult {
     removeImage(sheet, cmd.index)
     return { inverse: { kind: 'image-add', anchor: prior, index: cmd.index }, affected }
   }
-  // 结构族(增删行列):逆=restore-struct(应用前/后整张结构快照,bulletproof undo/redo)
-  if (cmd.kind === 'struct-edit') {
-    const snap = captureStructure(sheet)
-    applyStructOp(sheet, cmd.op, cmd.at, cmd.count)
-    return { inverse: { kind: 'restore-struct', snapshot: snap }, affected }
-  }
-  if (cmd.kind === 'restore-struct') {
-    const cur = captureStructure(sheet)
-    restoreStructure(sheet, cmd.snapshot)
-    return { inverse: { kind: 'restore-struct', snapshot: cur }, affected }
-  }
+  // 结构族(增删行列)由 EditController.exec 直接处理(需 workbook 级快照 + 跨表公式重写),不走这里
   // 单元格族:逆=restore-cells(捕获前态;set-style 也走它 → 空格上色的逆=删格)
   const prior = capture(sheet, affected)
   switch (cmd.kind) {

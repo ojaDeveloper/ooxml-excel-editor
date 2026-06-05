@@ -147,7 +147,7 @@ const emit = defineEmits<{
   (e: 'struct-change', payload: StructChangePayload): void
 }>()
 
-const { loading, error, workbook, load, progress } = useExcelDocument()
+const { loading, error, workbook, load, progress, sourceBuffer } = useExcelDocument()
 
 const progressLabel = computed(() => {
   const p = progress.value
@@ -204,6 +204,7 @@ function rebuildRenderer() {
     theme: effectiveTheme.value,
     cellStyle: hasCellStyleHook.value ? combinedCellStyle : undefined,
   })
+  controller.setSourceBuffer(sourceBuffer.value) // 注入原件字节(overlay 高保真导出)
 }
 
 function onScroll() {

@@ -2,6 +2,28 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.1.0] - 2026-06-05
+
+把 1.0.0 编辑能力的三处已知 v1 限制做成增强(向后兼容)。
+
+### 公式引用自动重写(增删行列)
+- 增删行/列后,自动重写全簿公式里指向该表的 A1 引用(`=A5` 插一行→`=A6`;删被引用行→`#REF!`),
+  含绝对/相对 `$`、跨表 `Sheet1!A5`/`'My Sheet'!A5`、区域(删除收缩、全删 `#REF!`);跳过字符串字面量
+  与函数名。结构命令改为整簿快照(`cloneWorkbook`)→ 跨表重写也可撤销;开 `recalc` 时引擎按新公式重建。
+- 新 `formula/refs.ts`:`shiftFormulaRefs` / `rewriteWorkbookFormulas`。
+
+### 图片导出保真
+- 区分锚型:有 `to` 的双格锚 → ExcelJS `br`(随单元格缩放);单格锚 → `tl`(含子格 EMU 偏移转分数列/行)
+  + 像素 `ext`;`editAs` 跟随模型。不再一律导成 oneCell+ext、不再丢子格偏移。
+
+### .xlsx 高保真 overlay 导出
+- 新 `exportXlsx({ fidelity: 'overlay' })`:重载原始 .xlsx,只把编辑后的 值/样式/合并/行高列宽/冻结
+  叠加上去,**保留** ExcelJS 能往返的其余部分(条件格式/数据验证/打印设置/定义名/图表 等)——默认 `rebuild`
+  会丢这些。组件加载时留存原件字节供其使用,缺原件自动回退 `rebuild`。overlay 不反映 增删行列/图片 编辑。
+
+### 测试
+- 188 单测 + 40 e2e + build 全绿;core 仍零 vue/react/hyperformula/exceljs 静态 import。
+
 ## [1.0.0] - 2026-06-05
 
 **只读 → 可编辑** —— 在 0.2.0(只读双壳)基础上,把组件升级成**可选编辑器**(默认仍只读、零回归)。

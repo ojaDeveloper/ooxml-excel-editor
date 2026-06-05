@@ -110,6 +110,8 @@ export { cloneWorkbook, restoreWorkbookInto } from './model/clone'
 export { cellContentForEngine } from './formula/engine'
 export type { FormulaEngine, FormulaEngineFactory, DirtyCell } from './formula/engine'
 export { defaultFormulaEngineFactory } from './formula/hyperformula-adapter'
+export { shiftFormulaRefs, rewriteWorkbookFormulas } from './formula/refs'
+export type { ShiftSpec, ShiftAxis } from './formula/refs'
 export { CellEditorHost } from './edit/editor-host'
 export type { CellEditorContext, CellEditorFactory, EditorResolver, EditorCommitValue } from './edit/editor-context'
 
