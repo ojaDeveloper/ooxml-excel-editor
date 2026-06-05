@@ -20,6 +20,7 @@ import { CanvasRenderer, type ViewState } from '@/core/render/canvas-renderer'
 import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { ViewerController, type TooltipState, type FindState } from '@/core/viewer/controller'
 import type { EditConfig } from '@/core/edit/types'
+import type { FormulaEngineFactory } from '@/core/formula/engine'
 import type { CellChangePayload, DimChangePayload, DirtyChangePayload } from '@/core/edit/edit-controller'
 import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
 import { revokeImages } from '@/core/finalize'
@@ -62,6 +63,10 @@ const props = withDefaults(
     readOnlyRanges?: MergeRange[]
     /** 自定义单元格编辑器(按格返回工厂;覆盖插件 editor)。需 editable 开启 */
     editor?: EditorResolver
+    /** 公式重算(E4):默认 false 沿用缓存值。开启后编辑公式/被引用格 → 依赖格自动重算。需 editable */
+    recalc?: boolean
+    /** 自定义/自研公式引擎工厂(可换引擎);不给则用默认 HyperFormula(需 npm i hyperformula) */
+    formulaEngine?: FormulaEngineFactory
   }>(),
   // toolbar 默认 true(显示内置项);若不显式给默认,Vue 会把布尔型 prop 缺省判成 false
   { openLinks: true, toolbar: true },
@@ -95,6 +100,8 @@ const effectiveEditConfig = computed<EditConfig>(() => ({
   editable: props.editable,
   cellReadOnly: props.cellReadOnly,
   readOnlyRanges: props.readOnlyRanges,
+  recalc: props.recalc,
+  formulaEngine: props.formulaEngine,
 }))
 // 合并编辑器解析器(E2:组件 editor prop 优先,其次插件 editor 数组序首个非空)
 function resolveEditor(cell: CellModel | null, pos: { row: number; col: number }): CellEditorFactory | void {
@@ -524,6 +531,7 @@ const viewerApi: ViewerApi = {
   isEditing: () => controller?.isEditing() ?? false,
   setColumnWidth: (col, width) => controller?.setColumnWidth(col, width) ?? false,
   setRowHeight: (row, height) => controller?.setRowHeight(row, height) ?? false,
+  isRecalcReady: () => controller?.isRecalcReady() ?? false,
   isDirty: () => controller?.isDirty() ?? false,
   resetToOriginal: () => controller?.resetToOriginal() ?? false,
   exportImage,

@@ -15,6 +15,7 @@ import { cellKey } from '../model/types'
 import type { EditConfig } from '../edit/types'
 import { resolveEditable } from '../edit/permissions'
 import { EditController, type EditControllerHost, type EditEventName } from '../edit/edit-controller'
+import { defaultFormulaEngineFactory } from '../formula/hyperformula-adapter'
 import type { CellValue } from '../model/data-access'
 import type { CellSnapshot } from '../model/snapshot'
 import { CellEditorHost } from '../edit/editor-host'
@@ -171,6 +172,12 @@ export class ViewerController {
       getDate1904: () => this.workbook?.date1904 ?? false,
       isEditable: (row, col) => this.isCellEditable(row, col),
       isEditingEnabled: () => !!this.editCfg.editable,
+      getActiveSheetIndex: () => this.activeIndex,
+      isRecalcEnabled: () => !!this.editCfg.editable && !!this.editCfg.recalc,
+      getEngineFactory: () =>
+        this.editCfg.editable && this.editCfg.recalc
+          ? (this.editCfg.formulaEngine ?? defaultFormulaEngineFactory)
+          : null,
       onModelChange: () => {
         this.renderer?.rebuildMetrics()
         this.refreshContentSize()
@@ -200,7 +207,10 @@ export class ViewerController {
 
     this.sheet = sheet
     this.workbook = workbook
-    if (freshWorkbook) this.edit.resetDirtyBaseline() // 换新簿:作废 baseline + 清脏(切表保留)
+    if (freshWorkbook) {
+      this.edit.resetDirtyBaseline() // 换新簿:作废 baseline + 清脏(切表保留)
+      this.edit.refreshEngine() // 换新簿:为新簿重建公式引擎(切表不重建)
+    }
     this.activeIndex = Math.max(0, workbook.sheets.indexOf(sheet))
     this.rendererOpts = opts
     this.renderer = new CanvasRenderer(this.els.canvas, sheet, workbook, zoom, opts)
@@ -309,6 +319,10 @@ export class ViewerController {
   setRowHeight(row: number, height: number): boolean {
     return this.edit.setDimension('row', row, height)
   }
+  /** 公式引擎是否已就绪(recalc 开启 + 异步 warm 完成);未开重算恒 false。 */
+  isRecalcReady(): boolean {
+    return this.edit.isRecalcReady()
+  }
   /** 当前是否有未保存修改(自加载/还原以来发生过编辑或 resize)。 */
   isDirty(): boolean {
     return this.edit.isDirty()
@@ -337,6 +351,7 @@ export class ViewerController {
     this.rafId = 0
     this.overlays.dispose()
     this.editorHost.dispose()
+    this.edit.disposeEngine()
   }
 
   /** 内容总尺寸变化 → 量 + 直接撑 spacer(滚动范围由它决定) */
@@ -1177,6 +1192,7 @@ export class ViewerController {
   /** 设置编辑配置(默认只读;壳在挂载 + props 变化时调) */
   setEditConfig(cfg: EditConfig): void {
     this.editCfg = cfg ?? {}
+    this.edit.refreshEngine() // recalc/formulaEngine 可能变了 → 重置引擎并按需点火
   }
 
   /** 该格当前是否可编辑(综合 editable + readOnlyRanges + cellReadOnly) */

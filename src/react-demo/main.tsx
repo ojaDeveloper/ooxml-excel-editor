@@ -73,6 +73,7 @@ function Demo() {
           fileName={fileName}
           plugins={[demoPlugin]}
           editable={editMode}
+          recalc={editMode}
           readOnlyRanges={[{ top: 1, left: 0, bottom: 1, right: 4 }]}
           editor={demoSelectEditor}
           onCellChange={(p) => {

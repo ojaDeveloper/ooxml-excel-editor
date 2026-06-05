@@ -15,6 +15,7 @@ import {
 } from 'react'
 import type { CellModel, CellStyleFn, MergeRange, SheetModel, TransformModelFn, WorkbookModel } from '@/core/model/types'
 import type { EditConfig } from '@/core/edit/types'
+import type { FormulaEngineFactory } from '@/core/formula/engine'
 import type { CellChangePayload, DimChangePayload, DirtyChangePayload } from '@/core/edit/edit-controller'
 import type { CellSnapshot } from '@/core/model/snapshot'
 import type { CellValue } from '@/core/model/data-access'
@@ -55,6 +56,10 @@ export interface ExcelViewerProps {
   readOnlyRanges?: MergeRange[]
   /** 自定义单元格编辑器(按格返回工厂;覆盖插件 editor)。需 editable 开启 */
   editor?: EditorResolver
+  /** 公式重算(E4):默认 false 沿用缓存值。开启后编辑公式/被引用格 → 依赖格自动重算。需 editable */
+  recalc?: boolean
+  /** 自定义/自研公式引擎工厂(可换引擎);不给则用默认 HyperFormula(需 npm i hyperformula) */
+  formulaEngine?: FormulaEngineFactory
   className?: string
   style?: CSSProperties
   onRendered?: (wb: WorkbookModel) => void
@@ -100,6 +105,7 @@ export interface ExcelViewerHandle {
   isEditing: () => boolean
   setColumnWidth: (col: number, width: number) => boolean
   setRowHeight: (row: number, height: number) => boolean
+  isRecalcReady: () => boolean
   isDirty: () => boolean
   resetToOriginal: () => boolean
   exportImage: (opts?: ImageExportOptions) => Promise<Blob>
@@ -179,7 +185,13 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   }
   function buildEditConfig(): EditConfig {
     const p = propsRef.current
-    return { editable: p.editable, cellReadOnly: p.cellReadOnly, readOnlyRanges: p.readOnlyRanges }
+    return {
+      editable: p.editable,
+      cellReadOnly: p.cellReadOnly,
+      readOnlyRanges: p.readOnlyRanges,
+      recalc: p.recalc,
+      formulaEngine: p.formulaEngine,
+    }
   }
   // E2: 合并编辑器解析器(prop 优先,其次插件数组序首个非空)。无任何 editor → undefined
   function editorResolver(): EditorResolver | undefined {
@@ -297,7 +309,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   useEffect(() => {
     controllerRef.current?.setEditConfig(buildEditConfig())
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.editable, props.cellReadOnly, props.readOnlyRanges])
+  }, [props.editable, props.cellReadOnly, props.readOnlyRanges, props.recalc, props.formulaEngine])
 
   // ---- 编辑器解析器同步(E2) ----
   useEffect(() => {
@@ -383,6 +395,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       isEditing: () => controllerRef.current?.isEditing() ?? false,
       setColumnWidth: (col, width) => controllerRef.current?.setColumnWidth(col, width) ?? false,
       setRowHeight: (row, height) => controllerRef.current?.setRowHeight(row, height) ?? false,
+      isRecalcReady: () => controllerRef.current?.isRecalcReady() ?? false,
       isDirty: () => controllerRef.current?.isDirty() ?? false,
       resetToOriginal: () => controllerRef.current?.resetToOriginal() ?? false,
       exportImage: (opts) => controllerRef.current!.exportImage(opts),
@@ -445,6 +458,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     isEditing: () => controllerRef.current?.isEditing() ?? false,
     setColumnWidth: (col, width) => controllerRef.current?.setColumnWidth(col, width) ?? false,
     setRowHeight: (row, height) => controllerRef.current?.setRowHeight(row, height) ?? false,
+    isRecalcReady: () => controllerRef.current?.isRecalcReady() ?? false,
     isDirty: () => controllerRef.current?.isDirty() ?? false,
     resetToOriginal: () => controllerRef.current?.resetToOriginal() ?? false,
     exportImage: (opts) => controllerRef.current!.exportImage(opts),

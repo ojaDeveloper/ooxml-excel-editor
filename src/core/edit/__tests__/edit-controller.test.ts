@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { EditController, type EditControllerHost } from '../edit-controller'
 import type { CellStyle, SheetModel, WorkbookModel } from '../../model/types'
+import type { CellValue } from '../../model/data-access'
+import type { FormulaEngine } from '../../formula/engine'
 import { cellKey } from '../../model/types'
 
 const styleA = { font: {}, fill: { type: 'none' }, numFmt: 'General' } as unknown as CellStyle
 
-function setup(readOnly: Set<string> = new Set(), editingEnabled = true) {
+function setup(readOnly: Set<string> = new Set(), editingEnabled = true, engine: FormulaEngine | null = null) {
   const sheet = {
     name: 'S1',
     cells: new Map(),
@@ -27,6 +29,9 @@ function setup(readOnly: Set<string> = new Set(), editingEnabled = true) {
     getDate1904: () => false,
     isEditable: (r, c) => editingEnabled && !readOnly.has(`${r}:${c}`),
     isEditingEnabled: () => editingEnabled,
+    getActiveSheetIndex: () => 0,
+    isRecalcEnabled: () => !!engine,
+    getEngineFactory: () => (engine ? async () => engine : null),
     onModelChange: () => {
       renders++
     },
@@ -181,5 +186,64 @@ describe('EditController — 脏状态 + 还原原件(E3.5)', () => {
     ec.resetDirtyBaseline() // 模拟换新工作簿
     expect(ec.isDirty()).toBe(false)
     expect(ec.resetToOriginal()).toBe(false) // 无 baseline
+  })
+})
+
+/** 极简 mock 引擎:模型化 B1(0,1) = A1(0,0) + 1,够测 EditController 重算编排(不依赖 hyperformula)。 */
+function mockEngine(): FormulaEngine {
+  const k = (s: number, r: number, c: number) => `${s}:${r}:${c}`
+  const vals = new Map<string, CellValue>()
+  const recomputeB1 = (out: { sheet: number; row: number; col: number; value: CellValue }[]) => {
+    const a1 = vals.get(k(0, 0, 0))
+    if (typeof a1 === 'number') {
+      const b1 = a1 + 1
+      vals.set(k(0, 0, 1), b1)
+      out.push({ sheet: 0, row: 0, col: 1, value: b1 })
+    }
+  }
+  return {
+    setSheets(wb) {
+      const a1 = wb.sheets[0].cells.get(cellKey(0, 0))
+      vals.set(k(0, 0, 0), a1 ? (a1.raw as CellValue) : null)
+    },
+    setCell(s, r, c, content) {
+      const v = typeof content === 'string' && content.startsWith('=') ? null : (content as CellValue)
+      vals.set(k(s, r, c), v)
+      const out = [{ sheet: s, row: r, col: c, value: v }]
+      recomputeB1(out)
+      return out
+    },
+    getValue: (s, r, c) => vals.get(k(s, r, c)) ?? null,
+    destroy() {},
+  }
+}
+
+describe('EditController — 公式重算级联(E4;mock 引擎)', () => {
+  it('编辑被引用格 → 依赖格自动重算 + 发 cell-change;undo 反向重算', async () => {
+    const { sheet, ec, events } = setup(new Set(), true, mockEngine())
+    // 种子:A1=5(值),B1=公式 =A1+1(缓存 6)
+    sheet.cells.set(cellKey(0, 0), { row: 0, col: 0, type: 'number', raw: 5, styleId: 0 } as never)
+    sheet.cells.set(cellKey(0, 1), { row: 0, col: 1, type: 'formula', formula: '=A1+1', raw: 6, styleId: 0 } as never)
+    await ec.warmEngine()
+
+    // 改 A1 → 10:B1 应级联到 11 + 发 B1 的 cell-change
+    ec.editCell(0, 0, 10)
+    expect(sheet.cells.get(cellKey(0, 1))!.raw).toBe(11) // 依赖格重算写回
+    const b1Evt = events.filter((e) => e.event === 'cell-change' && e.payload.after?.col === 1)
+    expect(b1Evt.length).toBeGreaterThanOrEqual(1)
+    expect(b1Evt.at(-1)!.payload.before.raw).toBe(6) // 前态(旧缓存)
+    expect(b1Evt.at(-1)!.payload.after.raw).toBe(11) // 后态(重算)
+
+    // undo → A1 回 5,B1 反向重算回 6
+    ec.undo()
+    expect(sheet.cells.get(cellKey(0, 0))!.raw).toBe(5)
+    expect(sheet.cells.get(cellKey(0, 1))!.raw).toBe(6)
+  })
+
+  it('引擎未就绪(未 warm)→ 编辑不重算(降级,不报错)', () => {
+    const { sheet, ec } = setup(new Set(), true, mockEngine())
+    sheet.cells.set(cellKey(0, 1), { row: 0, col: 1, type: 'formula', formula: '=A1+1', raw: 6, styleId: 0 } as never)
+    ec.editCell(0, 0, 10) // 未 warmEngine → 引擎未就绪 → B1 不变
+    expect(sheet.cells.get(cellKey(0, 1))!.raw).toBe(6)
   })
 })

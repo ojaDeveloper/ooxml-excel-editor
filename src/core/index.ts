@@ -84,6 +84,10 @@ export {
   restoreDimension,
 } from './model/mutations'
 export { cloneWorkbook, restoreWorkbookInto } from './model/clone'
+// ---- 公式重算(E4;可换引擎,HyperFormula 默认 + 可选 peer) ----
+export { cellContentForEngine } from './formula/engine'
+export type { FormulaEngine, FormulaEngineFactory, DirtyCell } from './formula/engine'
+export { defaultFormulaEngineFactory } from './formula/hyperformula-adapter'
 export { CellEditorHost } from './edit/editor-host'
 export type { CellEditorContext, CellEditorFactory, EditorResolver, EditorCommitValue } from './edit/editor-context'
 

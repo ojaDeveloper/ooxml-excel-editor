@@ -37,6 +37,8 @@ npm i ooxml-excel-preview exceljs
 
 # echarts 可选:仅渲染图表时需要;jspdf 可选:仅导出 PDF 时需要
 npm i echarts jspdf
+# hyperformula 可选:仅开启编辑 + 公式重算(recalc)时需要
+npm i hyperformula
 ```
 
 三个入口:
@@ -47,7 +49,9 @@ npm i echarts jspdf
 | `ooxml-excel-preview/react` | React 组件 `<ExcelViewer>` | `react` + `react-dom` + `exceljs` |
 | `ooxml-excel-preview/core` | 框架无关引擎(解析/渲染/控制器/导出/读数据) | `exceljs` |
 
-`exceljs` 必需;`vue` / `react` / `react-dom` 按框架二选一(均为可选 peer);`echarts` / `jspdf` 为**可选** peer —— 未装分别只影响"图表渲染""PDF 导出",其余正常,且**绝不打包进你的产物**(运行时才动态加载)。
+`exceljs` 必需;`vue` / `react` / `react-dom` 按框架二选一(均为可选 peer);`echarts` / `jspdf` / `hyperformula` 为**可选** peer —— 未装分别只影响"图表渲染""PDF 导出""公式重算",其余正常,且**绝不打包进你的产物**(运行时才动态加载)。
+
+> ⚠️ **公式重算的许可证**:默认公式引擎是 [HyperFormula](https://hyperformula.handsontable.com/),**GPL-3.0 / 商业 双授权**。本组件以 `licenseKey: 'gpl-v3'` 调用(适合开源/GPL 场景)。**商业闭源项目**请改用 `formulaEngine` prop 注入你自己持有商业 license 的引擎(或自研引擎),只需实现 `FormulaEngine` 接口即可。不开启 `recalc` 时完全不加载 hyperformula,无许可证负担。
 
 ## 使用
 

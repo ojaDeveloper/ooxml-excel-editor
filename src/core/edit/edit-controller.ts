@@ -8,6 +8,8 @@ import type { CellValue } from '../model/data-access'
 import { buildCellSnapshot, type CellSnapshot } from '../model/snapshot'
 import { cloneWorkbook, restoreWorkbookInto } from '../model/clone'
 import { applyCommand, affectedOf, isDimCommand, type CellPos, type DimAxis, type EditCommand } from './commands'
+import type { FormulaEngine, FormulaEngineFactory } from '../formula/engine'
+import { collectDirty, writeDirty, dependentsOnSheet } from '../formula/recalc'
 
 export type EditEventName = 'cell-change' | 'edit-start' | 'edit-commit' | 'dim-change' | 'dirty-change'
 export type EditSource = 'api' | 'ui' | 'undo' | 'redo'
@@ -41,6 +43,12 @@ export interface EditControllerHost {
   isEditable(row: number, col: number): boolean
   /** 编辑模式是否开启(决定是否懒捕获 baseline / 记账脏状态) */
   isEditingEnabled(): boolean
+  /** 当前活动表索引(0-based;重算把级联事件/写回锚到它) */
+  getActiveSheetIndex(): number
+  /** 是否开启公式重算(EditConfig.recalc) */
+  isRecalcEnabled(): boolean
+  /** 公式引擎工厂(EditConfig.formulaEngine,或默认 HyperFormula;未开重算 → null) */
+  getEngineFactory(): FormulaEngineFactory | null
   /** 模型变更后回调:重建几何 + 重绘 */
   onModelChange(): void
   /** 发编辑事件(壳转 emit + 插件派发) */
@@ -62,8 +70,57 @@ export class EditController {
   private dirty = false
   private baseline: WorkbookModel | null = null
   private baselineFor: WorkbookModel | null = null
+  // 公式引擎(E4;可选,异步懒初始化;未就绪时编辑不重算)
+  private engine: FormulaEngine | null = null
+  private engineFor: WorkbookModel | null = null // 引擎对应哪个 workbook
+  private warming = false
 
   constructor(private host: EditControllerHost) {}
+
+  // ---- 公式引擎生命周期(E4) ----
+  /** 异步懒初始化引擎(开重算 + 有工厂 + 尚未为当前簿建好)。返回的 Promise 供测试 await;生产 fire-and-forget。 */
+  warmEngine(): Promise<void> {
+    if (this.warming || !this.host.isRecalcEnabled()) return Promise.resolve()
+    const factory = this.host.getEngineFactory()
+    const wb = this.host.getWorkbook()
+    if (!factory || !wb || this.engineFor === wb) return Promise.resolve()
+    this.warming = true
+    return (async () => {
+      try {
+        const eng = await factory()
+        if (this.host.getWorkbook() !== wb) {
+          eng.destroy() // 等待期间换了簿 → 丢弃
+          return
+        }
+        eng.setSheets(wb)
+        this.engine?.destroy()
+        this.engine = eng
+        this.engineFor = wb
+      } catch (e) {
+        console.warn('[ooxml-preview] 公式引擎初始化失败(重算已跳过):', e)
+      } finally {
+        this.warming = false
+      }
+    })()
+  }
+  /** 释放引擎(切簿/关重算/dispose)。 */
+  disposeEngine(): void {
+    this.engine?.destroy()
+    this.engine = null
+    this.engineFor = null
+  }
+  /** 配置变化(recalc/factory)或换新簿:重置引擎并按需重新点火。 */
+  refreshEngine(): void {
+    this.disposeEngine()
+    this.warmEngine()
+  }
+  private engineReady(): boolean {
+    return !!this.engine && this.host.isRecalcEnabled() && this.engineFor === this.host.getWorkbook()
+  }
+  /** 公式引擎是否已就绪(异步 warm 完成且对应当前簿);未开重算恒 false。 */
+  isRecalcReady(): boolean {
+    return this.engineReady()
+  }
 
   // ---- 状态查询 ----
   getEditingCell(): CellPos | null {
@@ -244,10 +301,28 @@ export class EditController {
     const affected: CellPos[] = affectedOf(cmd)
     const before = affected.map((p) => buildCellSnapshot(sheet, p.row, p.col, d))
     const { inverse } = applyCommand(sheet, cmd)
+
+    // 公式重算(开启 + 引擎就绪):同步进引擎 → 拿级联脏格 → 写回计算值。
+    // 依赖格(非直接编辑)在写回前拍前态,写回后拍后态,逐格发 cell-change。
+    let deps: CellPos[] = []
+    let depBefore: CellSnapshot[] = []
+    if (this.engineReady()) {
+      const wb = this.host.getWorkbook()!
+      const si = this.host.getActiveSheetIndex()
+      const dirty = collectDirty(this.engine!, wb, si, affected)
+      deps = dependentsOnSheet(dirty, si, affected)
+      depBefore = deps.map((p) => buildCellSnapshot(sheet, p.row, p.col, d))
+      writeDirty(wb, dirty) // 写回(含编辑的公式格自身 + 依赖格)
+    }
+
     this.host.onModelChange()
     affected.forEach((p, i) => {
       const after = buildCellSnapshot(sheet, p.row, p.col, d)
       this.host.emit('cell-change', { before: before[i], after, source } satisfies CellChangePayload)
+    })
+    deps.forEach((p, i) => {
+      const after = buildCellSnapshot(sheet, p.row, p.col, d)
+      this.host.emit('cell-change', { before: depBefore[i], after, source } satisfies CellChangePayload)
     })
     return inverse
   }

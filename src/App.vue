@@ -172,6 +172,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         :file-name="fileName"
         :plugins="plugins"
         :editable="editMode"
+        :recalc="editMode"
         :read-only-ranges="[{ top: 1, left: 0, bottom: 1, right: 4 }]"
         :editor="demoSelectEditor"
         :toolbar="['find', 'filter', 'clear-filter', 'separator', 'copy', 'freeze', 'separator', 'zoom', 'export']"

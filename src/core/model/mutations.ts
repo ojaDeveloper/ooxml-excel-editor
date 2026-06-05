@@ -54,6 +54,16 @@ export function setRangeValues(sheet: SheetModel, range: MergeRange, values: Cel
   }
 }
 
+/**
+ * 写回公式引擎算出的结果(只改 raw,保留 formula/type/styleId/rich)。
+ * 公式格:raw = 计算值(显示用 raw);被公式引用的值格:不变(raw 已是其值)。空格跳过。
+ */
+export function setCellComputed(sheet: SheetModel, row: number, col: number, value: CellValue): void {
+  const cell = sheet.cells.get(cellKey(row, col))
+  if (!cell) return
+  cell.raw = value
+}
+
 /** 直接写回/删除一个格的底层 CellModel(命令逆向用:精确还原前态)。 */
 export function restoreCell(sheet: SheetModel, row: number, col: number, cell: CellModel | null): void {
   const key = cellKey(row, col)

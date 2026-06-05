@@ -34,22 +34,23 @@ function run(label: string, url: string, canvasSel: string, renderAreaSel: strin
     await ready(page, canvasSel, handle)
     const input = page.locator('input.ooxml-cell-editor')
 
-    // 双击单价格(2,1,无自定义编辑器 → 内置文本编辑器)
-    const c21 = await cellCenter(page, renderAreaSel, handle, 2, 1)
-    await page.mouse.dblclick(c21.x, c21.y)
+    // 双击增长%格(2,4,无自定义编辑器 → 内置文本编辑器;且不被任何公式引用 → 不触发级联,
+    // 这样 __lastCellChange 就是被编辑格本身,与 E4 重算解耦)
+    const c24 = await cellCenter(page, renderAreaSel, handle, 2, 4)
+    await page.mouse.dblclick(c24.x, c24.y)
     await expect(input).toBeVisible()
 
     // 编辑框精确贴合单元格(不放大):尺寸应约等于该格 rect(±1px 容差,排除取整)
-    const rect21 = (await call(page, handle, 'rectOf', 2, 1)) as { w: number; h: number }
+    const rect24 = (await call(page, handle, 'rectOf', 2, 4)) as { w: number; h: number }
     const ib = (await input.boundingBox())!
-    expect(Math.abs(ib.width - rect21.w)).toBeLessThanOrEqual(1)
-    expect(Math.abs(ib.height - rect21.h)).toBeLessThanOrEqual(1)
+    expect(Math.abs(ib.width - rect24.w)).toBeLessThanOrEqual(1)
+    expect(Math.abs(ib.height - rect24.h)).toBeLessThanOrEqual(1)
 
-    // 改 999 + Enter → 提交(保留货币格式)+ 编辑器关 + cell-change
+    // 改 999 + Enter → 提交 + 编辑器关 + cell-change(被编辑格自身,无级联)
     await input.fill('999')
     await input.press('Enter')
     await expect(input).toBeHidden()
-    expect(await call(page, handle, 'getCellValue', 2, 1)).toBe(999)
+    expect(await call(page, handle, 'getCellValue', 2, 4)).toBe(999)
     const evt = await page.evaluate(() => (window as any).__lastCellChange)
     expect(evt.after.raw).toBe(999)
 

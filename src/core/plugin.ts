@@ -99,6 +99,8 @@ export interface ViewerApi {
   setColumnWidth(col: number, width: number): boolean
   /** 程序化设行高(px,模型单位);editable 时入命令栈 */
   setRowHeight(row: number, height: number): boolean
+  /** 公式引擎是否已就绪(recalc 开启 + 异步 warm 完成);未开重算恒 false */
+  isRecalcReady(): boolean
   /** 当前是否有未保存修改(自加载/还原以来发生过编辑或 resize) */
   isDirty(): boolean
   /** 放弃全部修改,还原到刚加载的原件;返回是否还原 */
