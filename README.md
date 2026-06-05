@@ -4,6 +4,34 @@
 
 [English](#english) · 中文
 
+## ⚡ 快速开始
+
+**装**(按框架二选一):
+
+```bash
+npm i ooxml-excel-editor vue exceljs                 # Vue
+npm i ooxml-excel-editor react react-dom exceljs     # React
+```
+
+**用**(Vue,容器要给高度;`src` 可传 `File` / `Blob` / `ArrayBuffer` / `Uint8Array` / URL 字符串):
+
+```vue
+<script setup lang="ts">
+import { ref } from 'vue'
+import { ExcelViewer } from 'ooxml-excel-editor'
+import 'ooxml-excel-editor/style.css'
+const src = ref<File>() // 绑个 <input type="file" @change> 给它即可
+</script>
+
+<template>
+  <ExcelViewer :src="src" style="height: 100vh" />
+</template>
+```
+
+默认**只读预览**;想编辑加 `:editable="true"`(React 同名 `editable`)。React 写法、props/事件表、编辑 / 导出 API 见下文对应章节。
+
+> 纯使用者只需读 **安装 / 使用 / API / 编辑 / 导出** 几节即可接入,无需看源码;类型随包发 `.d.ts`(IDE 自动补全)。「扩展 API / 插件 / 开发」是进阶,可跳过。
+
 ## 特性
 
 - 📊 **Canvas 高保真渲染**:DPR 高清、虚拟滚动(万行流畅)、冻结窗格四象限
