@@ -1288,6 +1288,14 @@ export class ViewerController {
   setStyle(range: MergeRange, patch: CellStyleOverride): boolean {
     return this.edit.setStyle(range, patch)
   }
+  /** 合并区域(G1;清空被覆盖格,只留左上锚点);editable 时入命令栈 */
+  mergeCells(range: MergeRange): boolean {
+    return this.edit.mergeCells(range)
+  }
+  /** 拆分区域内的合并(G1);editable 时入命令栈 */
+  unmergeCells(range: MergeRange): boolean {
+    return this.edit.unmergeCells(range)
+  }
 
   // ---- 图片编辑(E6;浮动/嵌入 增删移改) ----
   /** 读当前表全部图片锚点(克隆)。 */

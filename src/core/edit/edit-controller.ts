@@ -254,6 +254,31 @@ export class EditController {
     return !!inv
   }
 
+  // ---- 合并单元格(G1) ----
+  /** 合并区域(吸收相交旧合并,清空被覆盖格只留左上锚点)。单格不合并。 */
+  mergeCells(range: MergeRange): boolean {
+    if (!this.host.isEditingEnabled()) return false
+    if (range.top === range.bottom && range.left === range.right) return false
+    this.ensureBaseline()
+    const inv = this.exec({ kind: 'merge-cells', range }, 'api')
+    if (inv) {
+      this.pushUndo(inv)
+      this.markDirty()
+    }
+    return !!inv
+  }
+  /** 拆分:移除与区域相交的所有合并。 */
+  unmergeCells(range: MergeRange): boolean {
+    if (!this.host.isEditingEnabled()) return false
+    this.ensureBaseline()
+    const inv = this.exec({ kind: 'unmerge-cells', range }, 'api')
+    if (inv) {
+      this.pushUndo(inv)
+      this.markDirty()
+    }
+    return !!inv
+  }
+
   // ---- 图片编辑(浮动/嵌入;E6) ----
   /** 读当前表全部图片锚点(克隆,防外部改)。 */
   getImages(): ImageAnchor[] {

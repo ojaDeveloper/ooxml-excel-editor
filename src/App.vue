@@ -73,6 +73,17 @@ function boldSelection() {
   const sel = v?.getSelection()
   if (v && sel) v.setStyle(sel, { font: { bold: true } })
 }
+// G1: 合并 / 拆分当前选区
+function mergeSelection() {
+  const v = viewerRef.value
+  const sel = v?.getSelection()
+  if (v && sel) v.mergeCells(sel)
+}
+function unmergeSelection() {
+  const v = viewerRef.value
+  const sel = v?.getSelection()
+  if (v && sel) v.unmergeCells(sel)
+}
 
 // 开发环境把命令式 API 挂到 window,便于 e2e 计算 canvas 上的几何(如筛选按钮位置)
 if (import.meta.env.DEV) {
@@ -189,6 +200,8 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
       <button v-if="src && editMode" class="sample-btn" @click="boldSelection" title="给选区加粗(E5:样式编辑)">
         B 加粗选区
       </button>
+      <button v-if="src && editMode" class="sample-btn" @click="mergeSelection" title="合并选区(G1)">合并</button>
+      <button v-if="src && editMode" class="sample-btn" @click="unmergeSelection" title="拆分选区(G1)">拆分</button>
       <button v-if="src && editMode" class="sample-btn" @click="insertRowAtSel" title="选区上方插入行(E7)">＋行</button>
       <button v-if="src && editMode" class="sample-btn" @click="deleteRowAtSel" title="删除选区行(E7)">－行</button>
       <button v-if="src" class="sample-btn" @click="viewerRef?.downloadXlsx()" title="导出 .xlsx(E8:从模型重建)">↓XLSX</button>
