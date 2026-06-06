@@ -23,17 +23,19 @@
 
 ```
 index.ts   框架无关公共入口(引擎 + 解析 + 数据 + 类型)
-parser/    .xlsx 解压 + ExcelJS 适配 + 原始 XML 薄层(theme/drawings/charts/sparklines/pageSetup)
+parser/    .xlsx 解压 + ExcelJS 适配 + 原始 XML 薄层(theme/drawings/charts/sparklines/pageSetup
+           + WPS 内嵌图 cell-image-parser(DISPIMG)+ row-meta-parser(customHeight))
 loader.ts  多种输入(File/Blob/ArrayBuffer/URL)归一成 ArrayBuffer
 finalize.ts 文件头探测 / 图片 blob 化 / 友好错误
-model/     中间模型 types(WorkbookModel/SheetModel/CellModel)+ data-access(读数据 API)
-layout/    grid-metrics(行列几何)/ merges / freeze / autofit / viewport
-format/    number-format(数字/日期格式 mini 引擎)+ color / date-serial
-render/    canvas-renderer(普通类,画一帧)+ conditional/fills/borders/text/autofilter/theme
+model/     中间模型 types(WorkbookModel/SheetModel/CellModel)+ data-access(读)+ mutations(写)+ clone(快照)
+edit/      EditController(命令栈)+ commands + clipboard-html(富粘贴解析)+ context-menu + default-editor + editor-host
+layout/    grid-metrics(行列几何 + 虚拟外推)/ merges / freeze / autofit / viewport
+format/    number-format(数字/日期格式 mini 引擎)+ color(toHex6 等)/ date-serial
+render/    canvas-renderer(普通类,画一帧;含 DISPIMG 内嵌图绘制)+ conditional/fills/borders/text/autofilter/theme
 overlay/   anchor(锚点几何)/ chart-mapper(图表→echarts option)/ echarts-loader
-export/    raster/composite/paginate/pdf/print/vector-pdf + WorkbookExporter(导出编排)
-viewer/    OverlayManager(图片/图表/形状 DOM 叠加层)
-           ViewerController(总编排:renderer 生命周期 + view 状态 + 选区 + 鼠标/键盘 + 查找 + 筛选 + 导出)
+export/    raster/composite/paginate/pdf/print/vector-pdf + xlsx-writer + wps-cellimages(DISPIMG 回注)+ WorkbookExporter
+viewer/    OverlayManager(图片/图表/形状 DOM 叠加层)+ LightboxHost(图片放大)
+           ViewerController(总编排:renderer 生命周期 + view 状态 + 选区 + 鼠标/键盘 + 编辑 + 查找 + 筛选 + 导出)
 ```
 
 **铁律**:`src/core/**` 不得 `import` 任何框架(`vue`/`react`)。构建后 `dist/core.js` 也不得出现框架 import(CI 可加 grep 守门)。
@@ -77,7 +79,7 @@ viewer/    OverlayManager(图片/图表/形状 DOM 叠加层)
 
 ## 测试结构
 
-- **单测(vitest,node 环境)**:`src/**/__tests__/`,覆盖 parser/layout/format/render/export/data-access/plugin —— 纯逻辑回归网(93)。
-- **e2e(Playwright,真 Chromium)**:`e2e/*.e2e.ts`,覆盖 canvas 真绘制 / jsPDF 下载 / 查找 / 筛选 / 工具栏 / 数据 API,Vue 走 `/`、React 走 `/react.html`(13)。
+- **单测(vitest,node 环境)**:`src/**/__tests__/`,覆盖 parser/layout/format/render/export/data-access/edit/plugin —— 纯逻辑回归网(219)。
+- **e2e(Playwright,真 Chromium)**:`e2e/*.e2e.ts`,覆盖 canvas 真绘制 / jsPDF 下载 / 查找 / 筛选 / 工具栏 / 数据 API,Vue 走 `/`、React 走 `/react.html`(60)。
 
 改 core 行为务必两套都跑绿(见 CONTRIBUTING)。

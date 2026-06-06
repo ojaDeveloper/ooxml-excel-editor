@@ -4,7 +4,8 @@
 
 ## [1.2.0] - 未发布(开发中)
 
-编辑 UX 补齐 + 性能 + 导出错误可见性(向后兼容)。
+WPS 单元格内嵌图(展示/互转/导出往返)+ 富粘贴 + 图片放大下载 + 虚拟空行 + 公式栏可编辑 +
+背景/字体色 + 编辑 UX 补齐(合并/粘贴/右键菜单)+ 性能 + 导出错误可见性。全部向后兼容、默认只读零回归。
 
 ### 新增
 - **富粘贴(从 Excel/WPS 复制整块)**:`Ctrl+V` 现在优先读剪贴板 **text/html**,完美解析**字体/颜色/填充/边框/对齐/合并单元格**(与 WPS 一致),整块**单次撤销**(整簿快照逆)。值优先取 Excel 的 `x:num`/`x:fmla`(原始值),否则取文本交类型推断。无 html 时回退原 TSV(`pasteText`,不变)。新 `clipboard-html.ts parseClipboardHtml`;`EditController.pasteRich`;API `pasteRichHtml(html,at?)`。
