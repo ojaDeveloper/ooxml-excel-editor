@@ -39,6 +39,8 @@ export default defineConfig(({ mode, command }) => {
           ]),
     ],
     server: {
+      // host:true → 监听 0.0.0.0,局域网其它设备可用 http://<本机IP>:5300 访问(dev 启动会打印 Network 地址)。
+      host: true,
       // 钉死端口，避免跟其它项目(OKR=5173 / 若依=5174)抢先后顺序。
       // strictPort: 被占就明确报错，而不是默默漂移到别的端口让人找不到。
       port: 5300,
