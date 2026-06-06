@@ -485,6 +485,15 @@ export class CanvasRenderer {
 
   render(view: ViewState): void {
     this.dpr = window.devicePixelRatio || 1
+    // canvas 是"替换元素":CSS 的 inset:0 / width:100% 对它无效 —— width:auto 会解析成它的固有尺寸
+    // (= 缓冲像素数 width*dpr)。dpr≠1(系统缩放 125%/150% / 浏览器 Ctrl+缩放)时,canvas 会以
+    // width*dpr 个 CSS 像素显示,比容器大 dpr 倍 → 整个网格被放大,和 DOM 叠加层(浮动图/图表)及
+    // 鼠标命中错位,且越往右下偏得越多。必须显式把 CSS 显示尺寸钉成逻辑尺寸(width/height),
+    // 缓冲(width*dpr)再被浏览器降采样显示 → 高清且与逻辑坐标 1:1 对齐。这是 HiDPI canvas 的标准做法。
+    const cw = view.width + 'px'
+    const ch = view.height + 'px'
+    if (this.canvas.style.width !== cw) this.canvas.style.width = cw
+    if (this.canvas.style.height !== ch) this.canvas.style.height = ch
     this.paint(view, { headers: true, pageBreaks: true, selection: true })
   }
 
