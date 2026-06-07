@@ -19,6 +19,8 @@ import type { FormulaEngineFactory } from '@/core/formula/engine'
 import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload, StructChangePayload } from '@/core/edit/edit-controller'
 import type { CellSnapshot } from '@/core/model/snapshot'
 import type { CellInspection } from '@/core/model/inspect'
+import { fillTemplate, type TemplateFillSpec } from '@/core/template/fill'
+import { jsonToWorkbook, isWorkbookModel, type JsonInput, type JsonLoadOptions } from '@/core/loader-json'
 import type { CellValue } from '@/core/model/data-access'
 import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
 import type { ViewerTheme } from '@/core/render/theme'
@@ -43,6 +45,15 @@ import './excel-viewer.css'
 
 export interface ExcelViewerProps {
   src?: ExcelSource
+  /**
+   * 直接喂 WorkbookModel 或 JsonInput(P3):绕过 parser。优先级 workbook > src。
+   * WorkbookModel 直用;JsonInput(二维数组 / 对象数组 / `{sheets:[...]}`)走 jsonToWorkbook。
+   */
+  workbook?: WorkbookModel | JsonInput
+  /** JSON 直渲选项(workbook = JsonInput 时生效) */
+  jsonOptions?: JsonLoadOptions
+  /** 模板填值(P3):加载完后按 spec 填一道再渲染 */
+  template?: TemplateFillSpec
   fileName?: string
   theme?: Partial<ViewerTheme>
   /** 单击超链接是否自动打开(默认 true) */
@@ -137,6 +148,7 @@ export interface ExcelViewerHandle {
   convertAllImagesToCells: (col?: number) => number
   convertImagesInRangeToCell: (range: MergeRange) => number
   convertCellImagesInRangeToFloat: (range: MergeRange, size?: { width: number; height: number }) => number
+  applyTemplate: (spec: TemplateFillSpec) => Promise<{ placeholdersScanned: number; anchorsWritten: number }>
   convertCellImageToFloat: (row: number, col: number, size?: { width: number; height: number }) => boolean
   insertRows: (at: number, count?: number) => boolean
   deleteRows: (at: number, count?: number) => boolean
@@ -182,7 +194,9 @@ function fmtNum(n: number): string {
 }
 
 export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(function ExcelViewer(props, ref) {
-  const { loading, error, workbook, progress, load, sourceBuffer } = useExcelDocument()
+  const { loading, error, workbook, progress, load, loadModel, sourceBuffer } = useExcelDocument()
+  const resolveWb = (w?: WorkbookModel | JsonInput): WorkbookModel | null =>
+    !w ? null : isWorkbookModel(w) ? (w as WorkbookModel) : jsonToWorkbook(w as JsonInput, props.jsonOptions)
   const [activeSheet, setActiveSheet] = useState(0)
   const [zoom, setZoom] = useState(1)
   const [findOpen, setFindOpen] = useState(false)
@@ -366,11 +380,25 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ---- 载入 src ----
+  // ---- 载入 src / workbook(JSON/模型直渲优先) ----
   useEffect(() => {
-    if (props.src) load(props.src, effectiveTransform)
+    const wb = resolveWb(props.workbook)
+    if (wb) loadModel(wb, effectiveTransform)
+    else if (props.src) load(props.src, effectiveTransform)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.src])
+  }, [props.src, props.workbook])
+
+  // ---- 模板填值:加载完后(或 :template 变化)按 spec 填一道再渲染 ----
+  useEffect(() => {
+    if (!props.template || !workbook) return
+    let cancelled = false
+    void (async () => {
+      await fillTemplate(workbook, props.template!)
+      if (!cancelled) controllerRef.current?.render()
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workbook, props.template])
 
   // ---- 文件名同步 ----
   useEffect(() => {
@@ -496,6 +524,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       convertAllImagesToCells: (col) => controllerRef.current?.convertAllImagesToCells(col) ?? 0,
       convertImagesInRangeToCell: (range) => controllerRef.current?.convertImagesInRangeToCell(range) ?? 0,
       convertCellImagesInRangeToFloat: (range, size) => controllerRef.current?.convertCellImagesInRangeToFloat(range, size) ?? 0,
+      applyTemplate: (spec) => controllerRef.current?.applyTemplate(spec) ?? Promise.resolve({ placeholdersScanned: 0, anchorsWritten: 0 }),
       convertCellImageToFloat: (row, col, size) => controllerRef.current?.convertCellImageToFloat(row, col, size) ?? false,
       insertRows: (at, count) => controllerRef.current?.insertRows(at, count) ?? false,
       deleteRows: (at, count) => controllerRef.current?.deleteRows(at, count) ?? false,
@@ -601,6 +630,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     convertAllImagesToCells: (col) => controllerRef.current?.convertAllImagesToCells(col) ?? 0,
     convertImagesInRangeToCell: (range) => controllerRef.current?.convertImagesInRangeToCell(range) ?? 0,
     convertCellImagesInRangeToFloat: (range, size) => controllerRef.current?.convertCellImagesInRangeToFloat(range, size) ?? 0,
+    applyTemplate: (spec) => controllerRef.current?.applyTemplate(spec) ?? Promise.resolve({ placeholdersScanned: 0, anchorsWritten: 0 }),
     convertCellImageToFloat: (row, col, size) => controllerRef.current?.convertCellImageToFloat(row, col, size) ?? false,
     insertRows: (at, count) => controllerRef.current?.insertRows(at, count) ?? false,
     deleteRows: (at, count) => controllerRef.current?.deleteRows(at, count) ?? false,

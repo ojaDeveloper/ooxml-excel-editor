@@ -17,6 +17,7 @@ import type { CellStyleFn, CellStyleOverride, ImageAnchor, MergeRange, Transform
 import type { CellValue, ReadOptions, SheetToJSONOptions } from './model/data-access'
 import type { CellSnapshot } from './model/snapshot'
 import type { CellInspection } from './model/inspect'
+import type { TemplateFillSpec } from './template/fill'
 import type { EditorResolver } from './edit/editor-context'
 import type { ViewerTheme } from './render/theme'
 import type { ExcelSource } from './loader'
@@ -172,6 +173,8 @@ export interface ViewerApi {
   convertImagesInRangeToCell(range: MergeRange): number
   /** 选区批量(反向):range 内所有 DISPIMG 格拎成浮动图,单次撤销;返回转换张数 */
   convertCellImagesInRangeToFloat(range: MergeRange, size?: { width: number; height: number }): number
+  /** 模板填值(P3):把 JSON 数据按占位符 {{key}} + 锚点表 注入当前工作簿,渲染前预处理;不入命令栈 */
+  applyTemplate(spec: TemplateFillSpec): Promise<{ placeholdersScanned: number; anchorsWritten: number }>
   /** 单元格内嵌图 → 浮动图(把 row,col 的 DISPIMG 拎成浮动图,默认 96×96px);editable 时入命令栈 */
   convertCellImageToFloat(row: number, col: number, size?: { width: number; height: number }): boolean
   /** 在 at 处插入 count 行(E7);editable 时入命令栈 + 发 struct-change */
@@ -263,3 +266,8 @@ export interface ExcelPlugin {
 export function definePlugin(plugin: ExcelPlugin): ExcelPlugin {
   return plugin
 }
+
+// ---- P3 公开导出:JSON 直渲 + 模板填值(给"仅引擎"用户) ----
+export { jsonToWorkbook, isWorkbookModel, type JsonInput, type JsonLoadOptions, type JsonRow, type JsonSheetInput } from './loader-json'
+export { fillTemplate, replacePlaceholders, parseCellAddress, type TemplateFillSpec, type TemplateAnchor } from './template/fill'
+export type { CellInspection } from './model/inspect'

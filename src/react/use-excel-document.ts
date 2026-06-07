@@ -11,6 +11,8 @@ export interface ExcelDocument {
   workbook: WorkbookModel | null
   progress: ParseProgress | null
   load: (src: ExcelSource, transform?: TransformModelFn) => Promise<void>
+  /** 直接喂模型(JSON 直渲 / 模板已应用),跳过 parser */
+  loadModel: (model: WorkbookModel, transform?: TransformModelFn) => void
   /** 原始字节(高保真 overlay 导出用) */
   sourceBuffer: ArrayBuffer | null
 }
@@ -60,5 +62,15 @@ export function useExcelDocument(): ExcelDocument {
     }
   }, [])
 
-  return { loading, error, workbook, progress, load, sourceBuffer }
+  const loadModel = useCallback((model: WorkbookModel, transform?: TransformModelFn) => {
+    if (wbRef.current) revokeImages(wbRef.current)
+    setSourceBuffer(null)
+    setError(null)
+    setProgress(null)
+    const m = transform ? (transform(model) ?? model) : model
+    wbRef.current = m
+    setWorkbook(m)
+  }, [])
+
+  return { loading, error, workbook, progress, load, loadModel, sourceBuffer }
 }

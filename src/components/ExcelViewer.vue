@@ -3,6 +3,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 import type { ExcelPlugin, ExcelPluginContext, OverlayContext, PluginEvent, ToolbarItem, ViewerApi } from '@/core/plugin'
 import { PluginOverlayHost } from '@/core/viewer/plugin-overlay'
 import type { ExcelSource } from '@/core/loader'
+import { jsonToWorkbook, isWorkbookModel, type JsonInput, type JsonLoadOptions } from '@/core/loader-json'
+import type { TemplateFillSpec } from '@/core/template/fill'
+import { fillTemplate } from '@/core/template/fill'
 import type {
   CellModel,
   CellStyleFn,
@@ -38,6 +41,19 @@ import { TOOLBAR_ICONS } from './toolbar-icons'
 const props = withDefaults(
   defineProps<{
     src?: ExcelSource
+    /**
+     * 直接喂 WorkbookModel 或 JsonInput(P3):绕过 parser,常用于"从后端拿 JSON 直接渲染"或
+     * "前端构造好模型再渲染"。WorkbookModel-shape 直用,JsonInput(二维数组 / 对象数组 / `{sheets:[...]}`)
+     * 走 `jsonToWorkbook` 自动构造。优先级:`workbook` > `src`(两者都给时取 `workbook`)。
+     */
+    workbook?: WorkbookModel | JsonInput
+    /** JSON 直渲选项(`workbook` = JsonInput 时生效) */
+    jsonOptions?: JsonLoadOptions
+    /**
+     * 模板填值(P3):`src` 加载完(或 `workbook` 喂入)后,自动按 spec(占位符 + 锚点表)填一道再渲染。
+     * 不入命令栈;与运行时 `applyTemplate()` 命令式调用等价。
+     */
+    template?: TemplateFillSpec
     fileName?: string
     /** 外观主题(覆盖默认配色) */
     theme?: Partial<ViewerTheme>
@@ -151,7 +167,19 @@ const emit = defineEmits<{
   (e: 'struct-change', payload: StructChangePayload): void
 }>()
 
-const { loading, error, workbook, load, progress, sourceBuffer } = useExcelDocument()
+const { loading, error, workbook, load, loadModel, progress, sourceBuffer } = useExcelDocument()
+
+/** 把 :workbook prop 转成 WorkbookModel(支持 WorkbookModel 直传 + JsonInput 自动构造)。 */
+function resolveWorkbookInput(w: WorkbookModel | JsonInput | undefined): WorkbookModel | null {
+  if (!w) return null
+  return isWorkbookModel(w) ? (w as WorkbookModel) : jsonToWorkbook(w as JsonInput, props.jsonOptions)
+}
+
+async function applyTemplateIfAny() {
+  const spec = props.template
+  if (!spec || !workbook.value) return
+  await fillTemplate(workbook.value, spec)
+}
 
 const progressLabel = computed(() => {
   const p = progress.value
@@ -257,7 +285,10 @@ onMounted(() => {
     controller.setLightboxEnabled(props.imageLightbox !== false) // 图片点击放大(默认开)
   }
   if (pluginOvEl.value) pluginOverlayHost = new PluginOverlayHost(pluginOvEl.value)
-  if (props.src) load(props.src, effectiveTransform)
+  // 优先 :workbook(JSON / 直传模型);其次 :src(文件路径)
+  const initWb = resolveWorkbookInput(props.workbook)
+  if (initWb) loadModel(initWb, effectiveTransform)
+  else if (props.src) load(props.src, effectiveTransform)
   resizeObserver = new ResizeObserver(() => {
     measure()
     doRender()
@@ -274,8 +305,15 @@ onBeforeUnmount(() => {
 })
 
 watch(() => props.src, (s) => {
-  if (s) load(s, effectiveTransform)
+  if (s && !props.workbook) load(s, effectiveTransform)
 })
+// :workbook 变化(JSON / 模型)→ 直接喂模型,跳过 parser
+watch(() => props.workbook, (w) => {
+  const wb = resolveWorkbookInput(w)
+  if (wb) loadModel(wb, effectiveTransform)
+})
+// 工作簿加载完后(或 :template 变化)应用模板
+watch([workbook, () => props.template], () => { void applyTemplateIfAny() })
 
 watch(() => props.fileName, (f) => {
   if (controller) controller.fileName = f
@@ -608,6 +646,7 @@ const viewerApi: ViewerApi = {
   convertAllImagesToCells: (col) => controller?.convertAllImagesToCells(col) ?? 0,
   convertImagesInRangeToCell: (range) => controller?.convertImagesInRangeToCell(range) ?? 0,
   convertCellImagesInRangeToFloat: (range, size) => controller?.convertCellImagesInRangeToFloat(range, size) ?? 0,
+  applyTemplate: (spec) => controller?.applyTemplate(spec) ?? Promise.resolve({ placeholdersScanned: 0, anchorsWritten: 0 }),
   convertCellImageToFloat: (row, col, size) => controller?.convertCellImageToFloat(row, col, size) ?? false,
   insertRows: (at, count) => controller?.insertRows(at, count) ?? false,
   deleteRows: (at, count) => controller?.deleteRows(at, count) ?? false,

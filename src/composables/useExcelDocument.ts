@@ -48,5 +48,14 @@ export function useExcelDocument() {
     }
   }
 
-  return { loading, error, workbook, load, progress, sourceBuffer }
+  /** 直接喂模型(JSON 直渲 / 模板已应用后),跳过 parser。`:workbook` prop 的实现。 */
+  function loadModel(model: WorkbookModel, transform?: TransformModelFn) {
+    if (workbook.value) revokeImages(workbook.value)
+    sourceBuffer.value = null
+    error.value = null
+    progress.value = null
+    workbook.value = transform ? (transform(model) ?? model) : model
+  }
+
+  return { loading, error, workbook, load, loadModel, progress, sourceBuffer }
 }
