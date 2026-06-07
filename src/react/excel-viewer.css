@@ -287,3 +287,16 @@
 .rxl-state.error {
   color: #c0392b;
 }
+
+/* ExportProgressOverlay(P1.5):居中模态,跟 Vue 端 .export-progress-overlay 同视觉 */
+.rxl-export-progress { position: fixed; inset: 0; z-index: 9999; background: rgba(0, 0, 0, 0.42); display: flex; align-items: center; justify-content: center; font: 13px/1.5 -apple-system, 'Segoe UI', sans-serif; }
+.rxl-export-progress .card { min-width: 320px; max-width: 480px; background: #fff; border-radius: 10px; box-shadow: 0 10px 32px rgba(0, 0, 0, 0.28); padding: 18px 20px; }
+.rxl-export-progress .title { font-size: 14px; font-weight: 600; color: #1f2329; margin-bottom: 12px; }
+.rxl-export-progress .bar { position: relative; height: 6px; background: #eceef1; border-radius: 3px; overflow: hidden; margin-bottom: 10px; }
+.rxl-export-progress .bar .fill { height: 100%; background: #21a366; transition: width 120ms linear; }
+.rxl-export-progress .bar.indeterminate::after { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, #21a366 40%, #21a366 60%, transparent); animation: rxl-export-ind 1.2s infinite; }
+@keyframes rxl-export-ind { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+.rxl-export-progress .row { display: flex; align-items: center; justify-content: space-between; }
+.rxl-export-progress .pct { color: #6b7280; font-size: 12px; }
+.rxl-export-progress .cancel { border: 1px solid #d8dbde; background: #fff; color: #1f2329; padding: 5px 14px; border-radius: 5px; cursor: pointer; font-size: 13px; }
+.rxl-export-progress .cancel:hover { background: #f5f6f7; }

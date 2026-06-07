@@ -14,7 +14,7 @@ import type {
   TransformModelFn,
   WorkbookModel,
 } from '@/core/model/types'
-import type { ParseProgress } from '@/core/progress'
+import type { ExportProgress, ParseProgress } from '@/core/progress'
 import type { ReadOptions } from '@/core/model/data-access'
 import { getCellValue, getCellText, getSheetData, getRangeData, sheetToJSON } from '@/core/model/data-access'
 import type { ViewerTheme } from '@/core/render/theme'
@@ -34,6 +34,7 @@ import ExportDialog from './ExportDialog.vue'
 import FindBar from './FindBar.vue'
 import FilterPopup from './FilterPopup.vue'
 import ActionToolbar from './ActionToolbar.vue'
+import ExportProgressOverlay from './ExportProgressOverlay.vue'
 import type { ExportConfig } from './export-types'
 import type { ResolvedToolbarItem } from './toolbar-types'
 import { TOOLBAR_ICONS } from './toolbar-icons'
@@ -87,9 +88,17 @@ const props = withDefaults(
     recalc?: boolean
     /** 自定义/自研公式引擎工厂(可换引擎);不给则用默认 HyperFormula(需 npm i hyperformula) */
     formulaEngine?: FormulaEngineFactory
+    /**
+     * 内置导出进度遮罩(P1.5):默认 `true` —— 调 `viewer.downloadPdf` / `downloadImage` / `downloadXlsx` /
+     * `print` / `applyTemplate` / 选区图片批量转换 时,壳自动建 `AbortController` + 接 `onProgress` →
+     * 显示居中模态(stage 标签 + 进度条 + 取消按钮)。**关闭** `:export-progress="false"` 走纯回调
+     * 路径(用户自己接 `opts.onProgress`/`opts.signal`)。**完全自渲染**用 `#export-progress` 插槽
+     * (拿到 `{ state, busy, cancel }`)。
+     */
+    exportProgress?: boolean
   }>(),
-  // toolbar/imageLightbox 默认 true;若不显式给默认,Vue 会把布尔型 prop 缺省判成 false
-  { openLinks: true, toolbar: true, imageLightbox: true },
+  // toolbar/imageLightbox/exportProgress 默认 true;若不显式给默认,Vue 会把布尔型 prop 缺省判成 false
+  { openLinks: true, toolbar: true, imageLightbox: true, exportProgress: true },
 )
 
 const normalizedPlugins = computed<ExcelPlugin[]>(() => props.plugins ?? [])
@@ -489,11 +498,44 @@ function rectOfRange(range: MergeRange): { x: number; y: number; w: number; h: n
 }
 
 // ---------------- 导出 / 打印(编排在 core/export/WorkbookExporter,控制器委托) ----------------
-const exportImage = (opts?: ImageExportOptions): Promise<Blob> => controller!.exportImage(opts)
-const downloadImage = (opts?: ImageExportOptions): Promise<void> => controller!.downloadImage(opts)
-const exportPdf = (opts?: PdfExportOptions): Promise<Blob> => controller!.exportPdf(opts)
-const downloadPdf = (opts?: PdfExportOptions): Promise<void> => controller!.downloadPdf(opts)
-const print = (opts?: PrintOptions): Promise<void> => controller!.print(opts)
+// 进度遮罩状态(P1.5):内置 onProgress + AbortController,与用户传入的 onProgress/signal 链接
+const exportState = ref<ExportProgress | null>(null)
+const exportBusy = ref(false)
+let exportCtrl: AbortController | null = null
+function cancelExport() { exportCtrl?.abort() }
+
+/** 包一层:① 建内置 AbortController + 接 onProgress 给 overlay;② 与用户的 opts.onProgress / opts.signal 链接;
+ *  ③ 失败/取消/完成都关 overlay。`exportProgress=false` 时直接透传,纯回调走原路。 */
+function chain<T, O extends { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal } | undefined>(
+  userOpts: O,
+  run: (opts: O) => Promise<T>,
+): Promise<T> {
+  if (props.exportProgress === false) return run(userOpts)
+  const ctrl = new AbortController()
+  exportCtrl = ctrl
+  if (userOpts?.signal) {
+    if (userOpts.signal.aborted) ctrl.abort()
+    else userOpts.signal.addEventListener('abort', () => ctrl.abort(), { once: true })
+  }
+  exportBusy.value = true
+  exportState.value = null
+  const onProgress = (p: ExportProgress) => {
+    exportState.value = p
+    userOpts?.onProgress?.(p)
+  }
+  const merged = { ...(userOpts ?? {}), onProgress, signal: ctrl.signal } as O
+  return run(merged).finally(() => {
+    exportBusy.value = false
+    exportState.value = null
+    exportCtrl = null
+  })
+}
+
+const exportImage = (opts?: ImageExportOptions): Promise<Blob> => chain(opts, (o) => controller!.exportImage(o))
+const downloadImage = (opts?: ImageExportOptions): Promise<void> => chain(opts, (o) => controller!.downloadImage(o))
+const exportPdf = (opts?: PdfExportOptions): Promise<Blob> => chain(opts, (o) => controller!.exportPdf(o))
+const downloadPdf = (opts?: PdfExportOptions): Promise<void> => chain(opts, (o) => controller!.downloadPdf(o))
+const print = (opts?: PrintOptions): Promise<void> => chain(opts, (o) => controller!.print(o))
 
 /** 工具栏触发 PDF: 捕获 jspdf 缺失等错误,给用户可读提示而非静默失败 */
 async function onExportPdf() {
@@ -644,9 +686,17 @@ const viewerApi: ViewerApi = {
   convertImageToCell: (i, row, col) => controller?.convertImageToCell(i, row, col) ?? false,
   convertImageToCellAuto: (i) => controller?.convertImageToCellAuto(i) ?? false,
   convertAllImagesToCells: (col) => controller?.convertAllImagesToCells(col) ?? 0,
-  convertImagesInRangeToCell: (range) => controller?.convertImagesInRangeToCell(range) ?? 0,
-  convertCellImagesInRangeToFloat: (range, size) => controller?.convertCellImagesInRangeToFloat(range, size) ?? 0,
-  applyTemplate: (spec) => controller?.applyTemplate(spec) ?? Promise.resolve({ placeholdersScanned: 0, anchorsWritten: 0 }),
+  convertImagesInRangeToCell: (range) =>
+    chain<number, { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal }>({}, async (o) => {
+      o.onProgress?.({ stage: 'convert', label: '选区浮动图批量嵌入…', ratio: undefined })
+      return controller?.convertImagesInRangeToCell(range) ?? 0
+    }),
+  convertCellImagesInRangeToFloat: (range, size) =>
+    chain<number, { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal }>({}, async (o) => {
+      o.onProgress?.({ stage: 'convert', label: '选区内嵌图批量浮动化…', ratio: undefined })
+      return controller?.convertCellImagesInRangeToFloat(range, size) ?? 0
+    }),
+  applyTemplate: (spec) => chain(spec, (s) => controller?.applyTemplate(s) ?? Promise.resolve({ placeholdersScanned: 0, anchorsWritten: 0 })),
   convertCellImageToFloat: (row, col, size) => controller?.convertCellImageToFloat(row, col, size) ?? false,
   insertRows: (at, count) => controller?.insertRows(at, count) ?? false,
   deleteRows: (at, count) => controller?.deleteRows(at, count) ?? false,
@@ -673,8 +723,8 @@ const viewerApi: ViewerApi = {
   exportPdf,
   downloadPdf,
   print,
-  exportXlsx: (opts) => controller!.exportXlsx(opts),
-  downloadXlsx: (opts) => controller!.downloadXlsx(opts),
+  exportXlsx: (opts) => chain(opts, (o) => controller!.exportXlsx(o)),
+  downloadXlsx: (opts) => chain(opts, (o) => controller!.downloadXlsx(o)),
   exportJson: (opts) => controller?.exportJson(opts) ?? '{}',
   downloadJson: (opts) => controller?.downloadJson(opts),
   exportCsv: (opts) => controller?.exportCsv(opts) ?? '',
@@ -1103,6 +1153,13 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
       @close="exportDialogOpen = false"
       @export="onDialogExport"
     />
+
+    <!-- 内置导出进度遮罩(P1.5):props.exportProgress=false 关闭;插槽 #export-progress 完全自渲染 -->
+    <template v-if="exportProgress !== false">
+      <slot name="export-progress" :state="exportState" :busy="exportBusy" :cancel="cancelExport">
+        <ExportProgressOverlay :state="exportState" :busy="exportBusy" @cancel="cancelExport" />
+      </slot>
+    </template>
   </div>
 </template>
 

@@ -280,11 +280,13 @@ export class WorkbookExporter {
     checkAborted(opts.signal)
     const targets = this.resolveTargets(opts.target)
     if (!targets.length) throw new Error('无可导出的工作表')
-    opts.onProgress?.({ stage: 'render', sheetIndex: targets[0], ratio: 0, label: '渲染中…' })
+    // 渲染 + 写出图片都是 atomic black-box 阶段(canvas 渲染 / canvasToBlob),内部无细分进度,
+    // 故 ratio=undefined 让 overlay 走 indeterminate 动画(扫动条),而非定死 0% 死等。
+    opts.onProgress?.({ stage: 'render', sheetIndex: targets[0], ratio: undefined, label: '渲染表格…' })
     const img = await this.buildSheetImage(targets[0], opts)
     if (!img) throw new Error('导出失败: 无法生成底图')
     checkAborted(opts.signal)
-    opts.onProgress?.({ stage: 'write', sheetIndex: targets[0], ratio: 0, label: '写出图片…' })
+    opts.onProgress?.({ stage: 'write', sheetIndex: targets[0], ratio: undefined, label: '编码图片…' })
     const blob = await canvasToBlob(img.canvas, opts.type ?? 'png', opts.quality ?? 0.92)
     opts.onProgress?.({ stage: 'write', ratio: 1 })
     return blob
@@ -303,18 +305,22 @@ export class WorkbookExporter {
     if (!targets.length) throw new Error('无可导出的工作表')
     const eff: PdfExportOptions = { ...this.pageSetupDefaults(targets[0]), ...opts }
     const total = targets.length
-    // 串行(替代 Promise.all):每表前 emit render + check abort + yield,UI 不假死、能中断
+    // 单表场景 buildSheetImage / jsPDF 内部都是黑盒(无细分进度点),用 indeterminate 动画(扫动条)而非死 0%;
+    // 多表场景至少有"已完成 N/M"的离散进度(每表完成时 +1/total)。
+    const renderRatio = (done: number) => (total > 1 ? done / total : undefined)
+    const renderLabel = (done: number) => (total > 1 ? `已渲染 ${done}/${total}` : '渲染表格…')
     if (eff.vector) {
       const vs: VectorSheet[] = []
       for (let i = 0; i < total; i++) {
         checkAborted(opts.signal)
-        opts.onProgress?.({ stage: 'render', sheetIndex: targets[i], ratio: i / total, label: `渲染 ${i + 1}/${total}` })
+        opts.onProgress?.({ stage: 'render', sheetIndex: targets[i], ratio: renderRatio(i), label: total > 1 ? `渲染 ${i + 1}/${total}` : '渲染表格…' })
         const v = await this.buildVectorSheet(targets[i], eff)
         if (v) vs.push(v)
+        opts.onProgress?.({ stage: 'render', sheetIndex: targets[i], ratio: renderRatio(i + 1), label: renderLabel(i + 1) })
         await yieldToEvent()
       }
       checkAborted(opts.signal)
-      opts.onProgress?.({ stage: 'write', ratio: 0, label: '生成 PDF…' })
+      opts.onProgress?.({ stage: 'write', ratio: undefined, label: '生成矢量 PDF…' })
       const blob = await exportToVectorPdf(vs, eff)
       opts.onProgress?.({ stage: 'write', ratio: 1 })
       return blob
@@ -322,13 +328,14 @@ export class WorkbookExporter {
     const images: ExportSheetImage[] = []
     for (let i = 0; i < total; i++) {
       checkAborted(opts.signal)
-      opts.onProgress?.({ stage: 'render', sheetIndex: targets[i], ratio: i / total, label: `渲染 ${i + 1}/${total}` })
+      opts.onProgress?.({ stage: 'render', sheetIndex: targets[i], ratio: renderRatio(i), label: total > 1 ? `渲染 ${i + 1}/${total}` : '渲染表格…' })
       const img = await this.buildSheetImage(targets[i], eff, true)
       if (img) images.push(img)
+      opts.onProgress?.({ stage: 'render', sheetIndex: targets[i], ratio: renderRatio(i + 1), label: renderLabel(i + 1) })
       await yieldToEvent()
     }
     checkAborted(opts.signal)
-    opts.onProgress?.({ stage: 'write', ratio: 0, label: '生成 PDF…' })
+    opts.onProgress?.({ stage: 'write', ratio: undefined, label: '生成 PDF 文件…' })
     const blob = await exportToPdf(images, eff)
     opts.onProgress?.({ stage: 'write', ratio: 1 })
     return blob
@@ -345,12 +352,14 @@ export class WorkbookExporter {
     if (!targets.length) return
     const eff: PrintOptions = { ...this.pageSetupDefaults(targets[0]), ...opts }
     const total = targets.length
+    const renderRatio = (d: number) => (total > 1 ? d / total : undefined)
     const images: ExportSheetImage[] = []
     for (let i = 0; i < total; i++) {
       checkAborted(opts.signal)
-      opts.onProgress?.({ stage: 'render', sheetIndex: targets[i], ratio: i / total, label: `渲染 ${i + 1}/${total}` })
+      opts.onProgress?.({ stage: 'render', sheetIndex: targets[i], ratio: renderRatio(i), label: total > 1 ? `渲染 ${i + 1}/${total}` : '渲染表格…' })
       const img = await this.buildSheetImage(targets[i], eff, true)
       if (img) images.push(img)
+      opts.onProgress?.({ stage: 'render', sheetIndex: targets[i], ratio: renderRatio(i + 1), label: total > 1 ? `已渲染 ${i + 1}/${total}` : '准备打印…' })
       await yieldToEvent()
     }
     printSheets(images, { ...eff, title: eff.title ?? this.baseName() })

@@ -21,6 +21,8 @@ import type { CellSnapshot } from '@/core/model/snapshot'
 import type { CellInspection } from '@/core/model/inspect'
 import { fillTemplate, type TemplateFillSpec } from '@/core/template/fill'
 import { jsonToWorkbook, isWorkbookModel, type JsonInput, type JsonLoadOptions } from '@/core/loader-json'
+import type { ExportProgress } from '@/core/progress'
+import { ExportProgressOverlay } from './ExportProgressOverlay'
 import type { CellValue } from '@/core/model/data-access'
 import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
 import type { ViewerTheme } from '@/core/render/theme'
@@ -54,6 +56,14 @@ export interface ExcelViewerProps {
   jsonOptions?: JsonLoadOptions
   /** 模板填值(P3):加载完后按 spec 填一道再渲染 */
   template?: TemplateFillSpec
+  /**
+   * 内置导出进度遮罩(P1.5):默认 `true` —— 调 `viewer.downloadPdf/exportImage/...` / `applyTemplate` /
+   * 选区图片批量转换 时,壳自动建 AbortController + 接 onProgress → 显示居中模态 + 取消。
+   * `false` 关闭(走纯回调);`renderExportProgress` 自渲染(覆盖内置 UI)。
+   */
+  exportProgress?: boolean
+  /** 完全自渲染遮罩:返回任意 ReactNode 替代内置 UI。`exportProgress=false` 时此项也不渲染。 */
+  renderExportProgress?: (ctx: { state: ExportProgress | null; busy: boolean; cancel: () => void }) => React.ReactNode
   fileName?: string
   theme?: Partial<ViewerTheme>
   /** 单击超链接是否自动打开(默认 true) */
@@ -146,8 +156,8 @@ export interface ExcelViewerHandle {
   convertImageToCell: (imageIndex: number, row: number, col: number) => boolean
   convertImageToCellAuto: (imageIndex: number) => boolean
   convertAllImagesToCells: (col?: number) => number
-  convertImagesInRangeToCell: (range: MergeRange) => number
-  convertCellImagesInRangeToFloat: (range: MergeRange, size?: { width: number; height: number }) => number
+  convertImagesInRangeToCell: (range: MergeRange) => Promise<number>
+  convertCellImagesInRangeToFloat: (range: MergeRange, size?: { width: number; height: number }) => Promise<number>
   applyTemplate: (spec: TemplateFillSpec) => Promise<{ placeholdersScanned: number; anchorsWritten: number }>
   convertCellImageToFloat: (row: number, col: number, size?: { width: number; height: number }) => boolean
   insertRows: (at: number, count?: number) => boolean
@@ -288,6 +298,37 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     console.error('[ooxml-excel-editor] 导出失败:', e)
     propsRef.current.onError?.(msg)
     if (typeof window !== 'undefined' && window.alert) window.alert(msg)
+  }
+
+  // 内置导出进度遮罩(P1.5):状态 + 内置 AbortController + onProgress 链接
+  const [exportState, setExportState] = useState<ExportProgress | null>(null)
+  const [exportBusy, setExportBusy] = useState(false)
+  const exportCtrlRef = useRef<AbortController | null>(null)
+  const cancelExport = () => exportCtrlRef.current?.abort()
+
+  function chain<T, O extends { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal } | undefined>(
+    userOpts: O,
+    run: (opts: O) => Promise<T>,
+  ): Promise<T> {
+    if (propsRef.current.exportProgress === false) return run(userOpts)
+    const ctrl = new AbortController()
+    exportCtrlRef.current = ctrl
+    if (userOpts?.signal) {
+      if (userOpts.signal.aborted) ctrl.abort()
+      else userOpts.signal.addEventListener('abort', () => ctrl.abort(), { once: true })
+    }
+    setExportBusy(true)
+    setExportState(null)
+    const onProgress = (p: ExportProgress) => {
+      setExportState(p)
+      userOpts?.onProgress?.(p)
+    }
+    const merged = { ...(userOpts ?? {}), onProgress, signal: ctrl.signal } as O
+    return run(merged).finally(() => {
+      setExportBusy(false)
+      setExportState(null)
+      exportCtrlRef.current = null
+    })
   }
   function renderPluginOverlays() {
     const host = pluginHostRef.current
@@ -522,9 +563,9 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       convertImageToCell: (i, row, col) => controllerRef.current?.convertImageToCell(i, row, col) ?? false,
       convertImageToCellAuto: (i) => controllerRef.current?.convertImageToCellAuto(i) ?? false,
       convertAllImagesToCells: (col) => controllerRef.current?.convertAllImagesToCells(col) ?? 0,
-      convertImagesInRangeToCell: (range) => controllerRef.current?.convertImagesInRangeToCell(range) ?? 0,
-      convertCellImagesInRangeToFloat: (range, size) => controllerRef.current?.convertCellImagesInRangeToFloat(range, size) ?? 0,
-      applyTemplate: (spec) => controllerRef.current?.applyTemplate(spec) ?? Promise.resolve({ placeholdersScanned: 0, anchorsWritten: 0 }),
+      convertImagesInRangeToCell: (range) => chain<number, { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal }>({}, async (o) => { o.onProgress?.({ stage: 'convert', label: '选区浮动图批量嵌入…' }); return controllerRef.current?.convertImagesInRangeToCell(range) ?? 0 }),
+      convertCellImagesInRangeToFloat: (range, size) => chain<number, { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal }>({}, async (o) => { o.onProgress?.({ stage: 'convert', label: '选区内嵌图批量浮动化…' }); return controllerRef.current?.convertCellImagesInRangeToFloat(range, size) ?? 0 }),
+      applyTemplate: (spec) => chain(spec, (s) => controllerRef.current?.applyTemplate(s) ?? Promise.resolve({ placeholdersScanned: 0, anchorsWritten: 0 })),
       convertCellImageToFloat: (row, col, size) => controllerRef.current?.convertCellImageToFloat(row, col, size) ?? false,
       insertRows: (at, count) => controllerRef.current?.insertRows(at, count) ?? false,
       deleteRows: (at, count) => controllerRef.current?.deleteRows(at, count) ?? false,
@@ -546,13 +587,13 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       getVirtualExtent: () => controllerRef.current?.getVirtualExtent() ?? { rows: 0, cols: 0 },
       isDirty: () => controllerRef.current?.isDirty() ?? false,
       resetToOriginal: () => controllerRef.current?.resetToOriginal() ?? false,
-      exportImage: (opts) => controllerRef.current!.exportImage(opts),
-      downloadImage: (opts) => controllerRef.current!.downloadImage(opts),
-      exportPdf: (opts) => controllerRef.current!.exportPdf(opts),
-      downloadPdf: (opts) => controllerRef.current!.downloadPdf(opts),
-      print: (opts) => controllerRef.current!.print(opts),
-      exportXlsx: (opts) => controllerRef.current!.exportXlsx(opts),
-      downloadXlsx: (opts) => controllerRef.current!.downloadXlsx(opts),
+      exportImage: (opts) => chain(opts, (o) => controllerRef.current!.exportImage(o)),
+      downloadImage: (opts) => chain(opts, (o) => controllerRef.current!.downloadImage(o)),
+      exportPdf: (opts) => chain(opts, (o) => controllerRef.current!.exportPdf(o)),
+      downloadPdf: (opts) => chain(opts, (o) => controllerRef.current!.downloadPdf(o)),
+      print: (opts) => chain(opts, (o) => controllerRef.current!.print(o)),
+      exportXlsx: (opts) => chain(opts, (o) => controllerRef.current!.exportXlsx(o)),
+      downloadXlsx: (opts) => chain(opts, (o) => controllerRef.current!.downloadXlsx(o)),
       exportJson: (opts) => controllerRef.current?.exportJson(opts) ?? '{}',
       downloadJson: (opts) => controllerRef.current?.downloadJson(opts),
       exportCsv: (opts) => controllerRef.current?.exportCsv(opts) ?? '',
@@ -628,9 +669,9 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     convertImageToCell: (i, row, col) => controllerRef.current?.convertImageToCell(i, row, col) ?? false,
     convertImageToCellAuto: (i) => controllerRef.current?.convertImageToCellAuto(i) ?? false,
     convertAllImagesToCells: (col) => controllerRef.current?.convertAllImagesToCells(col) ?? 0,
-    convertImagesInRangeToCell: (range) => controllerRef.current?.convertImagesInRangeToCell(range) ?? 0,
-    convertCellImagesInRangeToFloat: (range, size) => controllerRef.current?.convertCellImagesInRangeToFloat(range, size) ?? 0,
-    applyTemplate: (spec) => controllerRef.current?.applyTemplate(spec) ?? Promise.resolve({ placeholdersScanned: 0, anchorsWritten: 0 }),
+    convertImagesInRangeToCell: (range) => chain<number, { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal }>({}, async (o) => { o.onProgress?.({ stage: 'convert', label: '选区浮动图批量嵌入…' }); return controllerRef.current?.convertImagesInRangeToCell(range) ?? 0 }),
+    convertCellImagesInRangeToFloat: (range, size) => chain<number, { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal }>({}, async (o) => { o.onProgress?.({ stage: 'convert', label: '选区内嵌图批量浮动化…' }); return controllerRef.current?.convertCellImagesInRangeToFloat(range, size) ?? 0 }),
+    applyTemplate: (spec) => chain(spec, (s) => controllerRef.current?.applyTemplate(s) ?? Promise.resolve({ placeholdersScanned: 0, anchorsWritten: 0 })),
     convertCellImageToFloat: (row, col, size) => controllerRef.current?.convertCellImageToFloat(row, col, size) ?? false,
     insertRows: (at, count) => controllerRef.current?.insertRows(at, count) ?? false,
     deleteRows: (at, count) => controllerRef.current?.deleteRows(at, count) ?? false,
@@ -652,13 +693,13 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     getVirtualExtent: () => controllerRef.current?.getVirtualExtent() ?? { rows: 0, cols: 0 },
     isDirty: () => controllerRef.current?.isDirty() ?? false,
     resetToOriginal: () => controllerRef.current?.resetToOriginal() ?? false,
-    exportImage: (opts) => controllerRef.current!.exportImage(opts),
-    downloadImage: (opts) => controllerRef.current!.downloadImage(opts),
-    exportPdf: (opts) => controllerRef.current!.exportPdf(opts),
-    downloadPdf: (opts) => controllerRef.current!.downloadPdf(opts),
-    print: (opts) => controllerRef.current!.print(opts),
-    exportXlsx: (opts) => controllerRef.current!.exportXlsx(opts),
-    downloadXlsx: (opts) => controllerRef.current!.downloadXlsx(opts),
+    exportImage: (opts) => chain(opts, (o) => controllerRef.current!.exportImage(o)),
+    downloadImage: (opts) => chain(opts, (o) => controllerRef.current!.downloadImage(o)),
+    exportPdf: (opts) => chain(opts, (o) => controllerRef.current!.exportPdf(o)),
+    downloadPdf: (opts) => chain(opts, (o) => controllerRef.current!.downloadPdf(o)),
+    print: (opts) => chain(opts, (o) => controllerRef.current!.print(o)),
+    exportXlsx: (opts) => chain(opts, (o) => controllerRef.current!.exportXlsx(o)),
+    downloadXlsx: (opts) => chain(opts, (o) => controllerRef.current!.downloadXlsx(o)),
     exportJson: (opts) => controllerRef.current?.exportJson(opts) ?? '{}',
     downloadJson: (opts) => controllerRef.current?.downloadJson(opts),
     exportCsv: (opts) => controllerRef.current?.exportCsv(opts) ?? '',
@@ -961,6 +1002,12 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
             </button>
           ))}
         </div>
+      )}
+      {/* 内置导出进度遮罩(P1.5):exportProgress=false 关闭;renderExportProgress 自渲染覆盖 */}
+      {props.exportProgress !== false && (
+        props.renderExportProgress
+          ? props.renderExportProgress({ state: exportState, busy: exportBusy, cancel: cancelExport })
+          : <ExportProgressOverlay state={exportState} busy={exportBusy} onCancel={cancelExport} />
       )}
     </div>
   )

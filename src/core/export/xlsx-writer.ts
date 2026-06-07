@@ -284,7 +284,7 @@ export async function workbookToXlsxBlob(workbook: WorkbookModel, opts: XlsxExpo
       applyModelOntoSheet(ws, sheet)
       opts.onProgress?.({ stage: 'write', sheetIndex: i, ratio: (i + 1) / workbook.sheets.length, label: `写入 ${sheet.name}` })
     }
-    opts.onProgress?.({ stage: 'zip', ratio: 0, label: 'zip 压缩…' })
+    opts.onProgress?.({ stage: 'zip', ratio: undefined, label: 'zip 压缩 .xlsx…' })
     const buf = await wb.xlsx.writeBuffer()
     checkAborted(opts.signal)
     opts.onProgress?.({ stage: 'zip', ratio: 1 })
