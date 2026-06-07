@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ExcelViewer from './components/ExcelViewer.vue'
 import { definePlugin } from './core/plugin'
 import type { ViewerApi } from './core/plugin'
@@ -191,6 +191,120 @@ const negativesPlugin = definePlugin({
   },
 })
 const plugins = [negativesPlugin]
+
+// ---------------- demo 顶栏:按钮太多自动收进「⋯ 更多」 ----------------
+// 把可溢出的演示按钮抽成数据数组,做隐藏测量 + 可见/溢出切分。本逻辑只在 demo 里,
+// 跟组件内置的 ActionToolbar 各管各的:demo 的演示按钮永远不进 :toolbar(那是组件的领地)。
+interface DemoItem {
+  id: string
+  /** 'btn' 普通按钮 / 'color' 取色器(label+input[type=color]) / 'select' 下拉 */
+  type: 'btn' | 'color' | 'select'
+  label: string
+  title?: string
+  when?: () => boolean
+  onClick?: () => void
+  /** color: 当前回显色 + 改色 */
+  getColor?: () => string
+  onColorInput?: (e: Event) => void
+  /** select: 选项列表 + v-model */
+  selectModel?: () => string
+  selectOptions?: { value: string; label: string }[]
+  onSelect?: (v: string) => void
+}
+const demoBarItems = computed<DemoItem[]>(() => {
+  if (!src.value) return []
+  void selTick.value // 颜色回显跟 selTick 走
+  const arr: DemoItem[] = [
+    { id: 'pdf-watermark', type: 'btn', label: 'PDF(页码+水印)', title: '演示 beforeRenderPage 钩子', onClick: () => void exportPdfWithWatermark() },
+    { id: 'sheet-json', type: 'btn', label: '数据→JSON', title: '演示数据读取 API getSheetJSON', onClick: showSheetJSON },
+    { id: 'fit', type: 'select', label: '贴合', title: 'WPS 内嵌图贴合方式',
+      selectModel: () => cellImageFit.value,
+      selectOptions: [
+        { value: 'contain', label: 'contain 等比(同 WPS)' },
+        { value: 'fill', label: 'fill 铺满' },
+        { value: 'cover', label: 'cover 裁剪' },
+      ],
+      onSelect: (v) => (cellImageFit.value = v as 'fill' | 'contain' | 'cover'),
+    },
+    { id: 'dl-xlsx', type: 'btn', label: '↓XLSX', title: '导出 .xlsx(E8:从模型重建)', onClick: () => void viewerRef.value?.downloadXlsx() },
+    { id: 'dl-csv', type: 'btn', label: '↓CSV', title: '导出 .csv(E8)', onClick: () => viewerRef.value?.downloadCsv() },
+    { id: 'dl-json', type: 'btn', label: '↓JSON', title: '导出 .json(E8)', onClick: () => viewerRef.value?.downloadJson() },
+  ]
+  if (editMode.value) {
+    arr.unshift(
+      { id: 'bold', type: 'btn', label: 'B 加粗选区', title: '给选区加粗(E5)', onClick: boldSelection },
+      { id: 'merge', type: 'btn', label: '合并', title: '合并选区(G1)', onClick: mergeSelection },
+      { id: 'unmerge', type: 'btn', label: '拆分', title: '拆分选区(G1)', onClick: unmergeSelection },
+      { id: 'fill', type: 'color', label: '背景', title: '背景填充色(回显 + 改选区,WPS 风格)', getColor: () => activeFill.value, onColorInput: setFill },
+      { id: 'font', type: 'color', label: '字体', title: '字体颜色(回显 + 改选区)', getColor: () => activeFont.value, onColorInput: setFont },
+      { id: 'clear-fill', type: 'btn', label: '清除填充', title: '清除背景填充(还原无填充/白)', onClick: clearFill },
+      { id: 'embed-all', type: 'btn', label: '整表嵌入', title: '整表浮动图就近嵌入(WPS 浮动→嵌入/DISPIMG)', onClick: embedAll },
+      { id: 'cell-to-float', type: 'btn', label: '格→图', title: '把选中格的内嵌图拎成浮动图(WPS 嵌入→浮动)', onClick: cellToFloat },
+      { id: 'ins-row', type: 'btn', label: '＋行', title: '选区上方插入行(E7)', onClick: insertRowAtSel },
+      { id: 'del-row', type: 'btn', label: '－行', title: '删除选区行(E7)', onClick: deleteRowAtSel },
+    )
+  }
+  return arr
+})
+
+// 测量 + 计算可见数(放不下的进「更多」popover)
+const demoBarEl = ref<HTMLElement | null>(null)
+const demoMeasureEl = ref<HTMLElement | null>(null)
+const demoItemWidths = ref<number[]>([])
+const demoBarContentW = ref(0)
+const demoMoreOpen = ref(false)
+const DEMO_MORE_W = 64
+const DEMO_GAP = 6
+function demoRemeasure() {
+  const el = demoMeasureEl.value
+  if (!el) return
+  demoItemWidths.value = Array.from(el.children).map((c) => (c as HTMLElement).offsetWidth)
+  const bar = demoBarEl.value
+  if (!bar) return
+  // 剩余可用宽 = bar 总宽 - 固定区(strong/sub/grow/file/sample/edit)实际占用,后者是 bar 的直接子节点除测量+可见 row + more 之外的部分
+  const fixed = Array.from(bar.children).find((c) => (c as HTMLElement).classList.contains('app-bar-fixed')) as HTMLElement | null
+  const fixedW = fixed ? fixed.getBoundingClientRect().width : 0
+  demoBarContentW.value = Math.max(0, bar.clientWidth - fixedW - 24 /* 边距 */)
+}
+const demoVisibleCount = computed(() => {
+  const cw = demoBarContentW.value
+  const w = demoItemWidths.value
+  const items = demoBarItems.value
+  if (!cw || w.length !== items.length) return items.length
+  let sum = 0
+  let fitsAll = true
+  for (let i = 0; i < items.length; i++) {
+    sum += w[i] + DEMO_GAP
+    if (sum > cw) { fitsAll = false; break }
+  }
+  if (fitsAll) return items.length
+  let s = DEMO_MORE_W
+  let n = 0
+  for (let i = 0; i < items.length; i++) {
+    s += w[i] + DEMO_GAP
+    if (s > cw) break
+    n++
+  }
+  return Math.max(0, n)
+})
+const demoVisibleItems = computed(() => demoBarItems.value.slice(0, demoVisibleCount.value))
+const demoOverflowItems = computed(() => demoBarItems.value.slice(demoVisibleCount.value))
+let demoRo: ResizeObserver | null = null
+function onDemoBarPointer(e: MouseEvent) {
+  if (demoBarEl.value && !demoBarEl.value.contains(e.target as Node)) demoMoreOpen.value = false
+}
+onMounted(() => {
+  nextTick(demoRemeasure)
+  demoRo = new ResizeObserver(() => demoRemeasure())
+  if (demoBarEl.value) demoRo.observe(demoBarEl.value)
+  document.addEventListener('mousedown', onDemoBarPointer)
+})
+onBeforeUnmount(() => {
+  demoRo?.disconnect()
+  document.removeEventListener('mousedown', onDemoBarPointer)
+})
+watch(demoBarItems, () => nextTick(demoRemeasure))
+
 type Rect = { x: number; y: number; w: number; h: number } | null
 // overlay slot: 在 B3(row2,col1)叠一个徽标,随滚动跟随;tick 变化触发重算
 function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
@@ -213,46 +327,50 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
     @dragleave.prevent="dragOver = false"
     @drop.prevent="onDrop"
   >
-    <header class="app-bar">
-      <strong>OOXML Excel 预览器</strong>
-      <span class="sub">Vue3 · Canvas 高保真 · 只读</span>
+    <!-- demo 顶栏:固定区(标题/选 xlsx/加载示例/编辑模式)+ 演示按钮区(自动溢出收进「⋯ 更多」) -->
+    <header class="app-bar" ref="demoBarEl">
+      <!-- 固定区:永不溢出(基础框架控件) -->
+      <div class="app-bar-fixed">
+        <strong>OOXML Excel 预览器</strong>
+        <span class="sub">Vue3 · Canvas 高保真</span>
+        <label class="file-btn">
+          选择 .xlsx
+          <input type="file" accept=".xlsx,.xlsm" @change="onInput" hidden />
+        </label>
+        <button class="sample-btn" @click="loadSample">加载示例</button>
+        <label v-if="src" class="edit-toggle" title="开启编辑模式(E0:闸门)">
+          <input type="checkbox" v-model="editMode" /> 编辑模式
+        </label>
+      </div>
       <div class="grow" />
-      <label class="file-btn">
-        选择 .xlsx
-        <input type="file" accept=".xlsx,.xlsm" @change="onInput" hidden />
-      </label>
-      <button class="sample-btn" @click="loadSample">加载示例</button>
-      <button v-if="src" class="sample-btn" @click="exportPdfWithWatermark" title="演示 beforeRenderPage 钩子">
-        PDF(页码+水印)
-      </button>
-      <button v-if="src" class="sample-btn" @click="showSheetJSON" title="演示数据读取 API getSheetJSON">
-        数据→JSON
-      </button>
-      <label v-if="src" class="edit-toggle" title="开启编辑模式(E0:闸门)">
-        <input type="checkbox" v-model="editMode" /> 编辑模式
-      </label>
-      <button v-if="src && editMode" class="sample-btn" @click="boldSelection" title="给选区加粗(E5:样式编辑)">
-        B 加粗选区
-      </button>
-      <button v-if="src && editMode" class="sample-btn" @click="mergeSelection" title="合并选区(G1)">合并</button>
-      <button v-if="src && editMode" class="sample-btn" @click="unmergeSelection" title="拆分选区(G1)">拆分</button>
-      <label v-if="src && editMode" class="sample-label" title="背景填充色(回显当前格 + 改选区,WPS 风格)">背景
-        <input type="color" :value="activeFill" @input="setFill" />
-      </label>
-      <label v-if="src && editMode" class="sample-label" title="字体颜色(回显当前格 + 改选区)">字体
-        <input type="color" :value="activeFont" @input="setFont" />
-      </label>
-      <button v-if="src && editMode" class="sample-btn" @click="clearFill" title="清除背景填充(还原无填充/白)">清除填充</button>
-      <button v-if="src && editMode" class="sample-btn" @click="embedAll" title="整表浮动图就近嵌入各自单元格(WPS 浮动→嵌入/DISPIMG)">整表嵌入</button>
-      <button v-if="src && editMode" class="sample-btn" @click="cellToFloat" title="把选中格的内嵌图拎成浮动图(WPS 嵌入→浮动)">格→图</button>
-      <label v-if="src" class="sample-label" title="WPS 内嵌图贴合方式">贴合
-        <select v-model="cellImageFit"><option value="contain">contain 等比(同 WPS)</option><option value="fill">fill 铺满</option><option value="cover">cover 裁剪</option></select>
-      </label>
-      <button v-if="src && editMode" class="sample-btn" @click="insertRowAtSel" title="选区上方插入行(E7)">＋行</button>
-      <button v-if="src && editMode" class="sample-btn" @click="deleteRowAtSel" title="删除选区行(E7)">－行</button>
-      <button v-if="src" class="sample-btn" @click="viewerRef?.downloadXlsx()" title="导出 .xlsx(E8:从模型重建)">↓XLSX</button>
-      <button v-if="src" class="sample-btn" @click="viewerRef?.downloadCsv()" title="导出 .csv(E8)">↓CSV</button>
-      <button v-if="src" class="sample-btn" @click="viewerRef?.downloadJson()" title="导出 .json(E8)">↓JSON</button>
+
+      <!-- 隐藏测量行:为每项算实际宽度,跟可见行的样式一致 -->
+      <div class="app-bar-measure" ref="demoMeasureEl" aria-hidden="true">
+        <template v-for="it in demoBarItems" :key="'m' + it.id">
+          <button v-if="it.type === 'btn'" class="sample-btn">{{ it.label }}</button>
+          <label v-else-if="it.type === 'color'" class="sample-label">{{ it.label }}<input type="color" /></label>
+          <label v-else class="sample-label">{{ it.label }}<select><option v-for="o in it.selectOptions" :key="o.value" :value="o.value">{{ o.label }}</option></select></label>
+        </template>
+      </div>
+
+      <!-- 可见演示按钮 -->
+      <template v-for="it in demoVisibleItems" :key="it.id">
+        <button v-if="it.type === 'btn'" class="sample-btn" :title="it.title" @click="it.onClick?.()">{{ it.label }}</button>
+        <label v-else-if="it.type === 'color'" class="sample-label" :title="it.title">{{ it.label }}<input type="color" :value="it.getColor?.()" @input="it.onColorInput?.($event)" /></label>
+        <label v-else class="sample-label" :title="it.title">{{ it.label }}<select :value="it.selectModel?.()" @change="it.onSelect?.(($event.target as HTMLSelectElement).value)"><option v-for="o in it.selectOptions" :key="o.value" :value="o.value">{{ o.label }}</option></select></label>
+      </template>
+
+      <!-- 更多溢出 popover -->
+      <div v-if="demoOverflowItems.length" class="more-wrap">
+        <button class="sample-btn more-btn" :class="{ open: demoMoreOpen }" title="更多" @click="demoMoreOpen = !demoMoreOpen">⋯ 更多</button>
+        <div v-if="demoMoreOpen" class="more-pop">
+          <template v-for="it in demoOverflowItems" :key="'o' + it.id">
+            <button v-if="it.type === 'btn'" class="more-row" :title="it.title" @click="it.onClick?.(); demoMoreOpen = false">{{ it.label }}</button>
+            <label v-else-if="it.type === 'color'" class="more-row" :title="it.title">{{ it.label }}<input type="color" :value="it.getColor?.()" @input="it.onColorInput?.($event)" /></label>
+            <label v-else class="more-row" :title="it.title">{{ it.label }}<select :value="it.selectModel?.()" @change="it.onSelect?.(($event.target as HTMLSelectElement).value); demoMoreOpen = false"><option v-for="o in it.selectOptions" :key="o.value" :value="o.value">{{ o.label }}</option></select></label>
+          </template>
+        </div>
+      </div>
     </header>
 
     <main class="app-body">
@@ -325,16 +443,24 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
   z-index: 10;
 }
 .app-bar {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   height: 48px;
   padding: 0 16px;
   background: #21a366;
   color: #fff;
+  overflow: visible; /* 让「更多」popover 能溢出到栏外 */
+}
+.app-bar-fixed {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
 }
 .app-bar .sub { font-size: 12px; opacity: 0.85; }
-.app-bar .grow { flex: 1; }
+.app-bar .grow { flex: 1 1 0; min-width: 0; }
 .file-btn, .sample-btn {
   background: rgba(255, 255, 255, 0.18);
   color: #fff;
@@ -343,8 +469,63 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
   border-radius: 5px;
   cursor: pointer;
   font-size: 13px;
+  white-space: nowrap;
 }
 .file-btn:hover, .sample-btn:hover { background: rgba(255, 255, 255, 0.3); }
+.sample-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  white-space: nowrap;
+}
+.sample-label input[type=color], .sample-label select { vertical-align: middle; }
+/* 隐藏测量行:占位但不显示 + 不响应交互 */
+.app-bar-measure {
+  position: absolute;
+  left: 0; top: 0;
+  visibility: hidden;
+  pointer-events: none;
+  height: 0;
+  overflow: hidden;
+  display: flex;
+  gap: 6px;
+}
+.more-wrap { position: relative; }
+.more-btn { display: inline-flex; align-items: center; gap: 4px; }
+.more-btn.open { background: rgba(255, 255, 255, 0.32); }
+.more-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  min-width: 200px;
+  background: #fff;
+  color: #1f2329;
+  border: 1px solid #d8dbde;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
+}
+.more-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  background: none;
+  border: none;
+  font: inherit;
+  font-size: 13px;
+  color: #1f2329;
+  padding: 7px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.more-row:hover { background: #eef3fe; }
 .app-body {
   position: relative;
   flex: 1 1 auto;
