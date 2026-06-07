@@ -18,6 +18,7 @@ import type { CellValue, ReadOptions, SheetToJSONOptions } from './model/data-ac
 import type { CellSnapshot } from './model/snapshot'
 import type { CellInspection } from './model/inspect'
 import type { TemplateFillSpec } from './template/fill'
+import type { MenuItem } from './edit/context-menu'
 import type { EditorResolver } from './edit/editor-context'
 import type { ViewerTheme } from './render/theme'
 import type { ExcelSource } from './loader'
@@ -176,6 +177,10 @@ export interface ViewerApi {
   convertCellImagesInRangeToFloat(range: MergeRange, size?: { width: number; height: number }): Promise<number>
   /** 模板填值(P3):把 JSON 数据按占位符 {{key}} + 锚点表 注入当前工作簿,渲染前预处理;不入命令栈 */
   applyTemplate(spec: TemplateFillSpec): Promise<{ placeholdersScanned: number; anchorsWritten: number }>
+  /** 程序化打开右键菜单(Plan C;键盘 Shift+F10 / 工具栏触发等);items 不给则按当前选区算内置 */
+  openContextMenu(x: number, y: number, items?: MenuItem[]): void
+  /** 关闭当前打开的右键菜单 */
+  closeContextMenu(): void
   /** 单元格内嵌图 → 浮动图(把 row,col 的 DISPIMG 拎成浮动图,默认 96×96px);editable 时入命令栈 */
   convertCellImageToFloat(row: number, col: number, size?: { width: number; height: number }): boolean
   /** 在 at 处插入 count 行(E7);editable 时入命令栈 + 发 struct-change */
@@ -259,6 +264,8 @@ export interface ExcelPlugin {
   overlay?: (ctx: OverlayContext) => OverlayNode
   /** 按格自定义编辑控件(返回工厂;多插件数组序首个非空胜,组件 editor prop 覆盖);需 editable 开启。 */
   editor?: EditorResolver
+  /** 右键菜单 transform(Plan C):`(ctx, items) => items[]`,多插件按数组顺序串行,组件 :contextMenu prop 最后覆盖 */
+  contextMenu?: import('./viewer/controller').ContextMenuTransform
   /** 高级: 拿命令式 API、订阅事件;返回可选清理函数 */
   setup?: (ctx: ExcelPluginContext) => void | (() => void)
 }
@@ -272,3 +279,10 @@ export function definePlugin(plugin: ExcelPlugin): ExcelPlugin {
 export { jsonToWorkbook, isWorkbookModel, type JsonInput, type JsonLoadOptions, type JsonRow, type JsonSheetInput } from './loader-json'
 export { fillTemplate, replacePlaceholders, parseCellAddress, type TemplateFillSpec, type TemplateAnchor } from './template/fill'
 export type { CellInspection } from './model/inspect'
+export type { MenuItem } from './edit/context-menu'
+export type {
+  ContextMenuCtx,
+  ContextMenuTransform,
+  ContextMenuBeforePayload,
+  ContextMenuShowPayload,
+} from './viewer/controller'

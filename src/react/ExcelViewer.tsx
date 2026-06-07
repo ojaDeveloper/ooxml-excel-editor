@@ -41,7 +41,16 @@ import {
 import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { ViewerController, type Cell, type TooltipState } from '@/core/viewer/controller'
 import { PluginOverlayHost } from '@/core/viewer/plugin-overlay'
-import type { ExcelPlugin, OverlayContext, PluginEvent, ViewerApi } from '@/core/plugin'
+import type {
+  ContextMenuBeforePayload,
+  ContextMenuShowPayload,
+  ContextMenuTransform,
+  ExcelPlugin,
+  MenuItem,
+  OverlayContext,
+  PluginEvent,
+  ViewerApi,
+} from '@/core/plugin'
 import { useExcelDocument } from './use-excel-document'
 import './excel-viewer.css'
 
@@ -64,6 +73,17 @@ export interface ExcelViewerProps {
   exportProgress?: boolean
   /** 完全自渲染遮罩:返回任意 ReactNode 替代内置 UI。`exportProgress=false` 时此项也不渲染。 */
   renderExportProgress?: (ctx: { state: ExportProgress | null; busy: boolean; cancel: () => void }) => React.ReactNode
+  /**
+   * 右键菜单(Plan C):
+   * - `false` → 不弹内置菜单(`onBeforeContextMenu` / `onContextMenuShow` 仍触发,壳可自渲染)
+   * - 函数 `(ctx, items) => MenuItem[] | undefined` → 在内置 items 上加 / 减 / 重排;返 undefined 不动
+   * - 不传(默认)→ editable 时显示内置菜单,非 editable 走浏览器默认
+   */
+  contextMenu?: boolean | ContextMenuTransform
+  /** 右键菜单触发前:`payload.preventDefault()` 阻止内置菜单(自渲染替代) */
+  onBeforeContextMenu?: (payload: ContextMenuBeforePayload) => void
+  /** 右键菜单展示通知:无论内置是否弹都触发,供自渲染或事件流串到业务 */
+  onContextMenuShow?: (payload: ContextMenuShowPayload) => void
   fileName?: string
   theme?: Partial<ViewerTheme>
   /** 单击超链接是否自动打开(默认 true) */
@@ -159,6 +179,8 @@ export interface ExcelViewerHandle {
   convertImagesInRangeToCell: (range: MergeRange) => Promise<number>
   convertCellImagesInRangeToFloat: (range: MergeRange, size?: { width: number; height: number }) => Promise<number>
   applyTemplate: (spec: TemplateFillSpec) => Promise<{ placeholdersScanned: number; anchorsWritten: number }>
+  openContextMenu: (x: number, y: number, items?: MenuItem[]) => void
+  closeContextMenu: () => void
   convertCellImageToFloat: (row: number, col: number, size?: { width: number; height: number }) => boolean
   insertRows: (at: number, count?: number) => boolean
   deleteRows: (at: number, count?: number) => boolean
@@ -397,11 +419,26 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
           else if (event === 'struct-change') propsRef.current.onStructChange?.(payload as StructChangePayload)
           firePlugin(event, payload)
         },
+        onContextMenuBefore: (payload) => {
+          // 1) 先跑插件 contextMenu 串行(后者拿前者的输出)
+          for (const p of (propsRef.current.plugins ?? [])) {
+            if (p.contextMenu) {
+              const next = p.contextMenu(payload.ctx, payload.items)
+              if (Array.isArray(next)) payload.items.splice(0, payload.items.length, ...next)
+            }
+          }
+          // 2) 调用方 onBeforeContextMenu
+          propsRef.current.onBeforeContextMenu?.(payload)
+          // 3) `contextMenu={false}` 直接阻止
+          if (propsRef.current.contextMenu === false) payload.preventDefault()
+        },
+        onContextMenuShow: (payload) => propsRef.current.onContextMenuShow?.(payload),
       },
     )
     controller.fileName = propsRef.current.fileName
     controller.setEditConfig(buildEditConfig())
     controller.setEditorResolver(editorResolver())
+    controller.setContextMenuTransform(typeof propsRef.current.contextMenu === 'function' ? propsRef.current.contextMenu : null)
     controller.setLightboxEnabled(propsRef.current.imageLightbox !== false) // 图片点击放大(默认开)
     controllerRef.current = controller
     if (pluginOvRef.current) pluginHostRef.current = new PluginOverlayHost(pluginOvRef.current)
@@ -451,6 +488,13 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     controllerRef.current?.setEditConfig(buildEditConfig())
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.editable, props.cellReadOnly, props.readOnlyRanges, props.recalc, props.formulaEngine])
+
+  // ---- 右键菜单 transform 同步(Plan C) ----
+  useEffect(() => {
+    controllerRef.current?.setContextMenuTransform(
+      typeof props.contextMenu === 'function' ? props.contextMenu : null,
+    )
+  }, [props.contextMenu])
 
   // ---- 编辑器解析器同步(E2) ----
   useEffect(() => {
@@ -566,6 +610,8 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       convertImagesInRangeToCell: (range) => chain<number, { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal }>({}, async (o) => { o.onProgress?.({ stage: 'convert', label: '选区浮动图批量嵌入…' }); return controllerRef.current?.convertImagesInRangeToCell(range) ?? 0 }),
       convertCellImagesInRangeToFloat: (range, size) => chain<number, { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal }>({}, async (o) => { o.onProgress?.({ stage: 'convert', label: '选区内嵌图批量浮动化…' }); return controllerRef.current?.convertCellImagesInRangeToFloat(range, size) ?? 0 }),
       applyTemplate: (spec) => chain(spec, (s) => controllerRef.current?.applyTemplate(s) ?? Promise.resolve({ placeholdersScanned: 0, anchorsWritten: 0 })),
+      openContextMenu: (x, y, items) => controllerRef.current?.openContextMenu(x, y, items),
+      closeContextMenu: () => controllerRef.current?.closeContextMenu(),
       convertCellImageToFloat: (row, col, size) => controllerRef.current?.convertCellImageToFloat(row, col, size) ?? false,
       insertRows: (at, count) => controllerRef.current?.insertRows(at, count) ?? false,
       deleteRows: (at, count) => controllerRef.current?.deleteRows(at, count) ?? false,
@@ -672,6 +718,8 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     convertImagesInRangeToCell: (range) => chain<number, { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal }>({}, async (o) => { o.onProgress?.({ stage: 'convert', label: '选区浮动图批量嵌入…' }); return controllerRef.current?.convertImagesInRangeToCell(range) ?? 0 }),
     convertCellImagesInRangeToFloat: (range, size) => chain<number, { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal }>({}, async (o) => { o.onProgress?.({ stage: 'convert', label: '选区内嵌图批量浮动化…' }); return controllerRef.current?.convertCellImagesInRangeToFloat(range, size) ?? 0 }),
     applyTemplate: (spec) => chain(spec, (s) => controllerRef.current?.applyTemplate(s) ?? Promise.resolve({ placeholdersScanned: 0, anchorsWritten: 0 })),
+    openContextMenu: (x, y, items) => controllerRef.current?.openContextMenu(x, y, items),
+    closeContextMenu: () => controllerRef.current?.closeContextMenu(),
     convertCellImageToFloat: (row, col, size) => controllerRef.current?.convertCellImageToFloat(row, col, size) ?? false,
     insertRows: (at, count) => controllerRef.current?.insertRows(at, count) ?? false,
     deleteRows: (at, count) => controllerRef.current?.deleteRows(at, count) ?? false,

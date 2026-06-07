@@ -102,6 +102,34 @@ export interface ViewerControllerHooks {
   onFilterChange: () => void
   /** 编辑事件(cell-change/edit-start/edit-commit;壳转 emit + 插件派发) */
   onEditEvent: (event: EditEventName, payload: unknown) => void
+  /** 右键菜单触发前(Plan C):用户可调 `preventDefault()` 阻止内置菜单弹出(然后自渲染) */
+  onContextMenuBefore?: (payload: ContextMenuBeforePayload) => void
+  /** 右键菜单"展示"通知(Plan C):无论内置是否弹都触发,供壳自渲染或事件流串到业务 */
+  onContextMenuShow?: (payload: ContextMenuShowPayload) => void
+}
+
+/** 右键菜单上下文(单格/选区 + 活动格 + 当前表/簿 + editable 闸门态) */
+export interface ContextMenuCtx {
+  range: MergeRange
+  single: boolean
+  activeCell: Cell
+  sheet: SheetModel
+  workbook: WorkbookModel
+  editable: boolean
+}
+/** 用户 transform:在内置 items 上做加 / 减 / 重排;返新数组生效,返 undefined 用原样 */
+export type ContextMenuTransform = (ctx: ContextMenuCtx, items: MenuItem[]) => MenuItem[] | undefined | void
+export interface ContextMenuBeforePayload {
+  event: MouseEvent
+  ctx: ContextMenuCtx
+  items: MenuItem[]
+  preventDefault: () => void
+}
+export interface ContextMenuShowPayload {
+  x: number
+  y: number
+  ctx: ContextMenuCtx
+  items: MenuItem[]
 }
 
 const BLANK = '(空白)'
@@ -131,6 +159,8 @@ export class ViewerController {
   private menuHost = new ContextMenuHost()
   private lightbox = new LightboxHost()
   private lightboxEnabled = true
+  /** 用户的右键菜单 transform 回调(Plan C):`(ctx, items) => MenuItem[] | undefined` */
+  private ctxMenuTransform: ContextMenuTransform | null = null
   /** 原始 .xlsx 字节(壳加载时注入;供高保真 overlay 导出重载原件) */
   private sourceBuffer: ArrayBuffer | null = null
   /** 壳在加载后注入原始字节(供 exportXlsx({fidelity:'overlay'}) 重载原件叠加编辑) */
@@ -833,12 +863,42 @@ export class ViewerController {
   }
 
   /** 右键上下文菜单(G3;仅 editable;只读用浏览器默认菜单)。壳把 contextmenu 事件转给它。 */
+  /**
+   * 右键事件入口(Plan C 全面开放):
+   *  1. 算 ctx(选区 + 单/多格 + 活动格);右键不在当前选区 → 先选中(仿 Excel)
+   *  2. 算内置 items(`buildBuiltinContextMenuItems`,editable 时才有,否则空)
+   *  3. 跑用户 `setContextMenuTransform` 回调(可加/减/重排)
+   *  4. 触发 `onContextMenuBefore` 钩子(可 preventDefault)
+   *  5. 没被 prevent + items 非空 → 弹内置浮层;无论是否弹,都触发 `onContextMenuShow`(让用户也能自渲染)
+   */
   onContextMenu(e: MouseEvent): void {
-    if (!this.editCfg.editable) return
+    const ctx = this.buildContextMenuCtx(e)
+    if (!ctx) return
+    let items = this.editCfg.editable ? this.buildBuiltinContextMenuItems(ctx) : []
+    if (this.ctxMenuTransform) {
+      const next = this.ctxMenuTransform(ctx, items)
+      if (Array.isArray(next)) items = next
+    }
+    let prevented = false
+    const preventDefault = () => { prevented = true }
+    this.hooks.onContextMenuBefore?.({ event: e, ctx, items, preventDefault })
+    if (prevented) {
+      e.preventDefault()
+      this.hooks.onContextMenuShow?.({ x: e.clientX, y: e.clientY, ctx, items })
+      return
+    }
+    if (items.length) {
+      e.preventDefault()
+      this.menuHost.show(e.clientX, e.clientY, items)
+    }
+    this.hooks.onContextMenuShow?.({ x: e.clientX, y: e.clientY, ctx, items })
+  }
+
+  /** 算右键 ctx:命中格 + 选区调整;非内容区 / 无 renderer 返 null */
+  private buildContextMenuCtx(e: MouseEvent): ContextMenuCtx | null {
     const r = this.renderer
     const p = this.localXY(e)
-    if (!r || !p) return
-    // 右键点在内容格上且不在当前选区 → 先选中该格(仿 Excel)
+    if (!r || !p) return null
     const hit = r.cellAtScreen(this.view, p.x, p.y)
     let sel = this.getSelection()
     if (hit && (!sel || hit.row < sel.top || hit.row > sel.bottom || hit.col < sel.left || hit.col > sel.right)) {
@@ -846,11 +906,25 @@ export class ViewerController {
       this.render()
       sel = this.getSelection()
     }
-    if (!sel) return
+    if (!sel || !this.sheet || !this.workbook) return null
     const range = { ...sel }
+    const single = range.top === range.bottom && range.left === range.right
+    return {
+      range,
+      single,
+      activeCell: { row: range.top, col: range.left },
+      sheet: this.sheet,
+      workbook: this.workbook,
+      editable: !!this.editCfg.editable,
+    }
+  }
+
+  /** 编辑模式下的内置菜单项(独立提取,便于 transform 回调拿到再二次加工) */
+  buildBuiltinContextMenuItems(ctx: ContextMenuCtx): MenuItem[] {
+    const range = ctx.range
     const rows = range.bottom - range.top + 1
     const cols = range.right - range.left + 1
-    const single = range.top === range.bottom && range.left === range.right
+    const single = ctx.single
     const items: MenuItem[] = [
       { label: '复制', action: () => void this.copySelection() },
       { label: '粘贴', action: () => void this.pasteFromClipboard() },
@@ -871,17 +945,15 @@ export class ViewerController {
     ]
     // 选区批量(多格)— 浮动图批量嵌入 / 嵌入图批量浮动化
     if (!single) {
-      const imgs = this.sheet?.images ?? []
-      // 浮动图中心落在选区内的张数
+      const imgs = ctx.sheet.images ?? []
       const floatsInRange = imgs.reduce((n, _, i) => {
         const a = this.imageCellOf(i)
         return n + (!!a && a.row >= range.top && a.row <= range.bottom && a.col >= range.left && a.col <= range.right ? 1 : 0)
       }, 0)
-      // 选区内 DISPIMG 格数
       let dispCount = 0
       for (let r = range.top; r <= range.bottom; r++) {
         for (let c = range.left; c <= range.right; c++) {
-          if (this.sheet?.cells.get(cellKey(r, c))?.dispImgId) dispCount++
+          if (ctx.sheet.cells.get(cellKey(r, c))?.dispImgId) dispCount++
         }
       }
       if (floatsInRange > 0 || dispCount > 0) {
@@ -895,11 +967,10 @@ export class ViewerController {
     if (single) {
       const r = range.top
       const c = range.left
-      const activeCell = this.sheet?.cells.get(cellKey(r, c))
-      const imgs = this.sheet?.images ?? []
+      const activeCell = ctx.sheet.cells.get(cellKey(r, c))
+      const imgs = ctx.sheet.images ?? []
       const convertItems: MenuItem[] = []
       if (activeCell?.dispImgId) {
-        // 编辑模式下单击是选区,放大/下载走右键(只读模式直接单击放大)
         const ci = this.getCellImageAt(r, c)
         if (this.lightboxEnabled && ci?.src) {
           convertItems.push({
@@ -910,24 +981,50 @@ export class ViewerController {
         convertItems.push({ label: '内嵌图转为浮动图', action: () => this.convertCellImageToFloat(r, c) })
       }
       if (imgs.length) {
-        // 就近:点中的格上正好压着一张浮动图 → 一键嵌入它(无需手挑 #N)
         const hereIdx = imgs.findIndex((_, i) => {
           const a = this.imageCellOf(i)
           return !!a && a.row === r && a.col === c
         })
         if (hereIdx >= 0) convertItems.push({ label: '将此处浮动图嵌入单元格', action: () => this.convertImageToCellAuto(hereIdx) })
-        // 整列(中心落在本列的浮动图)
         const inCol = imgs.reduce((n, _, i) => n + (this.imageCellOf(i)?.col === c ? 1 : 0), 0)
         if (inCol > 0) convertItems.push({ label: `整列浮动图嵌入单元格(${inCol} 张)`, action: () => this.convertAllImagesToCells(c) })
-        // 整表
         convertItems.push({ label: `整表浮动图嵌入单元格(${imgs.length} 张)`, action: () => this.convertAllImagesToCells() })
       }
-      if (convertItems.length) {
-        items.push({ separator: true }, ...convertItems)
-      }
+      if (convertItems.length) items.push({ separator: true }, ...convertItems)
     }
-    e.preventDefault()
-    this.menuHost.show(e.clientX, e.clientY, items)
+    return items
+  }
+
+  /** 设置用户 transform 回调(`(ctx, items) => MenuItem[] | undefined`);壳侧调用 */
+  setContextMenuTransform(fn: ContextMenuTransform | null | undefined): void {
+    this.ctxMenuTransform = fn ?? null
+  }
+  /** 程序化打开菜单(键盘 Shift+F10 / 自定义触发);items 不给则按当前选区算内置 */
+  openContextMenu(x: number, y: number, items?: MenuItem[]): void {
+    if (items && items.length) {
+      this.menuHost.show(x, y, items)
+      return
+    }
+    const sel = this.getSelection()
+    if (!sel || !this.sheet || !this.workbook) return
+    const ctx: ContextMenuCtx = {
+      range: { ...sel },
+      single: sel.top === sel.bottom && sel.left === sel.right,
+      activeCell: { row: sel.top, col: sel.left },
+      sheet: this.sheet,
+      workbook: this.workbook,
+      editable: !!this.editCfg.editable,
+    }
+    let it = this.editCfg.editable ? this.buildBuiltinContextMenuItems(ctx) : []
+    if (this.ctxMenuTransform) {
+      const next = this.ctxMenuTransform(ctx, it)
+      if (Array.isArray(next)) it = next
+    }
+    if (it.length) this.menuHost.show(x, y, it)
+  }
+  /** 关闭当前菜单(无打开则 no-op) */
+  closeContextMenu(): void {
+    this.menuHost.close()
   }
 
   private updateHover(e: MouseEvent): void {

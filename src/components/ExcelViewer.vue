@@ -21,7 +21,7 @@ import type { ViewerTheme } from '@/core/render/theme'
 import { useExcelDocument } from '@/composables/useExcelDocument'
 import { CanvasRenderer, type ViewState } from '@/core/render/canvas-renderer'
 import { colIndexToLetters } from '@/core/layout/grid-metrics'
-import { ViewerController, type TooltipState, type FindState } from '@/core/viewer/controller'
+import { ViewerController, type ContextMenuBeforePayload, type ContextMenuShowPayload, type ContextMenuTransform, type TooltipState, type FindState } from '@/core/viewer/controller'
 import type { EditConfig } from '@/core/edit/types'
 import type { FormulaEngineFactory } from '@/core/formula/engine'
 import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload, StructChangePayload } from '@/core/edit/edit-controller'
@@ -96,9 +96,18 @@ const props = withDefaults(
      * (拿到 `{ state, busy, cancel }`)。
      */
     exportProgress?: boolean
+    /**
+     * 右键菜单(Plan C):
+     * - `false` → 不弹内置菜单(`before-context-menu` / `context-menu` 事件仍触发,用户自渲染)
+     * - 函数 `(ctx, items) => MenuItem[] | undefined` → 在内置 items 上加 / 减 / 重排;返 `undefined` 用原样
+     * - 不传(默认)→ editable 时显示内置菜单,非 editable 走浏览器默认菜单
+     * 与 `@before-context-menu` / `@context-menu` 事件叠加使用。
+     */
+    contextMenu?: boolean | ContextMenuTransform
   }>(),
   // toolbar/imageLightbox/exportProgress 默认 true;若不显式给默认,Vue 会把布尔型 prop 缺省判成 false
-  { openLinks: true, toolbar: true, imageLightbox: true, exportProgress: true },
+  // contextMenu 显式默认 undefined(否则 Vue 会把 `boolean | Function` prop 缺省判成 false,把"未传"误解读为"关掉内置")
+  { openLinks: true, toolbar: true, imageLightbox: true, exportProgress: true, contextMenu: undefined as undefined },
 )
 
 const normalizedPlugins = computed<ExcelPlugin[]>(() => props.plugins ?? [])
@@ -174,6 +183,10 @@ const emit = defineEmits<{
   (e: 'image-change', payload: ImageChangePayload): void
   /** 行列结构变更(增删行列 / 撤销重做的整体还原) */
   (e: 'struct-change', payload: StructChangePayload): void
+  /** 右键菜单触发前(Plan C):用户调 `payload.preventDefault()` 阻止内置菜单(然后自渲染) */
+  (e: 'before-context-menu', payload: ContextMenuBeforePayload): void
+  /** 右键菜单"展示"通知(Plan C):无论内置是否弹都触发,供自渲染或事件流串到业务 */
+  (e: 'context-menu', payload: ContextMenuShowPayload): void
 }>()
 
 const { loading, error, workbook, load, loadModel, progress, sourceBuffer } = useExcelDocument()
@@ -285,6 +298,20 @@ onMounted(() => {
         onFindChange: () => findVersion.value++,
         onFilterChange: () => filterVersion.value++,
         onEditEvent: (event, payload) => fire(event, payload),
+        onContextMenuBefore: (payload) => {
+          // 1) 先跑插件 contextMenu(数组顺序串行,后者拿前者的输出)
+          for (const p of normalizedPlugins.value) {
+            if (p.contextMenu) {
+              const next = p.contextMenu(payload.ctx, payload.items)
+              if (Array.isArray(next)) payload.items.splice(0, payload.items.length, ...next)
+            }
+          }
+          // 2) `:context-menu="false"` 直接阻止内置弹层(但事件仍会触发 onContextMenuShow,供用户自渲染)
+          if (props.contextMenu === false) payload.preventDefault()
+          // 3) emit 事件(在阻止判定后,允许用户 listener 进一步 preventDefault)
+          ;(emit as (e: string, p: unknown) => void)('before-context-menu', payload)
+        },
+        onContextMenuShow: (payload) => (emit as (e: string, p: unknown) => void)('context-menu', payload),
       },
     )
     view.value = controller.view // 壳与控制器共享同一 view 对象(现有 view.value 读法不变)
@@ -292,6 +319,8 @@ onMounted(() => {
     controller.setEditConfig(effectiveEditConfig.value) // 编辑配置(默认只读)
     controller.setEditorResolver(hasEditor.value ? resolveEditor : undefined) // E2: 编辑器解析
     controller.setLightboxEnabled(props.imageLightbox !== false) // 图片点击放大(默认开)
+    // 右键菜单 transform(Plan C):函数形式 = 用户 prop 直接覆盖内置(在插件 transform 之后再跑)
+    controller.setContextMenuTransform(typeof props.contextMenu === 'function' ? props.contextMenu : null)
   }
   if (pluginOvEl.value) pluginOverlayHost = new PluginOverlayHost(pluginOvEl.value)
   // 优先 :workbook(JSON / 直传模型);其次 :src(文件路径)
@@ -329,6 +358,7 @@ watch(() => props.fileName, (f) => {
 })
 
 watch(effectiveEditConfig, (cfg) => controller?.setEditConfig(cfg))
+watch(() => props.contextMenu, (cm) => controller?.setContextMenuTransform(typeof cm === 'function' ? cm : null))
 watch([() => props.editor, normalizedPlugins], () => controller?.setEditorResolver(hasEditor.value ? resolveEditor : undefined))
 watch(() => props.cellImageFit, (fit) => { if (fit) controller?.setCellImageFit(fit) })
 watch(() => props.imageLightbox, (v) => controller?.setLightboxEnabled(v !== false))
@@ -697,6 +727,8 @@ const viewerApi: ViewerApi = {
       return controller?.convertCellImagesInRangeToFloat(range, size) ?? 0
     }),
   applyTemplate: (spec) => chain(spec, (s) => controller?.applyTemplate(s) ?? Promise.resolve({ placeholdersScanned: 0, anchorsWritten: 0 })),
+  openContextMenu: (x, y, items) => controller?.openContextMenu(x, y, items),
+  closeContextMenu: () => controller?.closeContextMenu(),
   convertCellImageToFloat: (row, col, size) => controller?.convertCellImageToFloat(row, col, size) ?? false,
   insertRows: (at, count) => controller?.insertRows(at, count) ?? false,
   deleteRows: (at, count) => controller?.deleteRows(at, count) ?? false,
