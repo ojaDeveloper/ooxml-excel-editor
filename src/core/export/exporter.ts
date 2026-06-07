@@ -23,6 +23,7 @@ import { toCsv, toWorkbookJson } from './data-export'
 import { workbookToXlsxBlob, type XlsxExportOptions } from './xlsx-writer'
 import type { SheetToJSONOptions } from '../model/data-access'
 import type { ExportTarget, ImageExportOptions, PdfExportOptions, PrintOptions } from './types'
+import { checkAborted, yieldToEvent } from './abort'
 
 /** 导出取数器: 壳提供当前工作簿 / 活动表 / 复用渲染器 / 渲染配置 / 文件名 */
 export interface ExporterHost {
@@ -276,11 +277,17 @@ export class WorkbookExporter {
 
   /** 导出当前/指定表为图片 Blob(图片为单表;多表请用 PDF) */
   async exportImage(opts: ImageExportOptions = {}): Promise<Blob> {
+    checkAborted(opts.signal)
     const targets = this.resolveTargets(opts.target)
     if (!targets.length) throw new Error('无可导出的工作表')
+    opts.onProgress?.({ stage: 'render', sheetIndex: targets[0], ratio: 0, label: '渲染中…' })
     const img = await this.buildSheetImage(targets[0], opts)
     if (!img) throw new Error('导出失败: 无法生成底图')
-    return canvasToBlob(img.canvas, opts.type ?? 'png', opts.quality ?? 0.92)
+    checkAborted(opts.signal)
+    opts.onProgress?.({ stage: 'write', sheetIndex: targets[0], ratio: 0, label: '写出图片…' })
+    const blob = await canvasToBlob(img.canvas, opts.type ?? 'png', opts.quality ?? 0.92)
+    opts.onProgress?.({ stage: 'write', ratio: 1 })
+    return blob
   }
   async downloadImage(opts: ImageExportOptions = {}): Promise<void> {
     const blob = await this.exportImage(opts)
@@ -288,17 +295,43 @@ export class WorkbookExporter {
     downloadBlob(blob, opts.fileName ?? `${this.baseName()}.${ext}`)
   }
 
-  /** 导出为 PDF Blob(每个目标表分页;需可选依赖 jspdf)。未显式指定的页面参数取自工作表 pageSetup。 */
+  /** 导出为 PDF Blob(每个目标表分页;需可选依赖 jspdf)。未显式指定的页面参数取自工作表 pageSetup。
+   *  支持 `onProgress` 分阶段(render/compose/paginate/write)报进度 + `signal` 取消(标准 AbortSignal)。 */
   async exportPdf(opts: PdfExportOptions = {}): Promise<Blob> {
+    checkAborted(opts.signal)
     const targets = this.resolveTargets(opts.target)
     if (!targets.length) throw new Error('无可导出的工作表')
     const eff: PdfExportOptions = { ...this.pageSetupDefaults(targets[0]), ...opts }
+    const total = targets.length
+    // 串行(替代 Promise.all):每表前 emit render + check abort + yield,UI 不假死、能中断
     if (eff.vector) {
-      const vs = (await Promise.all(targets.map((i) => this.buildVectorSheet(i, eff)))).filter(Boolean) as VectorSheet[]
-      return exportToVectorPdf(vs, eff)
+      const vs: VectorSheet[] = []
+      for (let i = 0; i < total; i++) {
+        checkAborted(opts.signal)
+        opts.onProgress?.({ stage: 'render', sheetIndex: targets[i], ratio: i / total, label: `渲染 ${i + 1}/${total}` })
+        const v = await this.buildVectorSheet(targets[i], eff)
+        if (v) vs.push(v)
+        await yieldToEvent()
+      }
+      checkAborted(opts.signal)
+      opts.onProgress?.({ stage: 'write', ratio: 0, label: '生成 PDF…' })
+      const blob = await exportToVectorPdf(vs, eff)
+      opts.onProgress?.({ stage: 'write', ratio: 1 })
+      return blob
     }
-    const images = (await Promise.all(targets.map((i) => this.buildSheetImage(i, eff, true)))).filter(Boolean) as ExportSheetImage[]
-    return exportToPdf(images, eff)
+    const images: ExportSheetImage[] = []
+    for (let i = 0; i < total; i++) {
+      checkAborted(opts.signal)
+      opts.onProgress?.({ stage: 'render', sheetIndex: targets[i], ratio: i / total, label: `渲染 ${i + 1}/${total}` })
+      const img = await this.buildSheetImage(targets[i], eff, true)
+      if (img) images.push(img)
+      await yieldToEvent()
+    }
+    checkAborted(opts.signal)
+    opts.onProgress?.({ stage: 'write', ratio: 0, label: '生成 PDF…' })
+    const blob = await exportToPdf(images, eff)
+    opts.onProgress?.({ stage: 'write', ratio: 1 })
+    return blob
   }
   async downloadPdf(opts: PdfExportOptions = {}): Promise<void> {
     const blob = await this.exportPdf(opts)
@@ -307,10 +340,19 @@ export class WorkbookExporter {
 
   /** 打开系统打印(可在对话框另存为 PDF)。页面参数同样默认取自 pageSetup。 */
   async print(opts: PrintOptions = {}): Promise<void> {
+    checkAborted(opts.signal)
     const targets = this.resolveTargets(opts.target)
     if (!targets.length) return
     const eff: PrintOptions = { ...this.pageSetupDefaults(targets[0]), ...opts }
-    const images = (await Promise.all(targets.map((i) => this.buildSheetImage(i, eff, true)))).filter(Boolean) as ExportSheetImage[]
+    const total = targets.length
+    const images: ExportSheetImage[] = []
+    for (let i = 0; i < total; i++) {
+      checkAborted(opts.signal)
+      opts.onProgress?.({ stage: 'render', sheetIndex: targets[i], ratio: i / total, label: `渲染 ${i + 1}/${total}` })
+      const img = await this.buildSheetImage(targets[i], eff, true)
+      if (img) images.push(img)
+      await yieldToEvent()
+    }
     printSheets(images, { ...eff, title: eff.title ?? this.baseName() })
   }
 

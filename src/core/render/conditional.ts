@@ -75,6 +75,61 @@ export class ConditionalEngine {
     return { rule, min, max, mid, threshold, inRange }
   }
 
+  /** 返回所有命中该格的规则索引 + 各自计算出的 effect(供 Cell Inspector 查询;不做"第一条赢"短路) */
+  inspectHits(
+    row: number,
+    col: number,
+    value: number | string | boolean | Date | null,
+  ): Array<{ ruleIndex: number; effect: CellEffect }> {
+    const hits: Array<{ ruleIndex: number; effect: CellEffect }> = []
+    for (let i = 0; i < this.prepared.length; i++) {
+      const p = this.prepared[i]
+      if (!p.inRange(row, col)) continue
+      const effect = this.evalRule(p, value)
+      if (effect) hits.push({ ruleIndex: i, effect })
+    }
+    return hits
+  }
+
+  /** 单条规则在某格上的 effect(命中返 patch,不命中返 null);effectsFor 与 inspectHits 共用 */
+  private evalRule(p: PreparedRule, value: number | string | boolean | Date | null): CellEffect | null {
+    const rule = p.rule
+    const num = typeof value === 'number' ? value : null
+    switch (rule.type) {
+      case 'cellIs':
+      case 'expression':
+      case 'top10': {
+        const hit =
+          rule.type === 'top10'
+            ? num != null && p.threshold != null && num >= p.threshold
+            : evalCellIs(rule, num)
+        if (!hit || !rule.style) return null
+        const patch: CellEffect = {}
+        if (rule.style.fill?.fgColor) patch.fillColor = rule.style.fill.fgColor
+        if (rule.style.font?.color) patch.fontColor = rule.style.font.color
+        if (rule.style.font?.bold) patch.bold = true
+        return Object.keys(patch).length ? patch : null
+      }
+      case 'colorScale': {
+        if (num == null || !rule.colorScale || p.max === p.min) return null
+        return { fillColor: colorScaleColor(rule.colorScale, num, p.min, p.mid, p.max) }
+      }
+      case 'dataBar': {
+        if (num == null || !rule.dataBar) return null
+        const ratio = p.max === p.min ? 1 : Math.max(0, Math.min(1, (num - Math.min(0, p.min)) / (p.max - Math.min(0, p.min))))
+        return { dataBar: { ratio, color: rule.dataBar.color, gradient: rule.dataBar.gradient } }
+      }
+      case 'iconSet': {
+        if (num == null || !rule.iconSet) return null
+        const count = iconCount(rule.iconSet.name)
+        const pos = p.max === p.min ? 1 : (num - p.min) / (p.max - p.min)
+        const level = Math.min(count - 1, Math.floor(pos * count))
+        return { icon: { setName: rule.iconSet.name, level, count } }
+      }
+    }
+    return null
+  }
+
   effectsFor(row: number, col: number, value: number | string | boolean | Date | null): CellEffect | null {
     let effect: CellEffect | null = null
     const set = (patch: CellEffect) => {

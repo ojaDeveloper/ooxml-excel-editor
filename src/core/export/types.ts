@@ -4,6 +4,7 @@
  * 打印暴露 headerHtml/footerHtml。宿主与插件都能借此二次定制而不改源码。
  */
 import type { MergeRange } from '../model/types'
+import type { ExportProgressFn } from '../progress'
 
 /** 选哪些工作表导出 */
 export type ExportTarget = 'active' | 'all' | number | number[]
@@ -20,6 +21,13 @@ export interface RenderExportOptions {
   gridlines?: boolean
   /** 背景色(默认白) */
   background?: string
+  /**
+   * 长任务进度回调。每个调度阶段(render/compose/paginate/write/zip)各 emit。
+   * 大表 / 多表 / 多页时穿插 `await yieldToEvent()` 避免 UI 假死。
+   */
+  onProgress?: ExportProgressFn
+  /** 取消信号。`abortController.abort()` 后下一个调度点抛 AbortError(标准语义) */
+  signal?: AbortSignal
 }
 
 /** 图片导出选项 */

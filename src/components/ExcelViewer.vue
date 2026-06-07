@@ -617,6 +617,7 @@ const viewerApi: ViewerApi = {
   canRedo: () => controller?.canRedo() ?? false,
   getEditingCell: () => controller?.getEditingCell() ?? null,
   getCellSnapshot: (row, col) => controller?.getCellSnapshot(row, col) ?? null,
+  inspectCell: (row, col) => controller?.inspectCell(row, col) ?? null,
   beginEdit: (row, col) => controller?.beginEdit(row, col) ?? false,
   cancelEdit: () => controller?.cancelEdit(),
   isEditing: () => controller?.isEditing() ?? false,

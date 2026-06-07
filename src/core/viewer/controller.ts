@@ -22,6 +22,7 @@ import { EditController, type EditControllerHost, type EditEventName } from '../
 import { defaultFormulaEngineFactory } from '../formula/hyperformula-adapter'
 import type { CellValue, SheetToJSONOptions } from '../model/data-access'
 import type { CellSnapshot } from '../model/snapshot'
+import { inspectCell, type CellInspection } from '../model/inspect'
 import { CellEditorHost } from '../edit/editor-host'
 import { ContextMenuHost, type MenuItem } from '../edit/context-menu'
 import { parseClipboardHtml } from '../edit/clipboard-html'
@@ -1768,6 +1769,15 @@ export class ViewerController {
   }
   getCellSnapshot(row: number, col: number): CellSnapshot | null {
     return this.edit.getCellSnapshot(row, col)
+  }
+  /** 单元格"全息体检":snapshot + 合并区 + 浮动图覆盖 + WPS 内嵌图 + 数据验证 + 条件格式命中 + 链接/批注。
+   *  无 workbook / sheet / 越界返 null。详见 [src/core/model/inspect.ts](src/core/model/inspect.ts)。 */
+  inspectCell(row: number, col: number): CellInspection | null {
+    const sheet = this.sheet
+    const wb = this.workbook
+    if (!sheet || !wb) return null
+    if (row < 0 || col < 0) return null
+    return inspectCell(sheet, wb, row, col, wb.date1904)
   }
 
   // ---- 编辑器宿主(E2) ----

@@ -12,6 +12,8 @@ import { GridMetrics } from '../layout/grid-metrics'
 import { anchorRect } from '../overlay/anchor'
 import { emuToPx, DEFAULT_MDW, PX_PER_POINT } from '../layout/units'
 import { injectCellImagesIntoZip } from './wps-cellimages'
+import type { ExportProgressFn } from '../progress'
+import { checkAborted } from './abort'
 
 export interface XlsxExportOptions {
   /**
@@ -28,6 +30,10 @@ export interface XlsxExportOptions {
   fidelity?: 'rebuild' | 'overlay'
   /** 原始 .xlsx 字节(overlay 模式用;由 exporter 从 host 注入,用方一般不直接传) */
   sourceBuffer?: ArrayBuffer
+  /** 长任务进度回调(zip 写出前/后 emit `{stage:'zip'}`;exceljs writeBuffer 黑盒) */
+  onProgress?: ExportProgressFn
+  /** 取消信号(zip 阶段前后检查) */
+  signal?: AbortSignal
 }
 
 /** css 颜色 → ExcelJS ARGB('FFRRGGBB');无法识别返 undefined。 */
@@ -262,32 +268,45 @@ function applyModelOntoSheet(ws: any, sheet: SheetModel): void {
 
 /** WorkbookModel → .xlsx Blob(懒加载 exceljs)。overlay 模式重载原件叠加编辑,否则从模型重建。 */
 export async function workbookToXlsxBlob(workbook: WorkbookModel, opts: XlsxExportOptions = {}): Promise<Blob> {
+  checkAborted(opts.signal)
   const mod = await import('exceljs')
   const ExcelJS = ((mod as { default?: unknown }).default ?? mod) as { Workbook: new () => any }
 
   // 高保真 overlay:重载原件 + 叠加编辑(保留 ExcelJS 能往返的原件部分)
   if (opts.fidelity === 'overlay' && opts.sourceBuffer) {
+    checkAborted(opts.signal)
     const wb = new ExcelJS.Workbook()
     await wb.xlsx.load(opts.sourceBuffer as any)
     for (let i = 0; i < workbook.sheets.length; i++) {
+      checkAborted(opts.signal)
       const sheet = workbook.sheets[i]
       const ws = wb.worksheets[i] ?? wb.getWorksheet(sheet.name) ?? wb.addWorksheet(sheet.name || `Sheet${i + 1}`)
       applyModelOntoSheet(ws, sheet)
+      opts.onProgress?.({ stage: 'write', sheetIndex: i, ratio: (i + 1) / workbook.sheets.length, label: `写入 ${sheet.name}` })
     }
+    opts.onProgress?.({ stage: 'zip', ratio: 0, label: 'zip 压缩…' })
     const buf = await wb.xlsx.writeBuffer()
+    checkAborted(opts.signal)
+    opts.onProgress?.({ stage: 'zip', ratio: 1 })
     return finalizeBlob(buf, workbook)
   }
 
   // 默认:从模型完整重建
   const wb = new ExcelJS.Workbook()
   wb.properties.date1904 = workbook.date1904
-  for (const sheet of workbook.sheets) {
+  for (let i = 0; i < workbook.sheets.length; i++) {
+    checkAborted(opts.signal)
+    const sheet = workbook.sheets[i]
     const ws = wb.addWorksheet(sheet.name || `Sheet${sheet.index + 1}`, {
       state: sheet.state === 'visible' ? 'visible' : sheet.state,
     })
     writeSheet(ws, sheet, wb)
+    opts.onProgress?.({ stage: 'write', sheetIndex: i, ratio: (i + 1) / workbook.sheets.length, label: `写入 ${sheet.name}` })
   }
+  opts.onProgress?.({ stage: 'zip', ratio: 0, label: 'zip 压缩…' })
   const buf = await wb.xlsx.writeBuffer()
+  checkAborted(opts.signal)
+  opts.onProgress?.({ stage: 'zip', ratio: 1 })
   return finalizeBlob(buf, workbook)
 }
 

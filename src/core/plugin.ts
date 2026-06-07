@@ -16,6 +16,7 @@
 import type { CellStyleFn, CellStyleOverride, ImageAnchor, MergeRange, TransformModelFn, WorkbookModel } from './model/types'
 import type { CellValue, ReadOptions, SheetToJSONOptions } from './model/data-access'
 import type { CellSnapshot } from './model/snapshot'
+import type { CellInspection } from './model/inspect'
 import type { EditorResolver } from './edit/editor-context'
 import type { ViewerTheme } from './render/theme'
 import type { ExcelSource } from './loader'
@@ -105,6 +106,8 @@ export interface ViewerApi {
   getEditingCell(): { row: number; col: number } | null
   /** 查询任意格的完整快照(底层结构 + raw/computed/text/style) */
   getCellSnapshot(row: number, col: number): CellSnapshot | null
+  /** 单元格"全息体检":snapshot + 合并区 + 浮动图覆盖 + WPS 内嵌图 + 数据验证 + 条件格式命中 + 链接/批注 */
+  inspectCell(row: number, col: number): CellInspection | null
   /** 进入编辑(需有 editor 工厂 + 可编辑);返回是否进入 */
   beginEdit(row: number, col: number): boolean
   /** 取消当前编辑(不改模型) */

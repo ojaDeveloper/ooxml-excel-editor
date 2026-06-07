@@ -34,6 +34,8 @@ format/    number-format(数字/日期格式 mini 引擎)+ color(toHex6 等)/ da
 render/    canvas-renderer(普通类,画一帧;含 DISPIMG 内嵌图绘制)+ conditional/fills/borders/text/autofilter/theme
 overlay/   anchor(锚点几何)/ chart-mapper(图表→echarts option)/ echarts-loader
 export/    raster/composite/paginate/pdf/print/vector-pdf + xlsx-writer + wps-cellimages(DISPIMG 回注)+ WorkbookExporter
+           + abort.ts(yieldToEvent + checkAborted):所有耗时导出统一接 onProgress + AbortSignal,
+             串行 + 每阶段 emit + 让出 UI(防假死)+ 可中断
 viewer/    OverlayManager(图片/图表/形状 DOM 叠加层)+ LightboxHost(图片放大)
            ViewerController(总编排:renderer 生命周期 + view 状态 + 选区 + 鼠标/键盘 + 编辑 + 查找 + 筛选 + 导出)
 ```

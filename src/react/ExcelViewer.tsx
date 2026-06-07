@@ -18,6 +18,7 @@ import type { EditConfig } from '@/core/edit/types'
 import type { FormulaEngineFactory } from '@/core/formula/engine'
 import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload, StructChangePayload } from '@/core/edit/edit-controller'
 import type { CellSnapshot } from '@/core/model/snapshot'
+import type { CellInspection } from '@/core/model/inspect'
 import type { CellValue } from '@/core/model/data-access'
 import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
 import type { ViewerTheme } from '@/core/render/theme'
@@ -145,6 +146,7 @@ export interface ExcelViewerHandle {
   canRedo: () => boolean
   getEditingCell: () => { row: number; col: number } | null
   getCellSnapshot: (row: number, col: number) => CellSnapshot | null
+  inspectCell: (row: number, col: number) => CellInspection | null
   beginEdit: (row: number, col: number) => boolean
   cancelEdit: () => void
   isEditing: () => boolean
@@ -501,6 +503,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       canRedo: () => controllerRef.current?.canRedo() ?? false,
       getEditingCell: () => controllerRef.current?.getEditingCell() ?? null,
       getCellSnapshot: (row, col) => controllerRef.current?.getCellSnapshot(row, col) ?? null,
+      inspectCell: (row, col) => controllerRef.current?.inspectCell(row, col) ?? null,
       beginEdit: (row, col) => controllerRef.current?.beginEdit(row, col) ?? false,
       cancelEdit: () => controllerRef.current?.cancelEdit(),
       isEditing: () => controllerRef.current?.isEditing() ?? false,
@@ -603,6 +606,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     canRedo: () => controllerRef.current?.canRedo() ?? false,
     getEditingCell: () => controllerRef.current?.getEditingCell() ?? null,
     getCellSnapshot: (row, col) => controllerRef.current?.getCellSnapshot(row, col) ?? null,
+    inspectCell: (row, col) => controllerRef.current?.inspectCell(row, col) ?? null,
     beginEdit: (row, col) => controllerRef.current?.beginEdit(row, col) ?? false,
     cancelEdit: () => controllerRef.current?.cancelEdit(),
     isEditing: () => controllerRef.current?.isEditing() ?? false,
