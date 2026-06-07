@@ -23,7 +23,8 @@ import { defaultFormulaEngineFactory } from '../formula/hyperformula-adapter'
 import type { CellValue, SheetToJSONOptions } from '../model/data-access'
 import type { CellSnapshot } from '../model/snapshot'
 import { inspectCell, type CellInspection } from '../model/inspect'
-import { fillTemplate, type TemplateFillSpec } from '../template/fill'
+// 模板样式 overlay 在壳层做(controller 不直接持有),保留 import 给类型链或后续重新接入用
+// import { applyStyleTemplate } from '../template/style-overlay'
 import { CellEditorHost } from '../edit/editor-host'
 import { ContextMenuHost, type MenuItem } from '../edit/context-menu'
 import { parseClipboardHtml } from '../edit/clipboard-html'
@@ -1825,17 +1826,9 @@ export class ViewerController {
     if (!targets.length) return 0
     return this.edit.convertImagesToCells(targets)
   }
-  /** 模板填值(P3):把 JSON 数据按占位符 + 锚点表注入当前工作簿;渲染前预处理,不入命令栈。 */
-  async applyTemplate(spec: TemplateFillSpec): Promise<{ placeholdersScanned: number; anchorsWritten: number }> {
-    const wb = this.workbook
-    if (!wb) return { placeholdersScanned: 0, anchorsWritten: 0 }
-    const result = await fillTemplate(wb, spec)
-    // 触发重渲(同 onModelChange 路径)
-    this.renderer?.rebuildMetrics()
-    this.refreshContentSize()
-    this.render()
-    return result
-  }
+  // applyTemplate(P3 旧版 placeholder + anchor 模型,2026-06-08 已删除)
+  // 新语义"模板=样式捐赠者"由 core/template/style-overlay.ts 提供,壳层 (Vue/React) 用
+  // applyStyleTemplate(dataWb, templateWb) 合成后再 loadModel 喂进来,不再走 controller 内 in-place 改造.
   /** 选区批量:把 range 内所有 DISPIMG 格拎成浮动图;聚合成单次 undo;返回成功转换张数。 */
   convertCellImagesInRangeToFloat(range: MergeRange, size?: { width: number; height: number }): number {
     const sheet = this.sheet

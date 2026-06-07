@@ -17,7 +17,6 @@ import type { CellStyleFn, CellStyleOverride, ImageAnchor, MergeRange, Transform
 import type { CellValue, ReadOptions, SheetToJSONOptions } from './model/data-access'
 import type { CellSnapshot } from './model/snapshot'
 import type { CellInspection } from './model/inspect'
-import type { TemplateFillSpec } from './template/fill'
 import type { MenuItem } from './edit/context-menu'
 import type { EditorResolver } from './edit/editor-context'
 import type { ViewerTheme } from './render/theme'
@@ -175,8 +174,6 @@ export interface ViewerApi {
   convertImagesInRangeToCell(range: MergeRange): Promise<number>
   /** 选区批量(反向):range 内所有 DISPIMG 格拎成浮动图,单次撤销;返回转换张数(壳侧返 Promise,见上) */
   convertCellImagesInRangeToFloat(range: MergeRange, size?: { width: number; height: number }): Promise<number>
-  /** 模板填值(P3):把 JSON 数据按占位符 {{key}} + 锚点表 注入当前工作簿,渲染前预处理;不入命令栈 */
-  applyTemplate(spec: TemplateFillSpec): Promise<{ placeholdersScanned: number; anchorsWritten: number }>
   /** 程序化打开右键菜单(Plan C;键盘 Shift+F10 / 工具栏触发等);items 不给则按当前选区算内置 */
   openContextMenu(x: number, y: number, items?: MenuItem[]): void
   /** 关闭当前打开的右键菜单 */
@@ -275,9 +272,9 @@ export function definePlugin(plugin: ExcelPlugin): ExcelPlugin {
   return plugin
 }
 
-// ---- P3 公开导出:JSON 直渲 + 模板填值(给"仅引擎"用户) ----
+// ---- P3 公开导出:JSON 直渲 + 模板样式 overlay(给"仅引擎"用户) ----
 export { jsonToWorkbook, isWorkbookModel, type JsonInput, type JsonLoadOptions, type JsonRow, type JsonSheetInput } from './loader-json'
-export { fillTemplate, replacePlaceholders, parseCellAddress, type TemplateFillSpec, type TemplateAnchor } from './template/fill'
+export { applyStyleTemplate } from './template/style-overlay'
 export type { CellInspection } from './model/inspect'
 export type { MenuItem } from './edit/context-menu'
 export type {

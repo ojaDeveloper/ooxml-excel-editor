@@ -1,7 +1,7 @@
 <script setup lang="ts">
 /**
  * 内置导出进度遮罩(P1.5)—— 居中模态,暗背景 + 白卡 + stage 标签 + 进度条 + 取消。
- * 默认在调 viewer.downloadPdf / exportImage / exportXlsx / print / applyTemplate / 选区图片批量转换时自动显示。
+ * 默认在调 viewer.downloadPdf / exportImage / exportXlsx / print / 选区图片批量转换时自动显示。
  * 用方覆盖路径见 ExcelViewer.vue 的 `:export-progress` prop 与 `#export-progress` slot。
  */
 import type { ExportProgress } from '@/core/progress'

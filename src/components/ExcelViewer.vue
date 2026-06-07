@@ -2,9 +2,11 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import type { ExcelPlugin, ExcelPluginContext, OverlayContext, PluginEvent, ToolbarItem, ViewerApi } from '@/core/plugin'
 import { PluginOverlayHost } from '@/core/viewer/plugin-overlay'
-import type { ExcelSource } from '@/core/loader'
+import { loadArrayBuffer, type ExcelSource } from '@/core/loader'
 import { jsonToWorkbook, isWorkbookModel, type JsonInput, type JsonLoadOptions } from '@/core/loader-json'
-import type { TemplateFillSpec } from '@/core/template/fill'
+import { applyStyleTemplate } from '@/core/template/style-overlay'
+import { detectFormat, finalizeImages } from '@/core/finalize'
+import { parseInWorker } from '@/composables/worker-client'
 import type {
   CellModel,
   CellStyleFn,
@@ -50,14 +52,14 @@ const props = withDefaults(
     /** JSON 直渲选项(`workbook` = JsonInput 时生效) */
     jsonOptions?: JsonLoadOptions
     /**
-     * 模板填值(P3):`src` 加载完(或 `workbook` 喂入)后,自动按 spec(占位符 + 锚点表)填一道再渲染。
-     * 不入命令栈;与运行时 `applyTemplate()` 命令式调用等价。
-     */
-    template?: TemplateFillSpec
-    /**
-     * 渲染模板(P3 进阶):一份独立的 .xlsx 当渲染基(数据从 `:workbook` 来,样式/合并/图表从模板来)。
-     * 当**同时**给 `:workbook` 和 `:templateFile` → 加载模板 .xlsx,再按 `:template` spec 把 `:workbook` 数据填进去渲染。
-     * 工具栏内置 `template` 项可在运行时切换/导入/清除,无需重新组件挂载。
+     * 渲染模板(P3 重设计 2026-06-08):一份 .xlsx 当**样式捐赠者** —— 模板的 styling
+     * (styles / merges / 列宽 / 行高 / freeze / theme)套到无格式数据源上,模板的 raw 文字 / 占位符
+     * / 图 / 图表 / 条件格式 全部丢弃。
+     *
+     * ⚠️ **只在数据源是 :workbook(JSON / 模型)时生效**;`:src`(.xlsx)数据源自带格式,
+     * 给 `:templateFile` 会被忽略并 console.warn。
+     *
+     * 工具栏内置 `template` 项可在运行时切换/导入/清除,无需重新挂载。
      */
     templateFile?: ExcelSource
     /** 模板显示名(标题栏 `· 模板: xxx` 后缀);不给则取运行时 File.name */
@@ -97,7 +99,7 @@ const props = withDefaults(
     formulaEngine?: FormulaEngineFactory
     /**
      * 内置导出进度遮罩(P1.5):默认 `true` —— 调 `viewer.downloadPdf` / `downloadImage` / `downloadXlsx` /
-     * `print` / `applyTemplate` / 选区图片批量转换 时,壳自动建 `AbortController` + 接 `onProgress` →
+     * `print` / 选区图片批量转换 时,壳自动建 `AbortController` + 接 `onProgress` →
      * 显示居中模态(stage 标签 + 进度条 + 取消按钮)。**关闭** `:export-progress="false"` 走纯回调
      * 路径(用户自己接 `opts.onProgress`/`opts.signal`)。**完全自渲染**用 `#export-progress` 插槽
      * (拿到 `{ state, busy, cancel }`)。
@@ -239,36 +241,55 @@ const displayFileName = computed(() => {
   return workbook.value?.sheets[0]?.name || ''
 })
 
-async function applyTemplateIfAny() {
-  const spec = props.template
-  if (!spec || !workbook.value) return
-  // 走 controller.applyTemplate(不是直接 fillTemplate)— 内部会触发 renderer.rebuildMetrics + render
-  // 直接调 fillTemplate 只改模型不触发重渲,会导致用户看到的是"未填充的模板原样"
-  await controller?.applyTemplate(spec)
+/**
+ * 解析一个 .xlsx 源(File / Blob / ArrayBuffer / URL)成 WorkbookModel,**不**改 activeWorkbook —— 用作模板加载。
+ */
+async function parseTemplateFile(src: ExcelSource): Promise<WorkbookModel> {
+  const buffer = await loadArrayBuffer(src)
+  const fmt = detectFormat(buffer)
+  if (fmt === 'xls') throw new Error('模板文件是旧版 .xls 或加密,仅支持 .xlsx/.xlsm')
+  if (fmt === 'not-zip') throw new Error('模板文件不是有效的 .xlsx(非 ZIP 包)')
+  if (fmt === 'empty') throw new Error('模板文件为空')
+  const model = await parseInWorker(buffer)
+  finalizeImages(model)
+  return model
 }
 
 /**
- * 统一的数据/模板加载入口(P3 进阶)。优先级:
- *   ① `effectiveTemplateSrc`(运行时导入 / `:templateFile` prop)≠ null + `:workbook` 也给了
- *       → 加载模板 .xlsx 当渲染基,再按 `:template` spec 把 workbook 数据填进去
- *   ② 只给 `effectiveTemplateSrc` → 当成普通文件加载
- *   ③ 只给 `:workbook` → loadModel(跳 parser)
- *   ④ 只给 `:src` → 普通 .xlsx 加载
+ * 统一的数据/模板加载入口(P3 重设计 2026-06-08)。
+ *   - `:src`(xlsx)→ 直接 load;若同时设了 `:templateFile`,console.warn 并忽略(xlsx 自带格式)
+ *   - `:workbook` + 模板 → 解析模板 → applyStyleTemplate 套样式 → loadModel(merged)
+ *   - `:workbook` 无模板 → loadModel(纯 JSON,默认样式)
+ *   - 只给 `:templateFile`(没数据)→ 把模板当文件加载(用户可能只想预览模板)
  */
 async function runInitialLoad() {
   const tplSrc = effectiveTemplateSrc.value
-  const wbInput = props.workbook
-  if (tplSrc) {
-    // 模板优先:不管 :workbook 给没给,都把模板当渲染基载入(:workbook 数据通过 :template spec 注入)
-    await load(tplSrc, effectiveTransform)
+  const initDataWb = resolveWorkbookInput(props.workbook)
+
+  if (props.src) {
+    if (tplSrc) console.warn('[ooxml-excel-editor] :templateFile 只在 :workbook (JSON / 模型) 数据源下生效;xlsx 数据源已自带格式,模板已忽略.')
+    await load(props.src, effectiveTransform)
     return
   }
-  const initWb = resolveWorkbookInput(wbInput)
-  if (initWb) {
-    loadModel(initWb, effectiveTransform)
+
+  if (initDataWb && tplSrc) {
+    try {
+      const tplWb = await parseTemplateFile(tplSrc)
+      const merged = applyStyleTemplate(initDataWb, tplWb)
+      loadModel(merged, effectiveTransform)
+    } catch (e) {
+      console.error('[ooxml-excel-editor] 模板加载失败,降级为纯 JSON 渲染:', e)
+      loadModel(initDataWb, effectiveTransform)
+    }
     return
   }
-  if (props.src) await load(props.src, effectiveTransform)
+
+  if (initDataWb) {
+    loadModel(initDataWb, effectiveTransform)
+    return
+  }
+
+  if (tplSrc) await load(tplSrc, effectiveTransform)
 }
 
 const progressLabel = computed(() => {
@@ -407,12 +428,10 @@ onBeforeUnmount(() => {
   if (workbook.value) revokeImages(workbook.value)
 })
 
-// 单个 src/workbook/templateFile/runtimeTemplate 任一变化 → 重跑统一入口(确保模板切换 / JSON 切换 都重渲)
+// src / workbook / templateFile / runtimeTemplate 任一变化 → 重跑统一入口
 watch([() => props.src, () => props.workbook, () => props.templateFile, runtimeTemplateSrc], () => {
   void runInitialLoad()
 })
-// 注:applyTemplate 的 watch 在下面 workbook → rebuildRenderer 注册之后,确保 controller.rebuild 先把
-// 新 workbook 同步到 controller.workbook,applyTemplate 才能在最新模型上调 fillTemplate
 
 watch(() => props.fileName, (f) => {
   if (controller) controller.fileName = f
@@ -442,12 +461,8 @@ watch(workbook, async (wb) => {
   activeSheet.value = wb.activeSheet
   await nextTick()
   rebuildRenderer()
-  // ★ controller.workbook 此刻已同步,再应用 :template spec(避免顺序坑:applyTemplate 在 controller 尚无 wb 时跑不动)
-  await applyTemplateIfAny()
   emit('rendered', wb)
 })
-// :template prop 变化(workbook 不变)时,也重跑一次
-watch(() => props.template, () => { void applyTemplateIfAny() })
 
 // 切表派发 sheet-change
 watch(activeSheet, (idx) => {
@@ -791,7 +806,6 @@ const viewerApi: ViewerApi = {
       o.onProgress?.({ stage: 'convert', label: '选区内嵌图批量浮动化…', ratio: undefined })
       return controller?.convertCellImagesInRangeToFloat(range, size) ?? 0
     }),
-  applyTemplate: (spec) => chain(spec, (s) => controller?.applyTemplate(s) ?? Promise.resolve({ placeholdersScanned: 0, anchorsWritten: 0 })),
   openContextMenu: (x, y, items) => controller?.openContextMenu(x, y, items),
   closeContextMenu: () => controller?.closeContextMenu(),
   convertCellImageToFloat: (row, col, size) => controller?.convertCellImageToFloat(row, col, size) ?? false,
@@ -917,17 +931,24 @@ function builtinTool(id: string): ResolvedToolbarItem | null {
     case 'template': {
       const active = !!effectiveTemplateSrc.value
       const name = effectiveTemplateName.value
+      // 模板只在 JSON / 模型数据源下生效;xlsx 数据源(`:src`)走自己的格式,套模板无意义,禁用 UI
+      const isXlsxSrc = !!props.src && !props.workbook
       return bi({
         id,
         iconSvg: I('template'),
         label: '模板',
-        title: active ? `模板已加载:${name || '(未命名)'}` : '渲染模板:默认',
+        title: isXlsxSrc
+          ? '模板仅对 JSON / 模型数据源生效;当前是 .xlsx 数据源,模板不可用'
+          : active
+            ? `模板已加载:${name || '(未命名)'}`
+            : '为 JSON / 模型数据源套用 .xlsx 模板的样式(边框 / 字体 / 列宽 / 合并 等);模板的文字内容会被丢弃',
         active,
+        disabled: isXlsxSrc,
         items: [
           bi({
             id: 'tpl-default',
             label: (!active ? '✓ ' : '') + '默认渲染',
-            title: '不用模板,直接渲染数据源(:workbook / :src)',
+            title: '不套模板,数据按默认样式渲染',
             disabled: !active,
             onClick: clearRuntimeTemplate,
           }),
@@ -935,13 +956,13 @@ function builtinTool(id: string): ResolvedToolbarItem | null {
           bi({
             id: 'tpl-import',
             label: '导入 .xlsx 模板…',
-            title: '选一个 .xlsx 当渲染基,数据(:workbook)按 :template spec 填进去',
+            title: '选一份 .xlsx,把它的 styling(边框/字体/列宽/合并/freeze) 套到当前 JSON 数据上;模板的文字内容会被丢弃',
             onClick: openTemplateFilePicker,
           }),
           bi({
             id: 'tpl-clear',
             label: '清除模板',
-            title: '切回默认渲染',
+            title: '切回默认样式渲染',
             disabled: !active,
             onClick: clearRuntimeTemplate,
           }),

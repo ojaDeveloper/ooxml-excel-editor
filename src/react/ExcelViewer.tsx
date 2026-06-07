@@ -19,7 +19,10 @@ import type { FormulaEngineFactory } from '@/core/formula/engine'
 import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload, StructChangePayload } from '@/core/edit/edit-controller'
 import type { CellSnapshot } from '@/core/model/snapshot'
 import type { CellInspection } from '@/core/model/inspect'
-import type { TemplateFillSpec } from '@/core/template/fill'
+import { applyStyleTemplate } from '@/core/template/style-overlay'
+import { loadArrayBuffer } from '@/core/loader'
+import { detectFormat, finalizeImages } from '@/core/finalize'
+import { parseInWorker } from '@/composables/worker-client'
 import { jsonToWorkbook, isWorkbookModel, type JsonInput, type JsonLoadOptions } from '@/core/loader-json'
 import type { ExportProgress } from '@/core/progress'
 import { ExportProgressOverlay } from './ExportProgressOverlay'
@@ -63,14 +66,19 @@ export interface ExcelViewerProps {
   workbook?: WorkbookModel | JsonInput
   /** JSON 直渲选项(workbook = JsonInput 时生效) */
   jsonOptions?: JsonLoadOptions
-  /** 模板填值(P3):加载完后按 spec 填一道再渲染 */
-  template?: TemplateFillSpec
-  /** 渲染模板(P3 进阶):一份 .xlsx 当渲染基,数据从 `workbook` 来 → 按 `template` spec 填进去 */
+  /**
+   * 渲染模板(P3 重设计 2026-06-08):一份 .xlsx 当**样式捐赠者** —— 模板的 styling
+   * (styles / merges / 列宽 / 行高 / freeze / theme)套到无格式数据源上,模板的 raw 文字 / 占位符 /
+   * 图 / 图表 / 条件格式 全部丢弃。
+   *
+   * ⚠️ **只在数据源是 `workbook`(JSON / 模型)时生效**;`src`(.xlsx)数据源自带格式,
+   * 给 `templateFile` 会被忽略并 console.warn.
+   */
   templateFile?: ExcelSource
   /** 模板显示名(标题栏 `· 模板: xxx` 后缀);不给则取运行时 File.name */
   templateName?: string
   /**
-   * 内置导出进度遮罩(P1.5):默认 `true` —— 调 `viewer.downloadPdf/exportImage/...` / `applyTemplate` /
+   * 内置导出进度遮罩(P1.5):默认 `true` —— 调 `viewer.downloadPdf/exportImage/...` /
    * 选区图片批量转换 时,壳自动建 AbortController + 接 onProgress → 显示居中模态 + 取消。
    * `false` 关闭(走纯回调);`renderExportProgress` 自渲染(覆盖内置 UI)。
    */
@@ -182,7 +190,6 @@ export interface ExcelViewerHandle {
   convertAllImagesToCells: (col?: number) => number
   convertImagesInRangeToCell: (range: MergeRange) => Promise<number>
   convertCellImagesInRangeToFloat: (range: MergeRange, size?: { width: number; height: number }) => Promise<number>
-  applyTemplate: (spec: TemplateFillSpec) => Promise<{ placeholdersScanned: number; anchorsWritten: number }>
   openContextMenu: (x: number, y: number, items?: MenuItem[]) => void
   closeContextMenu: () => void
   convertCellImageToFloat: (row: number, col: number, size?: { width: number; height: number }) => boolean
@@ -478,26 +485,49 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ---- 载入 src / workbook / templateFile / runtimeTemplate(P3 进阶:模板优先) ----
+  // ---- 载入 src / workbook / templateFile / runtimeTemplate(P3 重设计 2026-06-08) ----
+  // 语义同 Vue 壳: xlsx 数据源直接 load + 模板 warn 忽略; JSON 数据源 + 模板 → 解析后 applyStyleTemplate
   useEffect(() => {
-    if (effectiveTemplateSrc) {
-      // 模板优先:不管 :workbook 有没有,载模板当渲染基
-      void load(effectiveTemplateSrc, effectiveTransform)
-      return
+    const tplSrc = effectiveTemplateSrc
+    const initDataWb = resolveWb(props.workbook)
+
+    async function parseTemplate(src: ExcelSource): Promise<WorkbookModel> {
+      const buffer = await loadArrayBuffer(src)
+      const fmt = detectFormat(buffer)
+      if (fmt === 'xls') throw new Error('模板文件是旧版 .xls 或加密,仅支持 .xlsx/.xlsm')
+      if (fmt === 'not-zip') throw new Error('模板文件不是有效的 .xlsx(非 ZIP 包)')
+      if (fmt === 'empty') throw new Error('模板文件为空')
+      const model = await parseInWorker(buffer)
+      finalizeImages(model)
+      return model
     }
-    const wb = resolveWb(props.workbook)
-    if (wb) loadModel(wb, effectiveTransform)
-    else if (props.src) void load(props.src, effectiveTransform)
+
+    async function run() {
+      if (props.src) {
+        if (tplSrc) console.warn('[ooxml-excel-editor] templateFile 只在 workbook (JSON / 模型) 数据源下生效;xlsx 数据源已自带格式,模板已忽略.')
+        await load(props.src, effectiveTransform)
+        return
+      }
+      if (initDataWb && tplSrc) {
+        try {
+          const tplWb = await parseTemplate(tplSrc)
+          const merged = applyStyleTemplate(initDataWb, tplWb)
+          loadModel(merged, effectiveTransform)
+        } catch (e) {
+          console.error('[ooxml-excel-editor] 模板加载失败,降级为纯 JSON 渲染:', e)
+          loadModel(initDataWb, effectiveTransform)
+        }
+        return
+      }
+      if (initDataWb) {
+        loadModel(initDataWb, effectiveTransform)
+        return
+      }
+      if (tplSrc) await load(tplSrc, effectiveTransform)
+    }
+    void run()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.src, props.workbook, props.templateFile, runtimeTemplateSrc])
-
-  // ---- 模板填值:加载完后(或 :template 变化)按 spec 填一道再渲染 ----
-  useEffect(() => {
-    if (!props.template || !workbook) return
-    // 走 controller.applyTemplate(内部 rebuildMetrics + refreshContentSize + render),不要直接 fillTemplate
-    void controllerRef.current?.applyTemplate(props.template)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [workbook, props.template])
 
   // ---- 文件名同步 ----
   useEffect(() => {
@@ -630,7 +660,6 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       convertAllImagesToCells: (col) => controllerRef.current?.convertAllImagesToCells(col) ?? 0,
       convertImagesInRangeToCell: (range) => chain<number, { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal }>({}, async (o) => { o.onProgress?.({ stage: 'convert', label: '选区浮动图批量嵌入…' }); return controllerRef.current?.convertImagesInRangeToCell(range) ?? 0 }),
       convertCellImagesInRangeToFloat: (range, size) => chain<number, { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal }>({}, async (o) => { o.onProgress?.({ stage: 'convert', label: '选区内嵌图批量浮动化…' }); return controllerRef.current?.convertCellImagesInRangeToFloat(range, size) ?? 0 }),
-      applyTemplate: (spec) => chain(spec, (s) => controllerRef.current?.applyTemplate(s) ?? Promise.resolve({ placeholdersScanned: 0, anchorsWritten: 0 })),
       openContextMenu: (x, y, items) => controllerRef.current?.openContextMenu(x, y, items),
       closeContextMenu: () => controllerRef.current?.closeContextMenu(),
       convertCellImageToFloat: (row, col, size) => controllerRef.current?.convertCellImageToFloat(row, col, size) ?? false,
@@ -738,7 +767,6 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     convertAllImagesToCells: (col) => controllerRef.current?.convertAllImagesToCells(col) ?? 0,
     convertImagesInRangeToCell: (range) => chain<number, { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal }>({}, async (o) => { o.onProgress?.({ stage: 'convert', label: '选区浮动图批量嵌入…' }); return controllerRef.current?.convertImagesInRangeToCell(range) ?? 0 }),
     convertCellImagesInRangeToFloat: (range, size) => chain<number, { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal }>({}, async (o) => { o.onProgress?.({ stage: 'convert', label: '选区内嵌图批量浮动化…' }); return controllerRef.current?.convertCellImagesInRangeToFloat(range, size) ?? 0 }),
-    applyTemplate: (spec) => chain(spec, (s) => controllerRef.current?.applyTemplate(s) ?? Promise.resolve({ placeholdersScanned: 0, anchorsWritten: 0 })),
     openContextMenu: (x, y, items) => controllerRef.current?.openContextMenu(x, y, items),
     closeContextMenu: () => controllerRef.current?.closeContextMenu(),
     convertCellImageToFloat: (row, col, size) => controllerRef.current?.convertCellImageToFloat(row, col, size) ?? false,
@@ -930,19 +958,31 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
               </option>
             ))}
           </select>
-          {/* 模板(P3 进阶):点开导入 .xlsx,再点切回默认 */}
-          <button
-            className={effectiveTemplateSrc ? 'active' : ''}
-            onClick={openTemplateFilePicker}
-            title={effectiveTemplateSrc ? `模板已加载: ${effectiveTemplateName || '(未命名)'} — 点击重新导入` : '导入 .xlsx 渲染模板'}
-          >
-            模板{effectiveTemplateSrc ? ' ▾' : ''}
-          </button>
-          {effectiveTemplateSrc && (
-            <button onClick={clearRuntimeTemplate} title="清除模板,切回默认渲染">
-              清除模板
-            </button>
-          )}
+          {/* 模板(P3 重设计 2026-06-08):仅在 JSON / 模型数据源下生效;xlsx 数据源禁用 */}
+          {(() => {
+            const isXlsxSrc = !!props.src && !props.workbook
+            return (
+              <>
+                <button
+                  className={effectiveTemplateSrc ? 'active' : ''}
+                  disabled={isXlsxSrc}
+                  onClick={openTemplateFilePicker}
+                  title={isXlsxSrc
+                    ? '模板仅对 JSON / 模型数据源生效;当前是 xlsx 数据源,模板不可用'
+                    : effectiveTemplateSrc
+                      ? `模板已加载: ${effectiveTemplateName || '(未命名)'} — 点击重新导入`
+                      : '为 JSON / 模型数据源套用 .xlsx 模板的样式(模板的文字内容会被丢弃)'}
+                >
+                  模板{effectiveTemplateSrc ? ' ▾' : ''}
+                </button>
+                {effectiveTemplateSrc && !isXlsxSrc && (
+                  <button onClick={clearRuntimeTemplate} title="清除模板,切回默认渲染">
+                    清除模板
+                  </button>
+                )}
+              </>
+            )
+          })()}
           {/* 插件贡献的工具栏按钮(跨框架同一份插件) */}
           {plugins
             .flatMap((p) => p.toolbar ?? [])

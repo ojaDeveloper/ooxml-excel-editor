@@ -11,18 +11,11 @@ const fileName = ref<string>('')
 const dragOver = ref(false)
 const editMode = ref(false) // E0: 编辑模式闸门(默认只读)
 
-// JSON 数据源 + 模板填值(P3 进阶)演示状态
-type DemoJsonData = { customer: string; date: string; total: string; items: Array<Record<string, unknown>> }
-const jsonData = ref<DemoJsonData | null>(null)
-const templateSpec = computed(() => {
-  const d = jsonData.value
-  if (!d) return undefined
-  // 模板里 {{customer}}/{{date}}/{{total}} 占位符 + A5 起的 items 锚点
-  return {
-    placeholders: { customer: d.customer, date: d.date, total: d.total },
-    anchors: [{ startCell: 'A5', rows: d.items, columns: ['name', 'price', 'qty', 'amount', 'note'] }],
-  }
-})
+// JSON 数据源 + 模板样式 overlay(P3 重设计 2026-06-08)演示
+// 模板的语义改了 —— 不再是"占位符 + 锚点表"那套数据替换;现在是"样式捐赠者":数据在 A1 自然位置,
+// 模板贡献 styling (字体/边框/列宽/合并/freeze),模板的文字内容全部丢弃.
+// 因此 demo 不再传 placeholders/anchors,直接传 JSON items 即可;工具栏「模板 ▾」导入 .xlsx 即生效.
+const jsonItems = ref<Array<Record<string, unknown>> | null>(null)
 
 function onFile(file: File | undefined) {
   if (!file) return
@@ -44,24 +37,20 @@ async function loadSample() {
   // 用 BASE_URL 前缀,部署到子路径(GitHub Pages)也能取到示例
   src.value = import.meta.env.BASE_URL + 'sample.xlsx'
   fileName.value = 'sample.xlsx'
-  jsonData.value = null // 切回 .xlsx 模式
+  jsonItems.value = null // 切回 .xlsx 模式
 }
 async function loadJsonSample() {
-  // JSON 数据源演示:不传 src,只给 :workbook(对象数组)→ 默认渲染;再点工具栏「模板 ▾」可挂模板
+  // JSON 数据源演示:不传 src,只给 :workbook(对象数组)→ 默认渲染(数据在 A1 起自然位置)
+  // 然后点工具栏「模板 ▾ → 导入 .xlsx」可套用模板样式 (模板的文字内容会被丢弃,只保留 styling)
   src.value = undefined
-  fileName.value = '订单结算单' // 自定义显示名(覆盖"JSON 数据"缺省)
-  jsonData.value = {
-    customer: '张三',
-    date: '2026-06-08',
-    total: '¥9,876.50',
-    items: [
-      { name: '笔记本电脑', price: 5999, qty: 1, amount: 5999, note: '商务款' },
-      { name: '机械键盘', price: 399, qty: 2, amount: 798, note: '青轴' },
-      { name: '显示器', price: 1299, qty: 2, amount: 2598, note: '27寸 2K' },
-      { name: '鼠标', price: 89, qty: 5, amount: 445, note: '无线' },
-      { name: '耳机', price: 599, qty: 0.063, amount: 36.5, note: '降噪' },
-    ],
-  }
+  fileName.value = '订单数据'
+  jsonItems.value = [
+    { name: '笔记本电脑', price: 5999, qty: 1, amount: 5999, note: '商务款' },
+    { name: '机械键盘', price: 399, qty: 2, amount: 798, note: '青轴' },
+    { name: '显示器', price: 1299, qty: 2, amount: 2598, note: '27寸 2K' },
+    { name: '鼠标', price: 89, qty: 5, amount: 445, note: '无线' },
+    { name: '耳机', price: 599, qty: 3, amount: 1797, note: '降噪' },
+  ]
 }
 
 // ---- 扩展 API 演示 ----
@@ -370,7 +359,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         </label>
         <button class="sample-btn" @click="loadSample">加载示例</button>
         <button class="sample-btn" @click="loadJsonSample" title="加载一个 JSON 数据源演示;然后用工具栏「模板 ▾」导入 public/template-sample.xlsx 看模板效果">JSON 示例</button>
-        <label v-if="src || jsonData" class="edit-toggle" title="开启编辑模式(E0:闸门)">
+        <label v-if="src || jsonItems" class="edit-toggle" title="开启编辑模式(E0:闸门)">
           <input type="checkbox" v-model="editMode" /> 编辑模式
         </label>
       </div>
@@ -409,8 +398,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
       <ExcelViewer
         ref="viewerRef"
         :src="src"
-        :workbook="jsonData ? jsonData.items : undefined"
-        :template="templateSpec"
+        :workbook="jsonItems ?? undefined"
         :file-name="fileName"
         :plugins="plugins"
         :cell-image-fit="cellImageFit"
