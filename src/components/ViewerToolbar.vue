@@ -3,6 +3,8 @@ import { onBeforeUnmount, ref } from 'vue'
 
 defineProps<{
   fileName?: string
+  /** 模板名(运行时或 prop 给出);非空时拼接到标题尾部 ` · 模板: <name>` */
+  templateName?: string
   sheetCount: number
   zoom: number
 }>()
@@ -46,7 +48,9 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="toolbar">
-    <span class="file" :title="fileName">{{ fileName || '未命名工作簿' }}</span>
+    <span class="file" :title="(fileName || '未命名工作簿') + (templateName ? ' · 模板: ' + templateName : '')">
+      {{ fileName || '未命名工作簿' }}<span v-if="templateName" class="tpl"> · 模板: {{ templateName }}</span>
+    </span>
     <span class="meta">{{ sheetCount }} 个工作表</span>
     <div class="spacer" />
 
@@ -90,9 +94,16 @@ onBeforeUnmount(() => {
 }
 .file {
   font-weight: 600;
-  max-width: 320px;
+  max-width: 460px;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file .tpl {
+  font-weight: 400;
+  color: #6b7280;
+  font-size: 12px;
+  margin-left: 4px;
   white-space: nowrap;
 }
 .meta { color: #888; }

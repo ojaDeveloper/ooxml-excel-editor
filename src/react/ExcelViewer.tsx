@@ -65,6 +65,10 @@ export interface ExcelViewerProps {
   jsonOptions?: JsonLoadOptions
   /** 模板填值(P3):加载完后按 spec 填一道再渲染 */
   template?: TemplateFillSpec
+  /** 渲染模板(P3 进阶):一份 .xlsx 当渲染基,数据从 `workbook` 来 → 按 `template` spec 填进去 */
+  templateFile?: ExcelSource
+  /** 模板显示名(标题栏 `· 模板: xxx` 后缀);不给则取运行时 File.name */
+  templateName?: string
   /**
    * 内置导出进度遮罩(P1.5):默认 `true` —— 调 `viewer.downloadPdf/exportImage/...` / `applyTemplate` /
    * 选区图片批量转换 时,壳自动建 AbortController + 接 onProgress → 显示居中模态 + 取消。
@@ -231,6 +235,22 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     !w ? null : isWorkbookModel(w) ? (w as WorkbookModel) : jsonToWorkbook(w as JsonInput, props.jsonOptions)
   const [activeSheet, setActiveSheet] = useState(0)
   const [zoom, setZoom] = useState(1)
+  // 运行时模板(P3 进阶):工具栏导入会覆盖 props.templateFile
+  const [runtimeTemplateSrc, setRuntimeTemplateSrc] = useState<ExcelSource | null>(null)
+  const [runtimeTemplateName, setRuntimeTemplateName] = useState<string | null>(null)
+  const effectiveTemplateSrc = runtimeTemplateSrc ?? props.templateFile ?? null
+  const effectiveTemplateName = runtimeTemplateName ?? props.templateName ?? ''
+  const clearRuntimeTemplate = () => { setRuntimeTemplateSrc(null); setRuntimeTemplateName(null) }
+  const templateInputRef = useRef<HTMLInputElement | null>(null)
+  const openTemplateFilePicker = () => templateInputRef.current?.click()
+  const onTemplateFilePicked: React.ChangeEventHandler<HTMLInputElement> = (e) => {
+    const f = e.target.files?.[0]
+    if (!f) return
+    setRuntimeTemplateSrc(f)
+    setRuntimeTemplateName(f.name)
+    e.target.value = ''
+  }
+  const displayFileName = props.fileName || (props.workbook ? 'JSON 数据' : workbook?.sheets[0]?.name || '')
   const [findOpen, setFindOpen] = useState(false)
   const [, force] = useReducer((x: number) => x + 1, 0)
   // 公式栏编辑态(draft = 编辑中的文本;ref 标记是否正在编辑栏,改 ref 不触发重渲)
@@ -458,13 +478,18 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // ---- 载入 src / workbook(JSON/模型直渲优先) ----
+  // ---- 载入 src / workbook / templateFile / runtimeTemplate(P3 进阶:模板优先) ----
   useEffect(() => {
+    if (effectiveTemplateSrc) {
+      // 模板优先:不管 :workbook 有没有,载模板当渲染基
+      void load(effectiveTemplateSrc, effectiveTransform)
+      return
+    }
     const wb = resolveWb(props.workbook)
     if (wb) loadModel(wb, effectiveTransform)
-    else if (props.src) load(props.src, effectiveTransform)
+    else if (props.src) void load(props.src, effectiveTransform)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.src, props.workbook])
+  }, [props.src, props.workbook, props.templateFile, runtimeTemplateSrc])
 
   // ---- 模板填值:加载完后(或 :template 变化)按 spec 填一道再渲染 ----
   useEffect(() => {
@@ -870,6 +895,14 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
 
   return (
     <div className={'rxl' + (props.className ? ' ' + props.className : '')} style={props.style} onKeyDown={onRootKeyDown}>
+      {workbook && (displayFileName || effectiveTemplateName) && (
+        <div className="rxl-title" title={displayFileName + (effectiveTemplateName ? ' · 模板: ' + effectiveTemplateName : '')}>
+          <span className="name">{displayFileName || '未命名工作簿'}</span>
+          {effectiveTemplateName && <span className="tpl"> · 模板: {effectiveTemplateName}</span>}
+        </div>
+      )}
+      {/* 工具栏「模板」项的隐藏文件拾取器(P3 进阶) */}
+      <input ref={templateInputRef} type="file" accept=".xlsx,.xlsm" hidden onChange={onTemplateFilePicked} />
       {workbook && (
         <div className="rxl-toolbar">
           <button
@@ -901,6 +934,19 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
               </option>
             ))}
           </select>
+          {/* 模板(P3 进阶):点开导入 .xlsx,再点切回默认 */}
+          <button
+            className={effectiveTemplateSrc ? 'active' : ''}
+            onClick={openTemplateFilePicker}
+            title={effectiveTemplateSrc ? `模板已加载: ${effectiveTemplateName || '(未命名)'} — 点击重新导入` : '导入 .xlsx 渲染模板'}
+          >
+            模板{effectiveTemplateSrc ? ' ▾' : ''}
+          </button>
+          {effectiveTemplateSrc && (
+            <button onClick={clearRuntimeTemplate} title="清除模板,切回默认渲染">
+              清除模板
+            </button>
+          )}
           {/* 插件贡献的工具栏按钮(跨框架同一份插件) */}
           {plugins
             .flatMap((p) => p.toolbar ?? [])

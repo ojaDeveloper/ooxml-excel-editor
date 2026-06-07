@@ -55,6 +55,14 @@ const props = withDefaults(
      * 不入命令栈;与运行时 `applyTemplate()` 命令式调用等价。
      */
     template?: TemplateFillSpec
+    /**
+     * 渲染模板(P3 进阶):一份独立的 .xlsx 当渲染基(数据从 `:workbook` 来,样式/合并/图表从模板来)。
+     * 当**同时**给 `:workbook` 和 `:templateFile` → 加载模板 .xlsx,再按 `:template` spec 把 `:workbook` 数据填进去渲染。
+     * 工具栏内置 `template` 项可在运行时切换/导入/清除,无需重新组件挂载。
+     */
+    templateFile?: ExcelSource
+    /** 模板显示名(标题栏 `· 模板: xxx` 后缀);不给则取运行时 File.name */
+    templateName?: string
     fileName?: string
     /** 外观主题(覆盖默认配色) */
     theme?: Partial<ViewerTheme>
@@ -197,10 +205,69 @@ function resolveWorkbookInput(w: WorkbookModel | JsonInput | undefined): Workboo
   return isWorkbookModel(w) ? (w as WorkbookModel) : jsonToWorkbook(w as JsonInput, props.jsonOptions)
 }
 
+// 运行时模板状态(P3 进阶):工具栏内置 'template' 项导入的 .xlsx 优先覆盖 :templateFile prop;
+// 用户给 `:fileName` / `:templateName` 时仍按 props 走,但 demo / 工具栏导入会自动用 File.name 兜底。
+const runtimeTemplateSrc = ref<ExcelSource | null>(null)
+const runtimeTemplateName = ref<string | null>(null)
+const effectiveTemplateSrc = computed(() => runtimeTemplateSrc.value ?? props.templateFile ?? null)
+const effectiveTemplateName = computed(() => runtimeTemplateName.value ?? props.templateName ?? '')
+/** demo / 工具栏导入模板用:把文件喂给运行时,重新计算渲染管线 */
+function setRuntimeTemplate(src: ExcelSource | null, name: string | null) {
+  runtimeTemplateSrc.value = src
+  runtimeTemplateName.value = name
+}
+function clearRuntimeTemplate() {
+  setRuntimeTemplate(null, null)
+}
+
+// 工具栏内置 'template' 项的隐藏文件拾取器(导入 .xlsx → 设运行时模板)
+const templateInputEl = ref<HTMLInputElement | null>(null)
+function openTemplateFilePicker() {
+  templateInputEl.value?.click()
+}
+function onTemplateFilePicked(e: Event) {
+  const f = (e.target as HTMLInputElement).files?.[0]
+  if (!f) return
+  setRuntimeTemplate(f, f.name)
+  // 清空 input 让同一文件可以再次选(重渲)
+  ;(e.target as HTMLInputElement).value = ''
+}
+/** 显示用文件名:`:fileName` > JSON 源缺省 "JSON 数据" > 首表表名 > '未命名工作簿'(留给 ViewerToolbar 兜底) */
+const displayFileName = computed(() => {
+  if (props.fileName) return props.fileName
+  // :workbook 给了(JSON / 模型) → 默认 "JSON 数据"(用户没传名时)
+  if (props.workbook) return 'JSON 数据'
+  return workbook.value?.sheets[0]?.name || ''
+})
+
 async function applyTemplateIfAny() {
   const spec = props.template
   if (!spec || !workbook.value) return
   await fillTemplate(workbook.value, spec)
+}
+
+/**
+ * 统一的数据/模板加载入口(P3 进阶)。优先级:
+ *   ① `effectiveTemplateSrc`(运行时导入 / `:templateFile` prop)≠ null + `:workbook` 也给了
+ *       → 加载模板 .xlsx 当渲染基,再按 `:template` spec 把 workbook 数据填进去
+ *   ② 只给 `effectiveTemplateSrc` → 当成普通文件加载
+ *   ③ 只给 `:workbook` → loadModel(跳 parser)
+ *   ④ 只给 `:src` → 普通 .xlsx 加载
+ */
+async function runInitialLoad() {
+  const tplSrc = effectiveTemplateSrc.value
+  const wbInput = props.workbook
+  if (tplSrc) {
+    // 模板优先:不管 :workbook 给没给,都把模板当渲染基载入(:workbook 数据通过 :template spec 注入)
+    await load(tplSrc, effectiveTransform)
+    return
+  }
+  const initWb = resolveWorkbookInput(wbInput)
+  if (initWb) {
+    loadModel(initWb, effectiveTransform)
+    return
+  }
+  if (props.src) await load(props.src, effectiveTransform)
 }
 
 const progressLabel = computed(() => {
@@ -323,10 +390,7 @@ onMounted(() => {
     controller.setContextMenuTransform(typeof props.contextMenu === 'function' ? props.contextMenu : null)
   }
   if (pluginOvEl.value) pluginOverlayHost = new PluginOverlayHost(pluginOvEl.value)
-  // 优先 :workbook(JSON / 直传模型);其次 :src(文件路径)
-  const initWb = resolveWorkbookInput(props.workbook)
-  if (initWb) loadModel(initWb, effectiveTransform)
-  else if (props.src) load(props.src, effectiveTransform)
+  void runInitialLoad()
   resizeObserver = new ResizeObserver(() => {
     measure()
     doRender()
@@ -342,15 +406,11 @@ onBeforeUnmount(() => {
   if (workbook.value) revokeImages(workbook.value)
 })
 
-watch(() => props.src, (s) => {
-  if (s && !props.workbook) load(s, effectiveTransform)
+// 单个 src/workbook/templateFile/runtimeTemplate 任一变化 → 重跑统一入口(确保模板切换 / JSON 切换 都重渲)
+watch([() => props.src, () => props.workbook, () => props.templateFile, runtimeTemplateSrc], () => {
+  void runInitialLoad()
 })
-// :workbook 变化(JSON / 模型)→ 直接喂模型,跳过 parser
-watch(() => props.workbook, (w) => {
-  const wb = resolveWorkbookInput(w)
-  if (wb) loadModel(wb, effectiveTransform)
-})
-// 工作簿加载完后(或 :template 变化)应用模板
+// 工作簿加载完后(或 :template 变化)应用模板填值
 watch([workbook, () => props.template], () => { void applyTemplateIfAny() })
 
 watch(() => props.fileName, (f) => {
@@ -849,6 +909,40 @@ function builtinTool(id: string): ResolvedToolbarItem | null {
         onClick: () => void controller?.toggleWrapTextOnSelection(),
       })
     }
+    case 'template': {
+      const active = !!effectiveTemplateSrc.value
+      const name = effectiveTemplateName.value
+      return bi({
+        id,
+        iconSvg: I('template'),
+        label: '模板',
+        title: active ? `模板已加载:${name || '(未命名)'}` : '渲染模板:默认',
+        active,
+        items: [
+          bi({
+            id: 'tpl-default',
+            label: (!active ? '✓ ' : '') + '默认渲染',
+            title: '不用模板,直接渲染数据源(:workbook / :src)',
+            disabled: !active,
+            onClick: clearRuntimeTemplate,
+          }),
+          bi({ id: 'tpl-sep', type: 'separator' }),
+          bi({
+            id: 'tpl-import',
+            label: '导入 .xlsx 模板…',
+            title: '选一个 .xlsx 当渲染基,数据(:workbook)按 :template spec 填进去',
+            onClick: openTemplateFilePicker,
+          }),
+          bi({
+            id: 'tpl-clear',
+            label: '清除模板',
+            title: '切回默认渲染',
+            disabled: !active,
+            onClick: clearRuntimeTemplate,
+          }),
+        ],
+      })
+    }
     case 'image-tools': {
       const sel = selection.value
       const active = controller?.getActiveCell()
@@ -1028,7 +1122,8 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
       :print="print"
     >
       <ViewerToolbar
-        :file-name="fileName"
+        :file-name="displayFileName"
+        :template-name="effectiveTemplateName"
         :sheet-count="workbook.sheets.filter((s) => s.state === 'visible').length"
         :zoom="zoom"
         @update:zoom="zoom = $event"
@@ -1185,6 +1280,9 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
       @close="exportDialogOpen = false"
       @export="onDialogExport"
     />
+
+    <!-- 工具栏「模板」项的隐藏文件拾取器(P3 进阶) -->
+    <input ref="templateInputEl" type="file" accept=".xlsx,.xlsm" hidden @change="onTemplateFilePicked" />
 
     <!-- 内置导出进度遮罩(P1.5):props.exportProgress=false 关闭;插槽 #export-progress 完全自渲染 -->
     <template v-if="exportProgress !== false">

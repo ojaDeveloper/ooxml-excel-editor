@@ -288,6 +288,10 @@
   color: #c0392b;
 }
 
+/* 标题栏(P3 进阶):显示 displayFileName + 模板后缀 */
+.rxl .rxl-title { padding: 6px 12px; background: #fbfbfb; border-bottom: 1px solid #eceef1; font: 600 13px/1 -apple-system, 'Segoe UI', sans-serif; color: #1f2329; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rxl .rxl-title .tpl { font-weight: 400; color: #6b7280; font-size: 12px; }
+
 /* ExportProgressOverlay(P1.5):居中模态,跟 Vue 端 .export-progress-overlay 同视觉 */
 .rxl-export-progress { position: fixed; inset: 0; z-index: 9999; background: rgba(0, 0, 0, 0.42); display: flex; align-items: center; justify-content: center; font: 13px/1.5 -apple-system, 'Segoe UI', sans-serif; }
 .rxl-export-progress .card { min-width: 320px; max-width: 480px; background: #fff; border-radius: 10px; box-shadow: 0 10px 32px rgba(0, 0, 0, 0.28); padding: 18px 20px; }

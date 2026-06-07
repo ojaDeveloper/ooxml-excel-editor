@@ -23,6 +23,12 @@ export const TOOLBAR_ICONS: Record<string, string> = {
   'wrap-text':
     '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="10" y2="18"/>' +
     '<path d="M3 12h15a3 3 0 0 1 0 6h-3"/><polyline points="17 15 14 18 17 21"/>',
+  // 模板:文档 + 排版网格
+  template:
+    '<rect x="4" y="3" width="16" height="18" rx="1.5"/>' +
+    '<line x1="4" y1="8" x2="20" y2="8"/>' +
+    '<line x1="8" y1="12" x2="16" y2="12"/>' +
+    '<line x1="8" y1="16" x2="16" y2="16"/>',
   // 图片工具:山+太阳的图片框 + 小齿轮(批量转换)
   'image-tools':
     '<rect x="3" y="4" width="14" height="14" rx="1.5"/><circle cx="8" cy="9" r="1.5"/>' +

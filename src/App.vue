@@ -11,6 +11,19 @@ const fileName = ref<string>('')
 const dragOver = ref(false)
 const editMode = ref(false) // E0: 编辑模式闸门(默认只读)
 
+// JSON 数据源 + 模板填值(P3 进阶)演示状态
+type DemoJsonData = { customer: string; date: string; total: string; items: Array<Record<string, unknown>> }
+const jsonData = ref<DemoJsonData | null>(null)
+const templateSpec = computed(() => {
+  const d = jsonData.value
+  if (!d) return undefined
+  // 模板里 {{customer}}/{{date}}/{{total}} 占位符 + A5 起的 items 锚点
+  return {
+    placeholders: { customer: d.customer, date: d.date, total: d.total },
+    anchors: [{ startCell: 'A5', rows: d.items, columns: ['name', 'price', 'qty', 'amount', 'note'] }],
+  }
+})
+
 function onFile(file: File | undefined) {
   if (!file) return
   src.value = file
@@ -31,6 +44,24 @@ async function loadSample() {
   // 用 BASE_URL 前缀,部署到子路径(GitHub Pages)也能取到示例
   src.value = import.meta.env.BASE_URL + 'sample.xlsx'
   fileName.value = 'sample.xlsx'
+  jsonData.value = null // 切回 .xlsx 模式
+}
+async function loadJsonSample() {
+  // JSON 数据源演示:不传 src,只给 :workbook(对象数组)→ 默认渲染;再点工具栏「模板 ▾」可挂模板
+  src.value = undefined
+  fileName.value = '订单结算单' // 自定义显示名(覆盖"JSON 数据"缺省)
+  jsonData.value = {
+    customer: '张三',
+    date: '2026-06-08',
+    total: '¥9,876.50',
+    items: [
+      { name: '笔记本电脑', price: 5999, qty: 1, amount: 5999, note: '商务款' },
+      { name: '机械键盘', price: 399, qty: 2, amount: 798, note: '青轴' },
+      { name: '显示器', price: 1299, qty: 2, amount: 2598, note: '27寸 2K' },
+      { name: '鼠标', price: 89, qty: 5, amount: 445, note: '无线' },
+      { name: '耳机', price: 599, qty: 0.063, amount: 36.5, note: '降噪' },
+    ],
+  }
 }
 
 // ---- 扩展 API 演示 ----
@@ -338,7 +369,8 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
           <input type="file" accept=".xlsx,.xlsm" @change="onInput" hidden />
         </label>
         <button class="sample-btn" @click="loadSample">加载示例</button>
-        <label v-if="src" class="edit-toggle" title="开启编辑模式(E0:闸门)">
+        <button class="sample-btn" @click="loadJsonSample" title="加载一个 JSON 数据源演示;然后用工具栏「模板 ▾」导入 public/template-sample.xlsx 看模板效果">JSON 示例</button>
+        <label v-if="src || jsonData" class="edit-toggle" title="开启编辑模式(E0:闸门)">
           <input type="checkbox" v-model="editMode" /> 编辑模式
         </label>
       </div>
@@ -377,6 +409,8 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
       <ExcelViewer
         ref="viewerRef"
         :src="src"
+        :workbook="jsonData ? jsonData.items : undefined"
+        :template="templateSpec"
         :file-name="fileName"
         :plugins="plugins"
         :cell-image-fit="cellImageFit"
@@ -384,7 +418,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         :recalc="editMode"
         :read-only-ranges="[{ top: 1, left: 0, bottom: 1, right: 4 }]"
         :editor="demoSelectEditor"
-        :toolbar="['find', 'filter', 'clear-filter', 'separator', 'copy', 'wrap-text', 'image-tools', 'freeze', 'separator', 'zoom', 'export']"
+        :toolbar="['find', 'filter', 'clear-filter', 'separator', 'copy', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export']"
         @selection-change="(s) => { lastEvent = `选区 ${s.range.top + 1},${s.range.left + 1} → ${s.range.bottom + 1},${s.range.right + 1}`; selTick++ }"
         @cell-change="onCellChange"
         @dim-change="onDimChange"
