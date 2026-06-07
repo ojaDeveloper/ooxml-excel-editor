@@ -456,6 +456,23 @@ export class EditController {
     }
     return !!inv
   }
+  /**
+   * 批量把多格 DISPIMG 拎成浮动图(选区批量反向);非内嵌图格自动跳过;一次进撤销栈。
+   * 返回成功转换的张数。
+   */
+  convertCellImagesToFloats(cells: { row: number; col: number; size?: { width: number; height: number } }[]): number {
+    if (!this.host.isEditingEnabled() || !cells.length) return 0
+    const sheet = this.host.getSheet()
+    const before = sheet?.images.length ?? 0
+    this.ensureBaseline()
+    const inv = this.exec({ kind: 'convert-to-floats', cells }, 'api')
+    if (inv) {
+      this.pushUndo(inv)
+      this.markDirty()
+    }
+    const after = this.host.getSheet()?.images.length ?? before
+    return Math.max(0, after - before)
+  }
 
   // ---- 维度编辑(列宽/行高;E3.5:resize 入命令栈) ----
   /** 程序化设列宽/行高(API 路径:apply-via-command)。返回是否生效。 */
@@ -579,13 +596,15 @@ export class EditController {
       return inverse
     }
     // 转换族(WPS 内嵌图 ⇄ 浮动图):整簿快照逆(动 cells + images + cellImages 登记表)
-    if (cmd.kind === 'convert-to-cell' || cmd.kind === 'convert-to-cells' || cmd.kind === 'convert-to-float') {
+    if (cmd.kind === 'convert-to-cell' || cmd.kind === 'convert-to-cells' || cmd.kind === 'convert-to-float' || cmd.kind === 'convert-to-floats') {
       const wb = this.host.getWorkbook()
       if (!wb) return null
       const d = this.host.getDate1904()
-      // 受影响格(单/批/拆):先拍前态快照,apply 后逐格拍后态发 cell-change
+      // 受影响格(单/批/拆/批拆):先拍前态快照,apply 后逐格拍后态发 cell-change
       const cells: CellPos[] =
-        cmd.kind === 'convert-to-cells' ? cmd.targets.map((t) => ({ row: t.row, col: t.col })) : [{ row: cmd.row, col: cmd.col }]
+        cmd.kind === 'convert-to-cells' ? cmd.targets.map((t) => ({ row: t.row, col: t.col }))
+        : cmd.kind === 'convert-to-floats' ? cmd.cells.map((c) => ({ row: c.row, col: c.col }))
+        : [{ row: cmd.row, col: cmd.col }]
       const before = cells.map((p) => buildCellSnapshot(sheet, p.row, p.col, d))
       const snap = cloneWorkbook(wb)
       let any = false
@@ -593,6 +612,9 @@ export class EditController {
         any = convertFloatToCellImage(wb, sheet, cmd.imageIndex, cmd.row, cmd.col) !== null
       } else if (cmd.kind === 'convert-to-float') {
         any = convertCellImageToFloat(wb, sheet, cmd.row, cmd.col, cmd.size) !== -1
+      } else if (cmd.kind === 'convert-to-floats') {
+        // 反向批量(嵌入→浮动):逐格调,聚合成单次撤销
+        for (const c of cmd.cells) if (convertCellImageToFloat(wb, sheet, c.row, c.col, c.size) !== -1) any = true
       } else {
         // 批量:按 imageIndex 降序处理(先删高索引,低索引不受 splice 影响)
         const sorted = [...cmd.targets].sort((a, b) => b.imageIndex - a.imageIndex)

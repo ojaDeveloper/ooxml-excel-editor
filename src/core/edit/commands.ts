@@ -41,6 +41,7 @@ export type EditCommand =
   | { kind: 'convert-to-cell'; imageIndex: number; row: number; col: number }
   | { kind: 'convert-to-cells'; targets: { imageIndex: number; row: number; col: number }[] }
   | { kind: 'convert-to-float'; row: number; col: number; size?: { width: number; height: number } }
+  | { kind: 'convert-to-floats'; cells: { row: number; col: number; size?: { width: number; height: number } }[] }
 
 /** dim 命令(列宽/行高)— 仅维度族,无格位置 */
 export type DimCommand = Extract<EditCommand, { kind: 'set-dim' } | { kind: 'restore-dim' }>
@@ -93,6 +94,7 @@ export function affectedOf(cmd: EditCommand): CellPos[] {
     case 'convert-to-cell':
     case 'convert-to-cells':
     case 'convert-to-float':
+    case 'convert-to-floats':
       return []
   }
 }

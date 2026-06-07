@@ -23,6 +23,11 @@ export const TOOLBAR_ICONS: Record<string, string> = {
   'wrap-text':
     '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="10" y2="18"/>' +
     '<path d="M3 12h15a3 3 0 0 1 0 6h-3"/><polyline points="17 15 14 18 17 21"/>',
+  // 图片工具:山+太阳的图片框 + 小齿轮(批量转换)
+  'image-tools':
+    '<rect x="3" y="4" width="14" height="14" rx="1.5"/><circle cx="8" cy="9" r="1.5"/>' +
+    '<polyline points="3 16 7 12 11 16 14 13 17 16"/>' +
+    '<path d="M19 19l2 2M19 21l2-2"/>',
   // 三点(更多)
   more: '<circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
   // 下拉小箭头

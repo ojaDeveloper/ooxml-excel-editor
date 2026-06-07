@@ -868,6 +868,28 @@ export class ViewerController {
       { separator: true },
       { label: '清除内容', action: () => this.clearRange(range) },
     ]
+    // 选区批量(多格)— 浮动图批量嵌入 / 嵌入图批量浮动化
+    if (!single) {
+      const imgs = this.sheet?.images ?? []
+      // 浮动图中心落在选区内的张数
+      const floatsInRange = imgs.reduce((n, _, i) => {
+        const a = this.imageCellOf(i)
+        return n + (!!a && a.row >= range.top && a.row <= range.bottom && a.col >= range.left && a.col <= range.right ? 1 : 0)
+      }, 0)
+      // 选区内 DISPIMG 格数
+      let dispCount = 0
+      for (let r = range.top; r <= range.bottom; r++) {
+        for (let c = range.left; c <= range.right; c++) {
+          if (this.sheet?.cells.get(cellKey(r, c))?.dispImgId) dispCount++
+        }
+      }
+      if (floatsInRange > 0 || dispCount > 0) {
+        const rangeItems: MenuItem[] = []
+        if (floatsInRange > 0) rangeItems.push({ label: `选区浮动图全部嵌入(${floatsInRange} 张)`, action: () => this.convertImagesInRangeToCell(range) })
+        if (dispCount > 0) rangeItems.push({ label: `选区内嵌图全部浮动化(${dispCount} 张)`, action: () => this.convertCellImagesInRangeToFloat(range) })
+        items.push({ separator: true }, ...rangeItems)
+      }
+    }
     // WPS 单元格内嵌图(DISPIMG)⇄ 浮动图互转(单格时才有意义)
     if (single) {
       const r = range.top
@@ -1689,6 +1711,35 @@ export class ViewerController {
   /** 浮动图 → 单元格内嵌图(显式指定目标格);失败返 false。 */
   convertImageToCell(imageIndex: number, row: number, col: number): boolean {
     return this.edit.convertImageToCell(imageIndex, row, col)
+  }
+  /** 选区批量:把"中心格落在 range 内"的所有浮动图就近嵌入,聚合成单次 undo;返回成功嵌入张数。 */
+  convertImagesInRangeToCell(range: MergeRange): number {
+    const sheet = this.sheet
+    if (!sheet) return 0
+    const targets: { imageIndex: number; row: number; col: number }[] = []
+    for (let i = 0; i < sheet.images.length; i++) {
+      const at = this.imageCellOf(i)
+      if (!at) continue
+      if (at.row >= range.top && at.row <= range.bottom && at.col >= range.left && at.col <= range.right) {
+        targets.push({ imageIndex: i, row: at.row, col: at.col })
+      }
+    }
+    if (!targets.length) return 0
+    return this.edit.convertImagesToCells(targets)
+  }
+  /** 选区批量:把 range 内所有 DISPIMG 格拎成浮动图;聚合成单次 undo;返回成功转换张数。 */
+  convertCellImagesInRangeToFloat(range: MergeRange, size?: { width: number; height: number }): number {
+    const sheet = this.sheet
+    if (!sheet) return 0
+    const cells: { row: number; col: number; size?: { width: number; height: number } }[] = []
+    for (let r = range.top; r <= range.bottom; r++) {
+      for (let c = range.left; c <= range.right; c++) {
+        const cell = sheet.cells.get(cellKey(r, c))
+        if (cell?.dispImgId) cells.push({ row: r, col: c, size })
+      }
+    }
+    if (!cells.length) return 0
+    return this.edit.convertCellImagesToFloats(cells)
   }
   /** 浮动图 → 内嵌图(**就近**:图在哪格就嵌哪格,目标由几何反推);失败返 false。 */
   convertImageToCellAuto(imageIndex: number): boolean {

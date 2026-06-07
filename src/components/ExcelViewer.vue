@@ -606,6 +606,8 @@ const viewerApi: ViewerApi = {
   convertImageToCell: (i, row, col) => controller?.convertImageToCell(i, row, col) ?? false,
   convertImageToCellAuto: (i) => controller?.convertImageToCellAuto(i) ?? false,
   convertAllImagesToCells: (col) => controller?.convertAllImagesToCells(col) ?? 0,
+  convertImagesInRangeToCell: (range) => controller?.convertImagesInRangeToCell(range) ?? 0,
+  convertCellImagesInRangeToFloat: (range, size) => controller?.convertCellImagesInRangeToFloat(range, size) ?? 0,
   convertCellImageToFloat: (row, col, size) => controller?.convertCellImageToFloat(row, col, size) ?? false,
   insertRows: (at, count) => controller?.insertRows(at, count) ?? false,
   deleteRows: (at, count) => controller?.deleteRows(at, count) ?? false,
@@ -724,6 +726,49 @@ function builtinTool(id: string): ResolvedToolbarItem | null {
         active: wrapState === 'all',
         disabled: !selection.value || !props.editable,
         onClick: () => void controller?.toggleWrapTextOnSelection(),
+      })
+    }
+    case 'image-tools': {
+      const sel = selection.value
+      const active = controller?.getActiveCell()
+      const hasFloats = (sheet.value?.images.length ?? 0) > 0
+      return bi({
+        id,
+        iconSvg: I('image-tools'),
+        label: '图片工具',
+        title: '浮动图 ⇄ 单元格内嵌图(WPS DISPIMG)互转',
+        disabled: !props.editable,
+        items: [
+          bi({
+            id: 'img-sel-to-cell',
+            label: '选区:浮动 → 嵌入',
+            title: '把选区里"中心格在选区内"的浮动图,就近嵌入',
+            disabled: !sel || !hasFloats,
+            onClick: () => sel && controller?.convertImagesInRangeToCell(sel),
+          }),
+          bi({
+            id: 'img-sel-to-float',
+            label: '选区:嵌入 → 浮动',
+            title: '把选区内所有 DISPIMG 格拎成浮动图',
+            disabled: !sel,
+            onClick: () => sel && controller?.convertCellImagesInRangeToFloat(sel),
+          }),
+          bi({ id: 'img-sep', type: 'separator' }),
+          bi({
+            id: 'img-all-to-cell',
+            label: '整表:浮动 → 嵌入',
+            title: '全表浮动图按几何就近嵌入各自单元格',
+            disabled: !hasFloats,
+            onClick: () => controller?.convertAllImagesToCells(),
+          }),
+          bi({
+            id: 'img-col-to-cell',
+            label: '整列:浮动 → 嵌入(活动列)',
+            title: '把中心落在活动列的浮动图就近嵌入',
+            disabled: !hasFloats || !active,
+            onClick: () => active && controller?.convertAllImagesToCells(active.col),
+          }),
+        ],
       })
     }
     case 'freeze': {

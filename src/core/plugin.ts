@@ -168,6 +168,10 @@ export interface ViewerApi {
   convertImageToCellAuto(imageIndex: number): boolean
   /** 批量把浮动图就近嵌入各自单元格(整表;`col` 给定则仅该列);一次进撤销栈,返回嵌入张数 */
   convertAllImagesToCells(col?: number): number
+  /** 选区批量:把中心落在 range 内的浮动图全部就近嵌入,单次撤销;返回嵌入张数 */
+  convertImagesInRangeToCell(range: MergeRange): number
+  /** 选区批量(反向):range 内所有 DISPIMG 格拎成浮动图,单次撤销;返回转换张数 */
+  convertCellImagesInRangeToFloat(range: MergeRange, size?: { width: number; height: number }): number
   /** 单元格内嵌图 → 浮动图(把 row,col 的 DISPIMG 拎成浮动图,默认 96×96px);editable 时入命令栈 */
   convertCellImageToFloat(row: number, col: number, size?: { width: number; height: number }): boolean
   /** 在 at 处插入 count 行(E7);editable 时入命令栈 + 发 struct-change */
