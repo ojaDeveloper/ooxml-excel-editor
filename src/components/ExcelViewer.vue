@@ -584,6 +584,8 @@ const viewerApi: ViewerApi = {
   getActiveFontColor: () => controller?.getActiveFontColor() ?? '#000000',
   setSelectionFill: (color) => controller?.setSelectionFill(color) ?? false,
   setSelectionFontColor: (color) => controller?.setSelectionFontColor(color) ?? false,
+  getSelectionWrapState: () => controller?.getSelectionWrapState() ?? 'none',
+  toggleWrapTextOnSelection: () => controller?.toggleWrapTextOnSelection() ?? false,
   mergeCells: (range) => controller?.mergeCells(range) ?? false,
   unmergeCells: (range) => controller?.unmergeCells(range) ?? false,
   pasteText: (text, at) => controller?.pasteText(text, at) ?? false,
@@ -711,6 +713,18 @@ function builtinTool(id: string): ResolvedToolbarItem | null {
         disabled: !selection.value,
         onClick: () => void controller?.copySelection(),
       })
+    case 'wrap-text': {
+      const wrapState = controller?.getSelectionWrapState() ?? 'none'
+      return bi({
+        id,
+        iconSvg: I('wrap-text'),
+        label: '自动换行',
+        title: '自动换行(选区,WPS 风格 toggle)',
+        active: wrapState === 'all',
+        disabled: !selection.value || !props.editable,
+        onClick: () => void controller?.toggleWrapTextOnSelection(),
+      })
+    }
     case 'freeze': {
       const fz = sheet.value?.freeze
       return bi({

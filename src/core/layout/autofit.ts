@@ -19,6 +19,12 @@ import { PX_PER_POINT } from './units'
 
 const fittedSheets = new WeakSet<SheetModel>()
 
+/** 失效某 sheet 的"已 fit"标记;下次 autoFitRowHeights 会重新测量。
+ *  用法:模型有结构性变化(wrapText 切换 / 富文本编辑 / 列宽改) → 行高需按新内容重撑 → 调一次。 */
+export function invalidateAutofit(sheet: SheetModel): void {
+  fittedSheets.delete(sheet)
+}
+
 export function autoFitRowHeights(sheet: SheetModel, workbook: WorkbookModel, ctx?: CanvasRenderingContext2D): void {
   if (fittedSheets.has(sheet)) return
   const measure = ctx ?? createMeasureCtx()

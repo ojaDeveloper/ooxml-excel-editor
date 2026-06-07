@@ -30,6 +30,7 @@ import type { CellEditorContext, EditorCommitValue, EditorResolver } from '../ed
 import { defaultCellEditor } from '../edit/default-editor'
 import { CanvasRenderer, type CellImageFit, type RendererOptions, type ViewState } from '../render/canvas-renderer'
 import { MAX_GRID_ROWS, MAX_GRID_COLS } from '../layout/grid-metrics'
+import { invalidateAutofit } from '../layout/autofit'
 import { toHex6 } from '../format/color'
 import { OverlayManager, type OverlayQuads } from './overlay-manager'
 import { WorkbookExporter, type ExporterHost } from '../export/exporter'
@@ -859,6 +860,10 @@ export class ViewerController {
       { separator: true },
       { label: '合并单元格', disabled: single, action: () => this.mergeCells(range) },
       { label: '拆分单元格', action: () => this.unmergeCells(range) },
+      {
+        label: (this.getSelectionWrapState() === 'all' ? '✓ ' : '') + '自动换行',
+        action: () => this.toggleWrapTextOnSelection(),
+      },
       { separator: true },
       { label: '清除内容', action: () => this.clearRange(range) },
     ]
@@ -1578,6 +1583,35 @@ export class ViewerController {
     const sel = this.getSelection()
     if (!sel) return false
     return this.setStyle(sel, { font: { color } })
+  }
+
+  // ---- 自动换行(WPS 风格 toggle) ----
+  /** 当前选区里 wrapText 的整体态:'all' 全开 / 'none' 全关 / 'mixed' 混合。空选区→'none'。 */
+  getSelectionWrapState(): 'all' | 'none' | 'mixed' {
+    const sel = this.getSelection()
+    if (!sel || !this.sheet) return 'none'
+    let yes = 0
+    let no = 0
+    for (let r = sel.top; r <= sel.bottom; r++) {
+      for (let c = sel.left; c <= sel.right; c++) {
+        const snap = this.edit.getCellSnapshot(r, c)
+        if (snap?.style?.wrapText) yes++
+        else no++
+        if (yes && no) return 'mixed'
+      }
+    }
+    return yes ? 'all' : 'none'
+  }
+  /** 切换当前选区的"自动换行"(WPS 风格):全 wrap → 全关;否则 → 全开。
+   *  失效行高缓存让 autofit 按新 wrap 重撑(只扩不缩);editable 时入命令栈(单次撤销 style)。
+   *  注:undo 回滚 style 但不回滚行高,与现有 setStyle/autofit "只扩不缩"语义一致。 */
+  toggleWrapTextOnSelection(): boolean {
+    if (!this.editCfg.editable) return false
+    const sel = this.getSelection()
+    if (!sel || !this.sheet) return false
+    const target = this.getSelectionWrapState() !== 'all'
+    invalidateAutofit(this.sheet) // 必须先失效,setStyle 会同步触发 render→autofit
+    return this.setStyle(sel, { wrapText: target })
   }
   /** 合并区域(G1;清空被覆盖格,只留左上锚点);editable 时入命令栈 */
   mergeCells(range: MergeRange): boolean {

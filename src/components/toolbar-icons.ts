@@ -19,6 +19,10 @@ export const TOOLBAR_ICONS: Record<string, string> = {
   copy: '<rect x="9" y="9" width="11" height="11" rx="1.5"/><path d="M5 15H4V5a1 1 0 0 1 1-1h10v1"/>',
   // 十字线(冻结行列)
   freeze: '<line x1="3" y1="9" x2="21" y2="9"/><line x1="9" y1="3" x2="9" y2="21"/>',
+  // 自动换行:两条文本线 + 折回箭头
+  'wrap-text':
+    '<line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="10" y2="18"/>' +
+    '<path d="M3 12h15a3 3 0 0 1 0 6h-3"/><polyline points="17 15 14 18 17 21"/>',
   // 三点(更多)
   more: '<circle cx="5" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.6" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.6" fill="currentColor" stroke="none"/>',
   // 下拉小箭头

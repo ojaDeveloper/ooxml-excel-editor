@@ -266,7 +266,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         :recalc="editMode"
         :read-only-ranges="[{ top: 1, left: 0, bottom: 1, right: 4 }]"
         :editor="demoSelectEditor"
-        :toolbar="['find', 'filter', 'clear-filter', 'separator', 'copy', 'freeze', 'separator', 'zoom', 'export']"
+        :toolbar="['find', 'filter', 'clear-filter', 'separator', 'copy', 'wrap-text', 'freeze', 'separator', 'zoom', 'export']"
         @selection-change="(s) => { lastEvent = `选区 ${s.range.top + 1},${s.range.left + 1} → ${s.range.bottom + 1},${s.range.right + 1}`; selTick++ }"
         @cell-change="onCellChange"
         @dim-change="onDimChange"

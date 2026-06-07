@@ -118,6 +118,15 @@ function Demo() {
         )}
         {editMode && (
           <button
+            onClick={() => { ref.current?.toggleWrapTextOnSelection(); bumpSel() }}
+            title="自动换行(WPS 风格:全开/全关 toggle)"
+            style={ref.current?.getSelectionWrapState() === 'all' ? { background: '#e6f0ff' } : undefined}
+          >
+            自动换行
+          </button>
+        )}
+        {editMode && (
+          <button
             onClick={() => { const n = ref.current?.convertAllImagesToCells() ?? 0; if (!n) alert('没有可嵌入的浮动图') }}
             title="把整表所有浮动图就近嵌入各自单元格(WPS 浮动→嵌入/DISPIMG)"
           >

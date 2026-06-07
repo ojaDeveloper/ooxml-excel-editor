@@ -121,6 +121,10 @@ export interface ViewerApi {
   setSelectionFill(color: string | null): boolean
   /** 给当前选区设字体色;editable 时入命令栈 */
   setSelectionFontColor(color: string): boolean
+  /** 当前选区里 wrapText 的整体态:'all' 全开 / 'none' 全关 / 'mixed' 混合(工具栏 active/右键勾选用) */
+  getSelectionWrapState(): 'all' | 'none' | 'mixed'
+  /** 切换当前选区的"自动换行"(WPS 风格 toggle);editable 时入命令栈,行高按内容重撑(只扩不缩) */
+  toggleWrapTextOnSelection(): boolean
   /** 合并区域(G1;清空被覆盖格,只留左上锚点);editable 时入命令栈 */
   mergeCells(range: MergeRange): boolean
   /** 拆分区域内的合并(G1);editable 时入命令栈 */
