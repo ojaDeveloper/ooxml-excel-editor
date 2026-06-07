@@ -19,7 +19,7 @@ import type { FormulaEngineFactory } from '@/core/formula/engine'
 import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload, StructChangePayload } from '@/core/edit/edit-controller'
 import type { CellSnapshot } from '@/core/model/snapshot'
 import type { CellInspection } from '@/core/model/inspect'
-import { fillTemplate, type TemplateFillSpec } from '@/core/template/fill'
+import type { TemplateFillSpec } from '@/core/template/fill'
 import { jsonToWorkbook, isWorkbookModel, type JsonInput, type JsonLoadOptions } from '@/core/loader-json'
 import type { ExportProgress } from '@/core/progress'
 import { ExportProgressOverlay } from './ExportProgressOverlay'
@@ -494,12 +494,8 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   // ---- 模板填值:加载完后(或 :template 变化)按 spec 填一道再渲染 ----
   useEffect(() => {
     if (!props.template || !workbook) return
-    let cancelled = false
-    void (async () => {
-      await fillTemplate(workbook, props.template!)
-      if (!cancelled) controllerRef.current?.render()
-    })()
-    return () => { cancelled = true }
+    // 走 controller.applyTemplate(内部 rebuildMetrics + refreshContentSize + render),不要直接 fillTemplate
+    void controllerRef.current?.applyTemplate(props.template)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workbook, props.template])
 

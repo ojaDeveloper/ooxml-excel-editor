@@ -7,7 +7,10 @@
 WPS 单元格内嵌图(展示/互转/导出往返)+ 富粘贴 + 图片放大下载 + 虚拟空行 + 公式栏可编辑 +
 背景/字体色 + 编辑 UX 补齐(合并/粘贴/右键菜单)+ 性能 + 导出错误可见性。全部向后兼容、默认只读零回归。
 
-### 新增
+### 修复 + 新增
+- **修两个模板渲染真 bug + 锚点 trim 选项** —— 上一轮 P3 进阶发出后,用户反馈两个核心问题:
+  1. **JSON 数据被模板全覆盖(Vue 壳)** —— 切换模板后,看到的是模板原样(`{{customer}}` / `{{total}}` 文本未替换)。根因:`applyTemplateIfAny()` 调了 `fillTemplate(workbook, spec)` 但**没触发 render**;且 `watch([workbook, props.template])` 在 `watch(workbook → rebuildRenderer)` 之前注册,导致 `controller.workbook` 还没同步就跑 fillTemplate,renderer 拿不到结果。修法:① 改走 `controller.applyTemplate(spec)`(内部 `rebuildMetrics + refreshContentSize + render`);② 把 template 应用挪到 `watch(workbook, ...)` 内 `rebuildRenderer()` 之后调,顺序固定:`rebuild → applyTemplate → emit('rendered')`。React 壳同样改走 `applyTemplate` 而不是裸 `fillTemplate`
+  2. **模板预留行多于 JSON 行时,空白带边框格仍渲染**(看起来像"幽灵数据") —— 新选项 `TemplateAnchor.trimUnused`(默认 `true`):锚点填完后,从首个未填行往下扫,遇到**含 raw 值**的格停(如 `{{total}}` 替换后的合计行);把"扫到的空白行 × 锚点列范围内的格"全清掉(`sheet.cells.delete`)。**只清锚点列、不动模板其他列与超出范围的行**;关掉用 `trimUnused: false`。`scripts/gen-template-sample.mjs` 默认就预留了 11 行带边框的明细区,JSON 只 5 行 → trim 自动清掉中间 6 行,合计行保留
 - **JSON 数据 + 模板切换 UI(P3 进阶)** —— P3 已经把 `:workbook=JSON` 和 `:template=spec` 通路接通,这次补上**标题栏 + 工具栏**的运行时 UI:
   - **`:fileName` 默认回退** —— JSON 源未给名时显示 `JSON 数据`(用户传 `:fileName="'订单结算单'"` 仍胜出);标题栏改用 `displayFileName` 计算
   - **新 prop `:templateName`** —— 标题栏拼接 `· 模板: xxx` 后缀;不传则取运行时 File.name

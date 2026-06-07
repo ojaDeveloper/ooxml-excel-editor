@@ -5,7 +5,6 @@ import { PluginOverlayHost } from '@/core/viewer/plugin-overlay'
 import type { ExcelSource } from '@/core/loader'
 import { jsonToWorkbook, isWorkbookModel, type JsonInput, type JsonLoadOptions } from '@/core/loader-json'
 import type { TemplateFillSpec } from '@/core/template/fill'
-import { fillTemplate } from '@/core/template/fill'
 import type {
   CellModel,
   CellStyleFn,
@@ -243,7 +242,9 @@ const displayFileName = computed(() => {
 async function applyTemplateIfAny() {
   const spec = props.template
   if (!spec || !workbook.value) return
-  await fillTemplate(workbook.value, spec)
+  // 走 controller.applyTemplate(不是直接 fillTemplate)— 内部会触发 renderer.rebuildMetrics + render
+  // 直接调 fillTemplate 只改模型不触发重渲,会导致用户看到的是"未填充的模板原样"
+  await controller?.applyTemplate(spec)
 }
 
 /**
@@ -410,8 +411,8 @@ onBeforeUnmount(() => {
 watch([() => props.src, () => props.workbook, () => props.templateFile, runtimeTemplateSrc], () => {
   void runInitialLoad()
 })
-// 工作簿加载完后(或 :template 变化)应用模板填值
-watch([workbook, () => props.template], () => { void applyTemplateIfAny() })
+// 注:applyTemplate 的 watch 在下面 workbook → rebuildRenderer 注册之后,确保 controller.rebuild 先把
+// 新 workbook 同步到 controller.workbook,applyTemplate 才能在最新模型上调 fillTemplate
 
 watch(() => props.fileName, (f) => {
   if (controller) controller.fileName = f
@@ -441,8 +442,12 @@ watch(workbook, async (wb) => {
   activeSheet.value = wb.activeSheet
   await nextTick()
   rebuildRenderer()
+  // ★ controller.workbook 此刻已同步,再应用 :template spec(避免顺序坑:applyTemplate 在 controller 尚无 wb 时跑不动)
+  await applyTemplateIfAny()
   emit('rendered', wb)
 })
+// :template prop 变化(workbook 不变)时,也重跑一次
+watch(() => props.template, () => { void applyTemplateIfAny() })
 
 // 切表派发 sheet-change
 watch(activeSheet, (idx) => {

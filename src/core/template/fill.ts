@@ -25,6 +25,15 @@ export interface TemplateAnchor {
   columns?: string[]
   /** 落在哪张表(缺省 = activeSheet) */
   sheetName?: string
+  /**
+   * **未填行清理**(默认 `true`)。模板里常预留 N 行带边框 / 样式的"空白数据区"等 JSON 填进来,
+   * 当 JSON 行数 < N 时,多余的空白行会显示成"看起来像数据"的边框。开启后:从最后一行已填行往下扫,
+   * 直到撞到首个**含 raw 值**的格(如 `{{total}}` 替换后的总计行)为止,把这段空白行中**锚点列范围**
+   * 内的格全清掉(`sheet.cells.delete`)。**只清锚点列、不动模板的其他列与超出范围的行**。
+   *
+   * 关掉(`false`)= 保留模板原样(连边框带空格一起渲染)。
+   */
+  trimUnused?: boolean
 }
 
 export interface TemplateFillSpec {
@@ -89,7 +98,8 @@ async function replacePlaceholdersInSheet(
   return done
 }
 
-/** 在 sheet 上从 startCell 起铺 anchor.rows;复用 mutations.setCellValue 推断类型 + 维度自增。 */
+/** 在 sheet 上从 startCell 起铺 anchor.rows;复用 mutations.setCellValue 推断类型 + 维度自增。
+ *  默认 `trimUnused: true` 清理"模板预留但 JSON 未填"的空白行(防边框看起来像数据)。 */
 function applyAnchor(sheet: SheetModel, anchor: TemplateAnchor): number {
   const at = typeof anchor.startCell === 'string' ? parseCellAddress(anchor.startCell) : anchor.startCell
   if (!at) return 0
@@ -99,9 +109,11 @@ function applyAnchor(sheet: SheetModel, anchor: TemplateAnchor): number {
   const isObjectArray = first !== null && typeof first === 'object' && !Array.isArray(first)
   const keys: string[] = isObjectArray ? (anchor.columns ?? Object.keys(first as Record<string, unknown>)) : []
   let written = 0
+  let maxColOffset = 0 // 记录最大列偏移,trim 时只清理"锚点用到的列"
   for (let i = 0; i < rows.length; i++) {
     const row = rows[i]
     const arr: unknown[] = Array.isArray(row) ? row : keys.map((k) => (row as Record<string, unknown>)[k])
+    if (arr.length - 1 > maxColOffset) maxColOffset = arr.length - 1
     for (let c = 0; c < arr.length; c++) {
       const r = at.row + i
       const col = at.col + c
@@ -110,6 +122,29 @@ function applyAnchor(sheet: SheetModel, anchor: TemplateAnchor): number {
       // setCellValue 走"对外语义"路径,类型自动推断 + 维度自增 + dispImgId 清理等
       setCellValue(sheet, r, col, v as string | number | boolean | Date)
       written++
+    }
+  }
+
+  // P3 进阶:trim 未填行(默认 on)。从首个未填行往下扫,遇到第一个**含 raw 值**的格停;
+  // 这段空白行内锚点列范围(at.col..at.col+maxColOffset)里的格全清掉。
+  if (anchor.trimUnused !== false) {
+    const startCol = at.col
+    const endCol = at.col + maxColOffset
+    const firstUnusedRow = at.row + rows.length
+    for (let r = firstUnusedRow; r < sheet.dimension.rows; r++) {
+      let hasContent = false
+      for (let c = startCol; c <= endCol; c++) {
+        const cell = sheet.cells.get(cellKey(r, c))
+        if (cell && cell.raw != null && cell.raw !== '') {
+          hasContent = true
+          break
+        }
+      }
+      if (hasContent) break // 撞到"真"内容(如 {{total}} 已替换的合计行)→ 停
+      // 清这一段空白行内锚点列的格(只是边框/样式占位)
+      for (let c = startCol; c <= endCol; c++) {
+        sheet.cells.delete(cellKey(r, c))
+      }
     }
   }
   return written

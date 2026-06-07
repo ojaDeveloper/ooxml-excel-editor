@@ -39,6 +39,25 @@ test.describe('JSON 数据源 / 模板切换 e2e(P3 进阶)', () => {
     expect(titleVueAfter).toContain('订单结算单')
     expect(titleVueAfter).toContain('模板: template-sample.xlsx')
 
+    // ★ 关键回归点:模板加载后,JSON 数据真的填进模板了(不是看到"模板原样")
+    //   B2 = {{customer}} → 应为 '张三';D16 = {{total}} → 应为 '¥9,876.50';A5 = 锚点首行 → '笔记本电脑'
+    const filledValues = await page.evaluate(() => {
+      const v = (window as any).__excelViewer
+      return {
+        customer: v.getCellText(1, 1), // B2
+        total: v.getCellText(15, 3), // D16
+        firstItem: v.getCellText(4, 0), // A5
+        // 模板预留 11 行(A5:A15),JSON 只 5 行 → trim 应清掉 6 行(A10-A15)的边框格
+        row10: v.getCellValue(9, 0), // A10 应为 null(trim 后)
+        row16Label: v.getCellText(15, 0), // 合计:(trim 撞到非空就停)
+      }
+    })
+    expect(filledValues.customer).toBe('张三')
+    expect(filledValues.total).toContain('9,876') // 数字可能带格式
+    expect(filledValues.firstItem).toBe('笔记本电脑')
+    expect(filledValues.row10).toBeNull() // trim 清掉空白行
+    expect(filledValues.row16Label).toBe('合计:') // 不动模板真内容
+
     // 切回默认渲染:从模板下拉里点「清除模板」
     // 模板按钮在工具栏里;它是一个下拉,先点 caret 展开
     // 工具栏「模板」下拉(避开隐藏 measure 行;取可见的、有 active 类的)

@@ -75,6 +75,95 @@ describe('fillTemplate — 锚点表', () => {
   })
 })
 
+describe('fillTemplate — 锚点 trimUnused(P3 进阶)', () => {
+  // 构造模拟模板:5 行带边框的"空白数据区"(行 5-9)+ 合计行(行 10)
+  function makeTemplate() {
+    const wb = jsonToWorkbook([[]])
+    const sheet = wb.sheets[0]
+    sheet.dimension = { rows: 11, cols: 3 }
+    // 模板的空白带边框格(模拟 6 行预留 placeholder 区)
+    for (let r = 5; r < 10; r++) {
+      for (let c = 0; c < 3; c++) {
+        sheet.cells.set(cellKey(r, c), { row: r, col: c, type: 'empty', raw: null, styleId: 0 })
+      }
+    }
+    // 模板的"真"内容:合计行(行 10),A 列写 '合计:',C 列写占位符
+    sheet.cells.set(cellKey(10, 0), { row: 10, col: 0, type: 'string', raw: '合计:', styleId: 0 })
+    sheet.cells.set(cellKey(10, 2), { row: 10, col: 2, type: 'string', raw: '{{total}}', styleId: 0 })
+    return wb
+  }
+
+  // 注:'A6' = (row=5, col=0)(parseCellAddress 把 1-based 行号 -1)
+  it('默认 trim:JSON 行少于模板预留 → 清空多余空白行;但不动后面有内容的合计行', async () => {
+    const wb = makeTemplate()
+    await fillTemplate(wb, {
+      placeholders: { total: '1000' },
+      anchors: [{ startCell: 'A6', rows: [['apple', 1, 100], ['banana', 2, 200]] }],
+    })
+    const sheet = wb.sheets[0]
+    // 行 5-6 填了 JSON(0-based)= A6/A7
+    expect(sheet.cells.get(cellKey(5, 0))?.raw).toBe('apple')
+    expect(sheet.cells.get(cellKey(6, 0))?.raw).toBe('banana')
+    // 行 7-9 应该被清空(JSON 只填 2 行,模板预留 rows 5-9 共 5 行)
+    expect(sheet.cells.get(cellKey(7, 0))).toBeUndefined()
+    expect(sheet.cells.get(cellKey(7, 2))).toBeUndefined()
+    expect(sheet.cells.get(cellKey(9, 1))).toBeUndefined()
+    // 行 10 (合计) 不动,{{total}} 已被占位符替换
+    expect(sheet.cells.get(cellKey(10, 0))?.raw).toBe('合计:')
+    expect(sheet.cells.get(cellKey(10, 2))?.raw).toBe('1000')
+  })
+
+  it('trimUnused: false → 保留模板原样,空白行内空格仍在', async () => {
+    const wb = makeTemplate()
+    await fillTemplate(wb, {
+      anchors: [{ startCell: 'A6', rows: [['apple', 1, 100]], trimUnused: false }],
+    })
+    const sheet = wb.sheets[0]
+    // 仅填 1 行;其余 4 行的空格保留(empty 占位)
+    expect(sheet.cells.get(cellKey(5, 0))?.raw).toBe('apple')
+    expect(sheet.cells.get(cellKey(7, 0))).toBeDefined() // 模板的边框/占位还在
+    expect(sheet.cells.get(cellKey(9, 1))).toBeDefined()
+  })
+
+  it('JSON 行 >= 模板预留 → trim 没东西可清,行为不变', async () => {
+    const wb = makeTemplate()
+    await fillTemplate(wb, {
+      placeholders: { total: '999' },
+      anchors: [{ startCell: 'A6', rows: [
+        ['a', 1, 10], ['b', 2, 20], ['c', 3, 30], ['d', 4, 40], ['e', 5, 50],
+      ] }],
+    })
+    const sheet = wb.sheets[0]
+    // 5 行都填了 → 最后一行(0-based row 9 = A10)
+    expect(sheet.cells.get(cellKey(9, 0))?.raw).toBe('e')
+    // 合计行不动
+    expect(sheet.cells.get(cellKey(10, 0))?.raw).toBe('合计:')
+  })
+
+  it('只清"锚点列范围"内的格,不动锚点外的列', async () => {
+    const wb = jsonToWorkbook([[]])
+    const sheet = wb.sheets[0]
+    sheet.dimension = { rows: 10, cols: 5 }
+    // 行 5-9 的所有列(A-E)都放占位空格
+    for (let r = 5; r < 10; r++) {
+      for (let c = 0; c < 5; c++) {
+        sheet.cells.set(cellKey(r, c), { row: r, col: c, type: 'empty', raw: null, styleId: 0 })
+      }
+    }
+    await fillTemplate(wb, {
+      // 锚点只用 A-C(3 列),D/E 是模板的其他内容
+      anchors: [{ startCell: 'A6', rows: [['x', 1, 10]] }],
+    })
+    // 行 6-9 的 A-C 被清(锚点列范围)
+    expect(sheet.cells.get(cellKey(6, 0))).toBeUndefined()
+    expect(sheet.cells.get(cellKey(6, 2))).toBeUndefined()
+    expect(sheet.cells.get(cellKey(9, 2))).toBeUndefined()
+    // 行 6-9 的 D/E(锚点列外)不动
+    expect(sheet.cells.get(cellKey(6, 3))).toBeDefined()
+    expect(sheet.cells.get(cellKey(9, 4))).toBeDefined()
+  })
+})
+
 describe('fillTemplate — 占位符 + 锚点组合 + 进度回调', () => {
   it('两者都跑;进度回调被调到至少一次', async () => {
     const wb = jsonToWorkbook([['Header: {{title}}']])
