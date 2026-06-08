@@ -548,6 +548,18 @@ const formulaBarText = computed(() => {
 // 公式栏可编辑 + 与单元格联动(提交→改格;切格/格内编辑→栏更新)
 const fbDraft = ref('')
 const fbEditing = ref(false)
+// Phase 1.2.1 (2026-06-08) 公式栏自动撑高: textarea ref + input/draft 变化时同步高度
+const fbEl = ref<HTMLTextAreaElement | null>(null)
+function syncFbHeight() {
+  const el = fbEl.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = el.scrollHeight + 'px'
+}
+function onFbInput(e: Event) {
+  fbDraft.value = (e.target as HTMLTextAreaElement).value
+  syncFbHeight()
+}
 const fbCanEdit = computed(() => {
   void selVersion.value
   void renderTick.value
@@ -559,9 +571,12 @@ const formulaBarEditString = computed(() => {
   return controller?.getCellEditString() ?? ''
 })
 watch(formulaBarEditString, (v) => { if (!fbEditing.value) fbDraft.value = v }, { immediate: true })
+// 切格 / 切表 / 内容外部变更 → fbDraft 变 → 撑高同步 (用 nextTick 保证 textarea 渲染完)
+watch(fbDraft, () => nextTick(syncFbHeight))
 function fbFocus() {
   fbEditing.value = true
   fbDraft.value = formulaBarEditString.value
+  nextTick(syncFbHeight)
 }
 function fbCommit(move?: 'down') {
   controller?.commitActiveCellValue(fbDraft.value, move)
@@ -1205,14 +1220,18 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
     <div v-if="workbook" class="formula-bar">
       <span class="addr">{{ activeCellAddr || '—' }}</span>
       <span class="fx">fx</span>
-      <input
+      <!-- Phase 1.2.1 (2026-06-08): input → textarea, 长公式 / 多行内容自动撑高 (WPS 风格).
+           Shift+Enter 插换行, 普通 Enter 提交;上限 ~6 行 (max-height CSS 控). -->
+      <textarea
         v-if="fbCanEdit"
+        ref="fbEl"
         class="content content-input"
         :value="fbDraft"
         :title="fbDraft"
+        rows="1"
         spellcheck="false"
         @focus="fbFocus"
-        @input="fbDraft = ($event.target as HTMLInputElement).value"
+        @input="onFbInput"
         @keydown="fbKeydown"
         @blur="fbBlur"
       />
@@ -1393,12 +1412,14 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
 .ov-slot :deep(*) {
   pointer-events: auto;
 }
-/* 单元格编辑器层(E2): 在最上,容器穿透,编辑器本身接收交互 */
+/* 单元格编辑器层(E2): 在最上,容器穿透,编辑器本身接收交互.
+ * Phase 1 长文本撑高 (2026-06-08): overflow:hidden → visible — 让编辑器能向下溢出原格
+ * (跟 WPS 一致), z-index:6 仍最上层, 不影响下方网格 / 冻结窗格 / 滚动条交互. */
 .editor-slot {
   position: absolute;
   inset: 0;
   z-index: 6;
-  overflow: hidden;
+  overflow: visible;
   pointer-events: none;
 }
 .editor-slot :deep(*) {
@@ -1416,11 +1437,11 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
 .spacer {
   pointer-events: none;
 }
-/* 公式栏 */
+/* 公式栏: Phase 1.2.1 (2026-06-08) 自动撑高跟 textarea 内容一致, 上限 ~6 行 */
 .formula-bar {
   display: flex;
-  align-items: center;
-  height: 28px;
+  align-items: stretch;
+  min-height: 28px;
   flex: 0 0 auto;
   border-bottom: 1px solid #e2e4e7;
   background: #fff;
@@ -1428,7 +1449,9 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
 }
 .formula-bar .addr {
   width: 72px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-right: 1px solid #e2e4e7;
   color: #444;
   font-weight: 600;
@@ -1436,19 +1459,40 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
 }
 .formula-bar .fx {
   width: 34px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #999;
   font-style: italic;
   flex: 0 0 auto;
 }
 .formula-bar .content {
   flex: 1;
-  padding: 0 8px;
+  padding: 6px 8px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   color: #222;
   font-family: Consolas, 'Courier New', monospace;
+  display: flex;
+  align-items: center;
+  line-height: 1.4;
+}
+.formula-bar textarea.content {
+  /* textarea 在公式栏内: 自动撑高, 最多 ~6 行 (~108px) 后内部滚 */
+  white-space: pre-wrap;
+  overflow: auto;
+  text-overflow: clip;
+  resize: none;
+  border: none;
+  outline: none;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 13px;
+  display: block;
+  min-height: 22px;
+  max-height: 108px;
+  align-items: stretch;
+  line-height: 1.4;
 }
 .formula-bar .content-input {
   border: none;

@@ -39,10 +39,11 @@
   color: #bbb;
   cursor: default;
 }
+/* Phase 1.2.1 (2026-06-08): 公式栏自动撑高跟 textarea 内容一致, 上限 ~6 行 */
 .rxl-formula-bar {
   display: flex;
-  align-items: center;
-  height: 28px;
+  align-items: stretch;
+  min-height: 28px;
   flex: 0 0 auto;
   border-bottom: 1px solid #e2e4e7;
   background: #fff;
@@ -50,7 +51,9 @@
 }
 .rxl-formula-bar .addr {
   width: 72px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   border-right: 1px solid #e2e4e7;
   color: #444;
   font-weight: 600;
@@ -58,26 +61,39 @@
 }
 .rxl-formula-bar .fx {
   width: 34px;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   color: #999;
   font-style: italic;
   flex: 0 0 auto;
 }
 .rxl-formula-bar .content {
   flex: 1;
-  padding: 0 8px;
+  padding: 6px 8px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
   color: #222;
   font-family: Consolas, 'Courier New', monospace;
+  display: flex;
+  align-items: center;
+  line-height: 1.4;
 }
-.rxl-formula-bar .content-input {
+.rxl-formula-bar textarea.content {
+  white-space: pre-wrap;
+  overflow: auto;
+  text-overflow: clip;
+  resize: none;
   border: none;
   outline: none;
-  height: 100%;
   background: transparent;
+  font-family: Consolas, 'Courier New', monospace;
   font-size: 13px;
+  display: block;
+  min-height: 22px;
+  max-height: 108px;
+  line-height: 1.4;
 }
 .rxl-formula-bar .content-input:focus {
   background: #f5fbf7;
@@ -122,12 +138,13 @@
 .rxl-ov-slot > div > * {
   pointer-events: auto;
 }
-/* 单元格编辑器层(E2):在最上,容器穿透,编辑器接收交互 */
+/* 单元格编辑器层(E2):在最上,容器穿透,编辑器接收交互.
+ * Phase 1 长文本撑高 (2026-06-08): overflow:hidden → visible — 让编辑器向下溢出. */
 .rxl-editor-slot {
   position: absolute;
   inset: 0;
   z-index: 6;
-  overflow: hidden;
+  overflow: visible;
   pointer-events: none;
 }
 .rxl-editor-slot > * {

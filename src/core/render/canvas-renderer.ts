@@ -1084,8 +1084,12 @@ export class CanvasRenderer {
 
     const lineH = style.font.size * zoom * (96 / 72) * LINE_HEIGHT_FACTOR
     const totalH = lineH * lines.length
+    const availH = h - 2 * pad
+    // Phase 1 长文本撑高后 (2026-06-08): 文本总高度超过单元格 → 强制顶对齐, 显示文头 (跟 WPS 一致).
+    // 否则默认 'bottom' 会从底部减去 totalH 算 startY, 导致 startY < y, 第一行画到格外, 用户看到的是文末.
+    const overflowsCell = totalH > availH
     let startY: number
-    if (style.vAlign === 'top') startY = y + pad + lineH * 0.78
+    if (style.vAlign === 'top' || overflowsCell) startY = y + pad + lineH * 0.78
     else if (style.vAlign === 'middle') startY = y + (h - totalH) / 2 + lineH * 0.78
     else startY = y + h - pad - totalH + lineH * 0.78
 

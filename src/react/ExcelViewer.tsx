@@ -289,6 +289,16 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   // 公式栏编辑态(draft = 编辑中的文本;ref 标记是否正在编辑栏,改 ref 不触发重渲)
   const [fbDraft, setFbDraft] = useState('')
   const fbEditingRef = useRef(false)
+  // Phase 1.2.1 (2026-06-08) 公式栏 textarea + auto-resize
+  const fbElRef = useRef<HTMLTextAreaElement | null>(null)
+  const syncFbHeight = () => {
+    const el = fbElRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = el.scrollHeight + 'px'
+  }
+  // fbValue 变 (切格 / 外部更新) → 重撑高度
+  useEffect(() => { syncFbHeight() })
 
   // DOM refs
   const renderAreaRef = useRef<HTMLDivElement>(null)
@@ -1047,13 +1057,15 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
           <span className="addr">{activeAddr || '—'}</span>
           <span className="fx">fx</span>
           {fbCanEdit ? (
-            <input
+            <textarea
+              ref={fbElRef}
               className="content content-input"
               value={fbValue}
               title={fbValue}
+              rows={1}
               spellCheck={false}
               onFocus={fbFocus}
-              onChange={(e) => setFbDraft(e.target.value)}
+              onChange={(e) => { setFbDraft(e.target.value); syncFbHeight() }}
               onKeyDown={fbKeydown}
               onBlur={fbBlur}
             />

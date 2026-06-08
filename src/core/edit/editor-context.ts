@@ -27,10 +27,29 @@ export interface CellEditorContext {
   commit(value: EditorCommitValue, move?: 'down' | 'right'): void
   /** 取消编辑(不改模型) */
   cancel(): void
+  /**
+   * 请求 host 重新 position 编辑器 (Phase 1 长文本撑高用, 2026-06-08).
+   * 编辑器在内容变化(input 事件)后调一次, host 会重新读 `getDesiredHeight()` 并撑高.
+   * 不实现 `getDesiredHeight` 的编辑器调它无效(仍按 cell rect 尺寸).
+   */
+  reposition?(): void
 }
 
-/** 编辑器工厂:返回 DOM 元素,或 { el, destroy }(destroy 在卸载时清理) */
-export type CellEditorFactory = (ctx: CellEditorContext) => HTMLElement | { el: HTMLElement; destroy?: () => void }
+/**
+ * 编辑器工厂的返回类型:可以是裸 HTMLElement, 或带钩子的对象.
+ * - `destroy`: 卸载时清理(可选)
+ * - `getDesiredHeight`: Phase 1 长文本撑高用. host 在 position 时调, 传入当前列宽 (px),
+ *   编辑器返回内容期望的总高度 (px). host 取 max(原 cell h, desired) 作为最终高度.
+ *   不实现 = 高度锁定为单元格高度(老行为).
+ */
+export interface CellEditorReturn {
+  el: HTMLElement
+  destroy?: () => void
+  getDesiredHeight?(widthPx: number): number
+}
+
+/** 编辑器工厂:返回 DOM 元素,或 { el, destroy?, getDesiredHeight? }(destroy 在卸载时清理) */
+export type CellEditorFactory = (ctx: CellEditorContext) => HTMLElement | CellEditorReturn
 
 /** 编辑器解析器:按格决定用哪个工厂(无 → 该格无自定义编辑器) */
 export type EditorResolver = (cell: CellModel | null, pos: { row: number; col: number }) => CellEditorFactory | void

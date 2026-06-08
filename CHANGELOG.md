@@ -2,6 +2,29 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.2.1] - 2026-06-08
+
+**WPS 风格长文本编辑** — 默认编辑器从 `<input>` 升级 `<textarea>`, 输入长文本自动换行 + 向下撑高, 跟 WPS / Excel 用户习惯一致。
+
+### 修复 + 改进
+- **★ 默认编辑器换 textarea + 动态撑高(WPS 风格, 2026-06-08)** — 用户反馈 / 截图: 编辑长文本时, 旧 `<input>` 单行水平溢出被裁切, 看不到全文; WPS 同场景**编辑框向下浮起 + 自动换行**显示完整内容。修复:
+  - [default-editor.ts](src/core/edit/default-editor.ts) `<input>` → `<textarea>`, `white-space:pre-wrap` + 行高同步渲染层 `LINE_HEIGHT_FACTOR=1.18`. 短文本 (`rows=1`) 视觉跟之前 `<input>` 一致, 不破坏短输入体验. **Shift+Enter** 插入换行, 普通 **Enter** 提交 (跟 Excel/WPS 一致).
+  - 新钩子 `CellEditorReturn.getDesiredHeight(widthPx) → number` + `CellEditorContext.reposition()` — 编辑器 input 事件触发 reposition, host 重测撑高. 用 [text.ts 的 `wrapLines`](src/core/render/text.ts) 复用渲染层换行算法, 保证视觉一致.
+  - [editor-host.ts](src/core/edit/editor-host.ts) `position()` 新逻辑: 宽度仍 = 列宽 (跟 WPS 一致, **仅向下溢出**); 高度 = `max(单元格原高, getDesiredHeight(列宽))`, 上限 viewport 一半 (防一格输入 10000 字撑爆屏).
+  - [`.editor-slot`](src/components/ExcelViewer.vue) + [`.rxl-editor-slot`](src/react/excel-viewer.css) CSS `overflow: hidden → visible`, 让编辑器可溢出原格. z-index:6 仍最上层, 不影响下方网格 / 冻结窗格 / 滚动交互.
+  - **提交后行高保持原样** (跟 WPS 一致, 不持久化撑高): 短期视觉浮起仅在编辑期, 提交后单元格还原. 如需永久撑高, 用户单元格设 `wrapText=true` 走已有 autofit (历史行为不变).
+- **★ 公式栏 (fx 内容条) 长文本自动撑高 (2026-06-08)** — 用户反馈: 公式栏内容过长被 `text-overflow:ellipsis` 截断, 看不全公式 / 长文本. 修: Vue + React 壳公式栏 `<input>` → `<textarea>` + `auto-resize` (内容变化时 height = scrollHeight). 跟单元格编辑器一样, 普通 Enter 提交、Shift+Enter 插换行、上限 ~6 行 (max-height: 108px) 超过内部滚动. CSS 同步 — formula-bar 高度自动撑, addr / fx 区垂直居中.
+- **★ vAlign 溢出 fallback 顶对齐 (跟 WPS 一致, 2026-06-08)** — 用户反馈: 输入长文本提交后, 单元格"显示文末而不是开头". 根因: [canvas-renderer.ts:1090](src/core/render/canvas-renderer.ts#L1090) 默认 vAlign='bottom' 时, 文本总高超过单元格高 → `startY = y + h - pad - totalH` 变负, 首行画到格外, 用户看到的是最后几行. 修: 当 `totalH > availH` 时, 强制走 `'top'` 分支 (显示文头, 末尾裁切). 跟 WPS / Excel 行为一致.
+- **`CellEditorFactory` 返回类型扩展** — 旧 `HTMLElement | { el, destroy? }` → 新增可选 `{ el, destroy?, getDesiredHeight?(w) }`. 旧自定义编辑器 100% 向后兼容 (不返 `getDesiredHeight` = 高度锁单元格高, 老行为).
+- **`CellEditorContext.reposition()`** — 给自定义编辑器: 主动通知 host 重测撑高. 内容变化后调一次. 不调 = 不撑 (老行为).
+
+### 测试
+- 新单测 [default-editor.test.ts](src/core/edit/__tests__/default-editor.test.ts) 10 项: textarea 类型 / commit-cancel 行为 / Enter 移动 / Shift+Enter 换行 / 失焦提交 / 样式贴合 / `getDesiredHeight` 钩子存在 / 兜底 (依赖 canvas measureText 的具体撑高数测试走 e2e 覆盖)
+- 新 e2e [edit-long-text.e2e.ts](e2e/edit-long-text.e2e.ts) Vue + React 双覆盖 12 项: 编辑器 textarea / 短文本不撑大 / 长文本撑高 / 动态变化 / Esc 取消 / Shift+Enter 换行 + Enter 提交
+- devDependency 加 `jsdom` (单元格编辑器单测依赖 DOM 环境;**仅 dev**, 不影响 dist)
+
+---
+
 ## [1.2.0] - 2026-06-08
 
 **主线**: 只读边界三件套(白名单 / 尺寸多形态 / 视觉钩子 + permission-denied 事件)+

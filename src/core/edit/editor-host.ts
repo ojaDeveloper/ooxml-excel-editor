@@ -12,6 +12,8 @@ interface ActiveEditor {
   col: number
   /** 可选定位覆盖:合并单元格编辑时返回整片合并区,而非单格 */
   rectOverride?: () => Rect | null
+  /** Phase 1 长文本撑高 (2026-06-08): 给宽度返期望高度. host 取 max(cell h, 此值) 作为最终高度. */
+  getDesiredHeight?: (widthPx: number) => number
 }
 
 export class CellEditorHost {
@@ -43,12 +45,16 @@ export class CellEditorHost {
     this.unmount()
     let el: HTMLElement
     let destroy: (() => void) | undefined
+    let getDesiredHeight: ((w: number) => number) | undefined
     try {
+      // Phase 1 长文本撑高 (2026-06-08): 注入 reposition 给 ctx, 编辑器在 input 事件后调它即可重撑高
+      ctx.reposition = () => this.position()
       const made = factory(ctx)
       if (made instanceof HTMLElement) el = made
       else {
         el = made.el
         destroy = made.destroy
+        getDesiredHeight = made.getDesiredHeight
       }
     } catch (e) {
       console.warn('[ooxml-preview] 单元格编辑器工厂出错:', e)
@@ -57,12 +63,17 @@ export class CellEditorHost {
     el.style.position = 'absolute'
     el.style.boxSizing = 'border-box'
     this.container.appendChild(el)
-    this.active = { el, destroy, row, col, rectOverride }
+    this.active = { el, destroy, row, col, rectOverride, getDesiredHeight }
     this.position()
     return true
   }
 
-  /** 按当前 rectOf 重定位活动编辑器(滚动/缩放后跟随) */
+  /**
+   * 按当前 rectOf 重定位活动编辑器(滚动/缩放后跟随).
+   * Phase 1 长文本撑高 (2026-06-08): 若编辑器实现了 `getDesiredHeight`,
+   * 最终高度 = max(单元格原高, 期望高度), 上限 viewport 一半防撑爆.
+   * 宽度仍 = 列宽 (跟 WPS 一致, 仅向下溢出).
+   */
   position(): void {
     const a = this.active
     if (!a) return
@@ -70,10 +81,23 @@ export class CellEditorHost {
     if (!r) return
     a.el.style.left = r.x + 'px'
     a.el.style.top = r.y + 'px'
-    // 精确贴合单元格(像 WPS:编辑框正好盖住该格,不放大)。
     // 用 width/height 而非 min-*,否则 <input> 等控件会按自身固有尺寸(~20 字符)撑大。
     a.el.style.width = r.w + 'px'
-    a.el.style.height = r.h + 'px'
+    let h = r.h
+    if (a.getDesiredHeight) {
+      try {
+        const desired = a.getDesiredHeight(r.w)
+        if (desired > h) {
+          // 上限: viewport 高的一半, 不让编辑器把整个屏幕撑爆 (textarea 自己内部 overflow:auto 滚)
+          const win = this.container.ownerDocument.defaultView
+          const cap = Math.max(120, (win?.innerHeight ?? 600) * 0.5)
+          h = Math.min(desired, cap)
+        }
+      } catch (e) {
+        console.warn('[ooxml-preview] 编辑器 getDesiredHeight 出错:', e)
+      }
+    }
+    a.el.style.height = h + 'px'
   }
 
   /** 卸载活动编辑器 */
