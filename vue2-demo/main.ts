@@ -21,15 +21,91 @@ new Vue({
       cellImageFit: 'contain' as 'contain' | 'fill' | 'cover',
       lastEvent: '',
       toolbarItems: ['find', 'filter', 'clear-filter', 'separator', 'copy', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export'],
-      // 设置可编辑 dialog (跟 Vue 3 demo src/App.vue 同款 EditableTargets 白名单)
       editableTargetsApplied: undefined as any,
       editTargetsDialogOpen: false,
-      editTargetsCells: {} as Record<string, true>,  // "r:c" key set (用 obj 模拟 Vue 2 reactivity)
+      editTargetsCells: {} as Record<string, true>,
       editTargetsRows: {} as Record<number, true>,
       editTargetsCols: {} as Record<number, true>,
+      // demo 顶栏溢出折叠 (跟 Vue 3 demo 同款 ResizeObserver + measure)
+      demoItemWidths: [] as number[],
+      demoBarContentW: 0,
+      demoMoreOpen: false,
     }
   },
+  mounted() {
+    this.$nextTick(() => this.demoRemeasure())
+    // ResizeObserver / 事件 handler 直接挂 instance, 不入 data → 不被 Vue 转 reactive
+    const inst = this as any
+    inst._demoRo = new ResizeObserver(() => this.demoRemeasure())
+    const bar = this.$refs.demoBarEl as HTMLElement | undefined
+    if (bar) inst._demoRo.observe(bar)
+    inst._onDocClick = (e: MouseEvent) => {
+      const bar2 = this.$refs.demoBarEl as HTMLElement | undefined
+      if (bar2 && !bar2.contains(e.target as Node)) this.demoMoreOpen = false
+    }
+    document.addEventListener('mousedown', inst._onDocClick)
+  },
+  beforeDestroy() {
+    const inst = this as any
+    inst._demoRo?.disconnect()
+    if (inst._onDocClick) document.removeEventListener('mousedown', inst._onDocClick)
+  },
+  updated() { this.$nextTick(() => this.demoRemeasure()) },
   computed: {
+    /** 顶栏右侧演示按钮列表 (跟 Vue 3 demo src/App.vue:328-369 同款) */
+    demoBarItems(): Array<{ id: string; kind: 'btn' | 'select' | 'color'; label: string; title?: string; onClick?: () => void; getColor?: () => string; onColor?: (e: Event) => void; model?: string; options?: { value: string; label: string }[]; onSelect?: (v: string) => void }> {
+      if (!(this.src || this.jsonItems)) return []
+      const arr: any[] = []
+      if (this.editMode) {
+        arr.push(
+          { id: 'edit-targets', kind: 'btn', label: this.appliedCount ? `可编辑 (${this.appliedCount})` : '设置可编辑', title: '白名单模式: 点选要可编辑的格 / 行 / 列, 应用后只这些可编辑', onClick: this.openEditTargetsDialog },
+          { id: 'highlight-readonly', kind: 'btn', label: this.highlightReadOnly ? '✓ 高亮只读' : '高亮只读', title: '把只读格套浅灰底', onClick: this.toggleHighlightReadOnly },
+          { id: 'bold', kind: 'btn', label: 'B 加粗选区', title: '给选区加粗', onClick: this.boldSel },
+          { id: 'merge', kind: 'btn', label: '合并', title: '合并选区', onClick: this.mergeSel },
+          { id: 'unmerge', kind: 'btn', label: '拆分', title: '拆分选区', onClick: this.unmergeSel },
+          { id: 'fill', kind: 'color', label: '背景', title: '背景填充色', getColor: this.getFill, onColor: this.setFill },
+          { id: 'font', kind: 'color', label: '字体', title: '字体颜色', getColor: this.getFont, onColor: this.setFont },
+          { id: 'clear-fill', kind: 'btn', label: '清除填充', onClick: this.clearFill },
+          { id: 'embed-all', kind: 'btn', label: '整表嵌入', title: 'WPS 浮动→嵌入(DISPIMG)', onClick: this.embedAll },
+          { id: 'cell-to-float', kind: 'btn', label: '格→图', title: '内嵌图→浮动图', onClick: this.cellToFloat },
+          { id: 'ins-row', kind: 'btn', label: '＋行', title: '选区上方插入行', onClick: this.insRow },
+          { id: 'del-row', kind: 'btn', label: '－行', title: '删除选区行', onClick: this.delRow },
+        )
+      }
+      arr.push(
+        { id: 'pdf-watermark', kind: 'btn', label: 'PDF(页码+水印)', title: '演示 beforeRenderPage 钩子', onClick: this.exportPdfWithWatermark },
+        { id: 'sheet-json', kind: 'btn', label: '数据→JSON', title: '演示数据读取 API getSheetJSON', onClick: this.showSheetJSON },
+        { id: 'fit', kind: 'select', label: '贴合', title: 'WPS 内嵌图贴合方式', model: this.cellImageFit, options: [
+          { value: 'contain', label: 'contain 等比(同 WPS)' }, { value: 'fill', label: 'fill 铺满' }, { value: 'cover', label: 'cover 裁剪' },
+        ], onSelect: (v: string) => { this.cellImageFit = v as any } },
+        { id: 'dl-xlsx', kind: 'btn', label: '↓XLSX', title: '导出 .xlsx', onClick: this.downloadXlsx },
+        { id: 'dl-csv', kind: 'btn', label: '↓CSV', title: '导出 .csv', onClick: this.downloadCsv },
+        { id: 'dl-json', kind: 'btn', label: '↓JSON', title: '导出 .json', onClick: this.downloadJson },
+      )
+      return arr
+    },
+    demoVisibleCount(): number {
+      const cw = this.demoBarContentW
+      const w = this.demoItemWidths
+      const items = this.demoBarItems
+      const MORE_W = 64, GAP = 6
+      if (!cw || w.length !== items.length) return items.length
+      let sum = 0, fitsAll = true
+      for (let i = 0; i < items.length; i++) {
+        sum += w[i] + GAP
+        if (sum > cw) { fitsAll = false; break }
+      }
+      if (fitsAll) return items.length
+      let s = MORE_W, n = 0
+      for (let i = 0; i < items.length; i++) {
+        s += w[i] + GAP
+        if (s > cw) break
+        n++
+      }
+      return Math.max(0, n)
+    },
+    demoVisibleItems(): any[] { return this.demoBarItems.slice(0, this.demoVisibleCount) },
+    demoOverflowItems(): any[] { return this.demoBarItems.slice(this.demoVisibleCount) },
     editableTargetsCount(): number {
       return Object.keys(this.editTargetsCells).length + Object.keys(this.editTargetsRows).length + Object.keys(this.editTargetsCols).length
     },
@@ -164,6 +240,15 @@ new Vue({
       this.editTargetsDialogOpen = false
       this.lastEvent = '[白名单] 已关闭, 恢复默认 (全可编辑)'
     },
+    demoRemeasure() {
+      const bar = this.$refs.demoBarEl as HTMLElement | undefined
+      const measure = this.$refs.demoMeasureEl as HTMLElement | undefined
+      if (!measure || !bar) return
+      this.demoItemWidths = Array.from(measure.children).map((c) => (c as HTMLElement).offsetWidth)
+      const fixed = Array.from(bar.children).find((c) => (c as HTMLElement).classList.contains('app-bar-fixed')) as HTMLElement | undefined
+      const fixedW = fixed ? fixed.getBoundingClientRect().width : 0
+      this.demoBarContentW = Math.max(0, bar.clientWidth - fixedW - 24)
+    },
     onRendered() { this.lastEvent = '✓ 渲染完成' },
     onError(msg: string) { this.lastEvent = '⚠ 错误: ' + msg },
     onCellClick(p: { row: number; col: number; text: string }) { this.lastEvent = `点击 R${p.row + 1}C${p.col + 1}: ${p.text}` },
@@ -181,7 +266,7 @@ new Vue({
   },
   template: `
     <div style="display:flex;flex-direction:column;height:100vh">
-      <header class="app-bar">
+      <header ref="demoBarEl" class="app-bar">
         <div class="app-bar-fixed">
           <strong>OOXML Excel 预览器</strong>
           <span class="sub">Vue 2 · Canvas 高保真</span>
@@ -196,35 +281,31 @@ new Vue({
           </label>
         </div>
         <div class="grow"></div>
-        <template v-if="(src || jsonItems) && editMode">
-          <button class="sample-btn" @click="openEditTargetsDialog" title="白名单模式: 点选要可编辑的格 / 行 / 列, 应用后只这些可编辑">{{ appliedCount ? '可编辑 (' + appliedCount + ')' : '设置可编辑' }}</button>
-          <button class="sample-btn" @click="toggleHighlightReadOnly" :title="highlightReadOnly ? '关闭只读高亮' : '把只读格套浅灰底'">{{ highlightReadOnly ? '✓ 高亮只读' : '高亮只读' }}</button>
-          <button class="sample-btn" @click="boldSel" title="给选区加粗">B 加粗选区</button>
-          <button class="sample-btn" @click="mergeSel" title="合并选区">合并</button>
-          <button class="sample-btn" @click="unmergeSel" title="拆分选区">拆分</button>
-          <label class="sample-label" title="背景填充色(回显 + 改选区)">背景<input type="color" :value="getFill()" @input="setFill" /></label>
-          <label class="sample-label" title="字体颜色(回显 + 改选区)">字体<input type="color" :value="getFont()" @input="setFont" /></label>
-          <button class="sample-btn" @click="clearFill" title="清除背景填充">清除填充</button>
-          <button class="sample-btn" @click="embedAll" title="整表浮动图就近嵌入(WPS 浮动→嵌入/DISPIMG)">整表嵌入</button>
-          <button class="sample-btn" @click="cellToFloat" title="选中格的内嵌图拎成浮动图">格→图</button>
-          <button class="sample-btn" @click="insRow" title="选区上方插入行">＋行</button>
-          <button class="sample-btn" @click="delRow" title="删除选区行">－行</button>
+        <!-- 隐藏测量行: 量每项实际宽度 -->
+        <div ref="demoMeasureEl" class="app-bar-measure" aria-hidden="true">
+          <template v-for="it in demoBarItems">
+            <button v-if="it.kind === 'btn'" :key="'m' + it.id" class="sample-btn">{{ it.label }}</button>
+            <label v-else-if="it.kind === 'color'" :key="'m' + it.id" class="sample-label">{{ it.label }}<input type="color" /></label>
+            <label v-else :key="'m' + it.id" class="sample-label">{{ it.label }}<select><option v-for="o in it.options" :key="o.value" :value="o.value">{{ o.label }}</option></select></label>
+          </template>
+        </div>
+        <!-- 可见演示按钮 -->
+        <template v-for="it in demoVisibleItems">
+          <button v-if="it.kind === 'btn'" :key="it.id" class="sample-btn" :title="it.title" @click="it.onClick && it.onClick()">{{ it.label }}</button>
+          <label v-else-if="it.kind === 'color'" :key="it.id" class="sample-label" :title="it.title">{{ it.label }}<input type="color" :value="it.getColor && it.getColor()" @input="it.onColor && it.onColor($event)" /></label>
+          <label v-else :key="it.id" class="sample-label" :title="it.title">{{ it.label }}<select :value="it.model" @change="it.onSelect && it.onSelect($event.target.value)"><option v-for="o in it.options" :key="o.value" :value="o.value">{{ o.label }}</option></select></label>
         </template>
-        <template v-if="src || jsonItems">
-          <button class="sample-btn" @click="exportPdfWithWatermark" title="演示 beforeRenderPage 钩子">PDF(页码+水印)</button>
-          <button class="sample-btn" @click="showSheetJSON" title="演示数据读取 API getSheetJSON">数据→JSON</button>
-          <label class="sample-label" title="WPS 内嵌图贴合方式">
-            贴合
-            <select v-model="cellImageFit">
-              <option value="contain">contain 等比(同 WPS)</option>
-              <option value="fill">fill 铺满</option>
-              <option value="cover">cover 裁剪</option>
-            </select>
-          </label>
-          <button class="sample-btn" @click="downloadXlsx" title="导出 .xlsx">↓XLSX</button>
-          <button class="sample-btn" @click="downloadCsv" title="导出 .csv">↓CSV</button>
-          <button class="sample-btn" @click="downloadJson" title="导出 .json">↓JSON</button>
-        </template>
+        <!-- 更多溢出 popover -->
+        <div v-if="demoOverflowItems.length" class="more-wrap">
+          <button class="sample-btn more-btn" :class="{ open: demoMoreOpen }" title="更多" @click="demoMoreOpen = !demoMoreOpen">⋯ 更多</button>
+          <div v-if="demoMoreOpen" class="more-pop">
+            <template v-for="it in demoOverflowItems">
+              <button v-if="it.kind === 'btn'" :key="'o' + it.id" class="more-row" :title="it.title" @click="(it.onClick && it.onClick()); demoMoreOpen = false">{{ it.label }}</button>
+              <label v-else-if="it.kind === 'color'" :key="'o' + it.id" class="more-row" :title="it.title">{{ it.label }}<input type="color" :value="it.getColor && it.getColor()" @input="it.onColor && it.onColor($event)" /></label>
+              <label v-else :key="'o' + it.id" class="more-row" :title="it.title">{{ it.label }}<select :value="it.model" @change="(it.onSelect && it.onSelect($event.target.value)); demoMoreOpen = false"><option v-for="o in it.options" :key="o.value" :value="o.value">{{ o.label }}</option></select></label>
+            </template>
+          </div>
+        </div>
       </header>
       <main style="position:relative;flex:1 1 auto;min-height:0">
         <ExcelViewer
