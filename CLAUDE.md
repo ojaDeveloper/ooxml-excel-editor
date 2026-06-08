@@ -52,6 +52,14 @@ src/demo-shared(三 demo 共享 CSS / 工具)→ demo-bar.css (绿色头) + demo
 - **三壳同构**:给 `ViewerController` 加能力后,Vue 3 壳(components/ExcelViewer.vue)、React 壳(react/ExcelViewer.tsx)、Vue 2 壳(vue2/ExcelViewer.ts)都要接上,各自 e2e 覆盖。**任何 UI 变更先 Vue 3 落地, 再 1:1 复刻到 Vue 2 + React**(详见第 7 中心原则)。
 - **默认只读、零回归**:`editable` 关闭时行为与历史完全一致;编辑能力(单元格/样式/列宽行高/图片/增删行列/公式重算/导出回写)是 **opt-in**,全建在框架无关 core 的命令栈 + 前后快照事件上(见 README「编辑」章节)。
 - **e2e 浏览器**:`@playwright/test` 固定 `1.58.0`(对应本机缓存 chromium-1208,避开需下载的新版)。
+- **Vue 2 兼容底线 = Vue 2.6.12 ★(2026-06-08 钉死)** — `peerDependencies.vue` 声明 `^2.6.0 || ^2.7.0 || ^3.4.0`, 实际消费方就有 Vue 2.6.12 项目. 任何写进 `src/vue2/**` 的代码、任何文档里给 Vue 2 用户的示例, **不准用 Vue 2.7+ 才有的特性**, 包括但不限于:
+    - ❌ **函数 ref / callback ref** (`h('div', { ref: (el) => ... })`) — Vue 2.7 backport, **Vue 2.6 完全忽略**. 必须用 string ref + `vm.$refs[name]` (见 [src/vue2/ExcelViewer.ts](src/vue2/ExcelViewer.ts) 的 `makeDomSlotFactory`).
+    - ❌ **Vue 2.7 内置 Composition API** 直接 `import { ref } from 'vue'` — 必须 `from '@vue/composition-api'` (它在 2.6 走 plugin, 在 2.7 自动 re-export).
+    - ❌ `<script setup>` (Vue 3 only, 跟 2.x SFC 不兼容).
+    - ❌ Vue 2.7+ 才有的 `defineComponent` 类型推断细节假设.
+    - ✅ 用 string ref / `Vue.use(VueCompositionAPI)` plugin / `defineComponent` (Composition API 入口) / `h()` render function. 这些三个版本 (2.6 / 2.7 / 3) 都受支持.
+    - 验证手段: 把 `vue2` devDep 临时改成 `npm:vue@2.6.12` + 跑 `npm run dev:vue2` 复现 (`vue2-demo/main.ts` 需 `Vue.use(VueCompositionAPI)`, vite alias 也得改). 详见 CHANGELOG 1.3.2 二次迭代条目.
+    - **背景**: 1.3.2 第一次发布前消费方 Vue 2.6.12 项目报 "renderArea DOM 拿不到", 根因正是函数 ref 在 2.6 被忽略. 当时 `vue2-demo` 跑 Vue 2.7.16 没暴露. 此后**新功能必须在 Vue 2.6 上验证**, 不要假设 Vue 2.7+ 的 API 可用.
 
 ## 常用命令
 

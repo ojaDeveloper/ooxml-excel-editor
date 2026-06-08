@@ -31,6 +31,7 @@ import {
   onBeforeUnmount,
   shallowRef,
   nextTick,
+  getCurrentInstance,
   type PropType,
   type VNode,
 } from '@vue/composition-api'
@@ -73,13 +74,19 @@ import { getCellValue, getCellText, getSheetData, getRangeData, sheetToJSON, typ
 import { useExcelDocumentVue2 } from './use-excel-document'
 import './excel-viewer.css'
 
-/** 函数 ref 工厂 — 闭包 DOM 拿法, render function 重渲时 ref 会先解绑再重绑, 这里只跟踪最新非空值. */
-function domSlot<T extends HTMLElement>() {
-  const slot: { value: T | null; bind: (el: T | null) => void } = {
-    value: null,
-    bind: (el) => { slot.value = el },
+/** 字符串 ref 工厂 — render 时挂 string ref (`{ ref: slot.refName }`), Vue 把 DOM 放进 vm.$refs.
+ *  为什么不用 function/callback ref?
+ *    回调 ref 是 Vue 3 引入、Vue 2.7 backport. Vue 2.6 的 vnode ref 只认字符串 ——
+ *    传函数根本不会被调用, slot.value 永远 null, renderArea / fb / templateInput 全拿不到 DOM.
+ *  字符串 ref + vm.$refs 在 Vue 2.6 / 2.7 / Vue 3 三个版本都受支持, 是最稳的跨版本路径.
+ *  注: vm.$refs 是 live lookup, slot.value 是 getter, 每次读时去 vm.$refs 取最新值. */
+function makeDomSlotFactory(vm: { $refs: Record<string, unknown> }) {
+  return function domSlot<T extends HTMLElement>(refName: string) {
+    return {
+      refName,
+      get value(): T | null { return (vm.$refs[refName] as T | undefined) ?? null },
+    }
   }
-  return slot
 }
 
 function ce<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] {
@@ -119,9 +126,12 @@ export default defineComponent({
   },
   setup(props, { emit, expose, slots }) {
     // ---- 由 Vue 管理的 DOM (chrome + 一个空的 render-area 外壳) ----
-    const renderAreaSlot = domSlot<HTMLDivElement>()
-    const fbSlot = domSlot<HTMLTextAreaElement>()
-    const templateInputSlot = domSlot<HTMLInputElement>()
+    // 三个 slot 走 string ref (Vue 2.6/2.7/Vue 3 都支持), getter 实时读 vm.$refs.
+    const vm = getCurrentInstance()?.proxy as unknown as { $refs: Record<string, unknown> }
+    const domSlot = makeDomSlotFactory(vm)
+    const renderAreaSlot = domSlot<HTMLDivElement>('renderArea')
+    const fbSlot = domSlot<HTMLTextAreaElement>('fb')
+    const templateInputSlot = domSlot<HTMLInputElement>('templateInput')
 
     // ---- 由 controller 持有的 DOM (onMounted 时 createElement + appendChild, Vue 完全不碰) ----
     let canvasEl: HTMLCanvasElement | null = null
@@ -330,11 +340,15 @@ export default defineComponent({
     }
 
     onMounted(() => {
-      const renderArea = renderAreaSlot.value
-      if (!renderArea) {
-        console.error('[ooxml-excel-editor/vue2] onMounted: renderArea DOM 没拿到')
-        return
-      }
+      // ⚠ 跨 Vue 2.6 / 2.7 / Vue 3 兼容: slot.value 是 vm.$refs[name] 的 getter (见 makeDomSlotFactory).
+      // Vue 2.6 string ref 走同步赋值, onMounted 一进来就能读. 仍 nextTick 是为统一三版本时序 (Vue 3
+      // ref 在 mounted 后再 flush, $refs 异步, 这里 nextTick 兜底保证三版本都拿到).
+      nextTick(() => {
+        const renderArea = renderAreaSlot.value
+        if (!renderArea) {
+          console.error('[ooxml-excel-editor/vue2] onMounted: renderArea DOM 没拿到 — vm.$refs.renderArea 仍为空, 这是 bug')
+          return
+        }
 
       // 手动创建 controller 管理的所有 DOM. Vue 完全不知道它们 → 不会因为重渲销毁/strip.
       canvasEl = ce('canvas', 'ov-grid-canvas')
@@ -424,6 +438,7 @@ export default defineComponent({
       resizeObserver = new ResizeObserver(() => { controllerRef.value?.measure(); controllerRef.value?.render() })
       resizeObserver.observe(renderArea)
       if (typeof document !== 'undefined') document.addEventListener('click', onDocClick)
+      })
     })
 
     // ---- 各 prop 变化 → 同步到 controller ----
@@ -938,7 +953,7 @@ export default defineComponent({
         h('span', { class: 'fx' }, 'fx'),
         editable
           ? h('textarea', {
-              ref: fbSlot.bind as any,
+              ref: fbSlot.refName,
               class: 'content content-input',
               attrs: { rows: 1, spellcheck: 'false', title: fbDraft.value },
               domProps: { value: fbDraft.value },
@@ -1158,7 +1173,7 @@ export default defineComponent({
       // 跟 Vue 3 SFC 的 #overlay 同语义. user-slot 会被 Vue 渲染在 render-area 第一个 child,
       // controller append 的 canvas/overlays 在后面 (z-index 控制层级).
       // 必须给 key, 否则 Vue 2 patch 没 key 时按 tag 匹配, 会把这个 div 复用成其他 chrome div.
-      h('div', { key: 'render-area', ref: renderAreaSlot.bind as any, class: 'ov-render-area' }, [
+      h('div', { key: 'render-area', ref: renderAreaSlot.refName, class: 'ov-render-area' }, [
         slots.overlay
           ? h('div', { key: 'user-overlay', class: 'ov-user-slot' }, slots.overlay({
               rectOf: (r: number, c: number) => controllerRef.value?.rectOf(r, c) ?? null,
@@ -1177,7 +1192,7 @@ export default defineComponent({
       renderExportProgress(),
       h('input', {
         key: 'tpl-input',
-        ref: templateInputSlot.bind as any,
+        ref: templateInputSlot.refName,
         attrs: { type: 'file', accept: '.xlsx,.xlsm', hidden: true },
         on: { change: onTemplateFilePicked },
       }),

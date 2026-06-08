@@ -6,6 +6,38 @@
 
 **修 webpack 4 / vue-cli 4 / CJS 环境兼容** — 用户反馈 Vue 2.6.12 + @vue/cli 4 (webpack 4) 项目消费 1.3.1 时报多个错. 此版本系统修复 4 个老打包器兼容问题, **任何环境(Vite / webpack 5 / webpack 4 / Snowpack / Parcel)都能消费**.
 
+### 修复 (1.3.2 二次迭代, 同版本号未发布前补丁)
+
+#### Vue 2.6 上 renderArea / fb / templateInput 三个 DOM 全拿不到 → canvas 不挂
+
+**根因**: `src/vue2/ExcelViewer.ts` 之前用**函数 ref (callback ref)** 拿 DOM:
+```ts
+function domSlot<T>() {
+  const slot = { value: null, bind: (el) => { slot.value = el } }
+  return slot
+}
+h('div', { ref: renderAreaSlot.bind, class: 'ov-render-area' }, [...])
+```
+
+**但函数 ref 是 Vue 3 引入、Vue 2.7 才 backport 的特性**. **Vue 2.6 的 vnode ref 只认字符串 ref** — 传函数根本不会被 Vue 调用, `slot.value` 永远是 null, onMounted 里 `renderAreaSlot.value`、`fbSlot.value`、`templateInputSlot.value` 全是 null, 画布初始化整段挂不上.
+
+(为什么内部 demo (`vue2-demo`) 一直 OK? 因为 demo 的 `vue2` 别名解析到 `vue@2.7.16` —— 2.7 起函数 ref 已 backport, 跑起来正常. 直到消费方在真 Vue 2.6.12 项目里装包才暴露.)
+
+**修复**: 把 `domSlot` 从函数 ref 改成**字符串 ref + `vm.$refs` getter**, 三个版本 (Vue 2.6 / 2.7 / Vue 3) 统一支持字符串 ref:
+```ts
+function makeDomSlotFactory(vm) {
+  return function domSlot<T>(refName: string) {
+    return { refName, get value() { return vm.$refs[refName] ?? null } }
+  }
+}
+// render: `ref: slot.refName` (string)
+// access: `slot.value` getter → 实时读 vm.$refs[name]
+```
+
+并保留 onMounted 体内的 `nextTick` 兜底, 让 Vue 3 (refs 在 mounted 后 flush) 也能拿到. 修复影响 3 处 DOM 槽: `renderAreaSlot` (画布根 div) / `fbSlot` (公式栏 textarea) / `templateInputSlot` (隐藏的模板 file input).
+
+**验证**: 本地把 `vue2` devDep 临时改成 `npm:vue@2.6.12` + `Vue.use(VueCompositionAPI)`, 跑 `npm run dev:vue2`, headless 检查: renderArea (1280×509) / canvas (1280×509) / 8 个 controller 子节点全到位, 控制台 0 错误.
+
 ### 修复
 
 #### 1. dist 不再含 `import.meta.url` + module worker (webpack 4 SyntaxError 致命)
