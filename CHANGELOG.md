@@ -2,6 +2,35 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.3.1] - 2026-06-08
+
+**Vue 2 子入口扩展兼容到 Vue 2.6.x** — 通过 `@vue/composition-api` package 让一份代码同时支持 Vue 2.6 + 2.7+. 1.3.0 只支持 2.7+ (内置 Composition API), 此版本不破坏 2.7 用户用法.
+
+### 新增
+
+- **Vue 2.6.x 支持**: peerDeps `vue` 从 `^2.7.0 || ^3.4.0` 扩到 `^2.6.0 || ^2.7.0 || ^3.4.0`
+- **`@vue/composition-api` 加入 peerDependencies** (optional peer): Vue 2.6 用户必装 + `Vue.use(VueCompositionAPI)`;Vue 2.7+ 用户也装 (它自检测内置 API,plugin 是 noop,无需 Vue.use)
+
+### 实现
+
+- Vue 2 壳代码 (`src/vue2/ExcelViewer.ts` + `use-excel-document.ts`) 的 Composition API import 从 `'vue2'` 改成 `'@vue/composition-api'` (一份代码同时支持 2.6 plugin / 2.7 内置)
+- `vite.config.ts` dev alias `@vue/composition-api` → `vue@2.7 dist`(dev 时拿 2.7 内置), build external (消费者自己解析)
+- docs/Vue2.md 加 Vue 2.6 vs 2.7 安装步骤对比 + 解释为什么要装 `@vue/composition-api`
+
+### 升级提示 (从 1.3.0 升 1.3.1)
+
+**Vue 2 用户**: 必须额外装 `@vue/composition-api`. 1.3.0 装的用户升级时 `npm install` 会提示缺失 peer, 跟着装即可:
+
+```bash
+npm i @vue/composition-api
+# Vue 2.6.x 还需 main.js: Vue.use(require('@vue/composition-api').default)
+# Vue 2.7+ 不需要 Vue.use (plugin 自动 noop)
+```
+
+Vue 3 / React 用户**无变化**.
+
+---
+
 ## [1.3.0] - 2026-06-08
 
 **Vue 2 兼容子入口 + 三壳 UI 1:1 复刻 + 独立 dev scripts** — Vue 2.6 / 2.7+ / Vue 3 / React 三个壳视觉与交互完全一致 (Vue 3 SFC 是参考实现 Standard, Vue 2 / React 1:1 复刻).
