@@ -401,6 +401,132 @@
   background: #f5f6f7;
 }
 
+/* ============ 用户 overlay scoped slot (插件 overlay 同位置) ============ */
+.ooxml-excel-viewer .ov-user-slot {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+.ooxml-excel-viewer .ov-user-slot > * {
+  pointer-events: auto;
+}
+
+/* ============ 导出/打印高级配置对话框 ============ */
+.ooxml-excel-viewer .ov-dlg-mask {
+  position: absolute;
+  inset: 0;
+  z-index: 30;
+  background: rgba(0, 0, 0, 0.32);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.ooxml-excel-viewer .ov-dlg {
+  width: 420px;
+  max-width: 92%;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
+  font-size: 13px;
+  color: #333;
+  overflow: hidden;
+}
+.ooxml-excel-viewer .ov-dlg-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  font-weight: 600;
+  border-bottom: 1px solid #eef0f2;
+}
+.ooxml-excel-viewer .ov-dlg-head .x {
+  border: none;
+  background: none;
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  color: #999;
+}
+.ooxml-excel-viewer .ov-dlg-head .x:hover { color: #444; }
+.ooxml-excel-viewer .ov-dlg-body { padding: 8px 16px 4px; }
+.ooxml-excel-viewer .ov-dlg-body .field {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 9px 0;
+  border-bottom: 1px solid #f4f5f6;
+}
+.ooxml-excel-viewer .ov-dlg-body .field:last-child { border-bottom: none; }
+.ooxml-excel-viewer .ov-dlg-body .lbl {
+  width: 72px;
+  flex: 0 0 auto;
+  color: #666;
+  padding-top: 3px;
+}
+.ooxml-excel-viewer .ov-dlg-body .opts {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ooxml-excel-viewer .ov-dlg-body .opts.inline {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+.ooxml-excel-viewer .ov-dlg-body .opts label {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+}
+.ooxml-excel-viewer .ov-dlg-body .opts label.disabled {
+  color: #bbb;
+  cursor: not-allowed;
+}
+.ooxml-excel-viewer .ov-dlg-body .hint {
+  color: #99a;
+  font-size: 12px;
+}
+.ooxml-excel-viewer .ov-dlg-body select {
+  height: 26px;
+  border: 1px solid #d0d3d6;
+  border-radius: 4px;
+  background: #fff;
+  padding: 0 6px;
+}
+.ooxml-excel-viewer .ov-dlg-foot {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px;
+  border-top: 1px solid #eef0f2;
+  background: #fafbfc;
+}
+.ooxml-excel-viewer .ov-dlg-foot .grow { flex: 1; }
+.ooxml-excel-viewer .ov-dlg-foot button {
+  height: 30px;
+  padding: 0 14px;
+  border: 1px solid #d0d3d6;
+  border-radius: 5px;
+  background: #fff;
+  cursor: pointer;
+  font-size: 13px;
+  color: #333;
+}
+.ooxml-excel-viewer .ov-dlg-foot button:hover { background: #f0f2f4; }
+.ooxml-excel-viewer .ov-dlg-foot button.ghost {
+  border-color: transparent;
+  color: #888;
+}
+.ooxml-excel-viewer .ov-dlg-foot button.primary {
+  background: #21a366;
+  border-color: #21a366;
+  color: #fff;
+}
+.ooxml-excel-viewer .ov-dlg-foot button.primary:hover { background: #1c8f59; }
+
 /* ============ Sheet 标签 (多表切换) ============ */
 .ooxml-excel-viewer .ov-sheet-tabs {
   display: flex;

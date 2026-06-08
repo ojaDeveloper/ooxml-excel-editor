@@ -19,6 +19,7 @@ import {
   defineComponent,
   h,
   ref,
+  reactive,
   computed,
   watch,
   onMounted,
@@ -28,6 +29,7 @@ import {
   type PropType,
   type VNode,
 } from 'vue2'
+import type { ExportConfig } from '@/components/export-types'
 import type {
   ContextMenuTransform,
   ExcelPlugin,
@@ -108,7 +110,7 @@ export default defineComponent({
     contextMenu: { type: [Boolean, Function] as PropType<boolean | ContextMenuTransform>, default: undefined },
     exportProgress: { type: Boolean, default: true },
   },
-  setup(props, { emit, expose }) {
+  setup(props, { emit, expose, slots }) {
     // ---- 由 Vue 管理的 DOM (chrome + 一个空的 render-area 外壳) ----
     const renderAreaSlot = domSlot<HTMLDivElement>()
     const fbSlot = domSlot<HTMLTextAreaElement>()
@@ -137,6 +139,18 @@ export default defineComponent({
     const exportState = ref<ExportProgress | null>(null)
     const exportBusy = ref(false)
     let exportCtrl: AbortController | null = null
+    const exportDialogOpen = ref(false)
+    const exportForm = reactive<ExportConfig>({
+      action: 'png',
+      scope: 'sheet',
+      scale: 2,
+      includeHeaders: false,
+      gridlines: true,
+      format: 'auto',
+      orientation: 'auto',
+      fitToWidth: true,
+      pdfVector: false,
+    })
 
     // ---- 模板 + JSON 数据源 ----
     const runtimeTemplateSrc = ref<ExcelSource | null>(null)
@@ -541,6 +555,29 @@ export default defineComponent({
     const downloadPdf = (opts?: PdfExportOptions) => chain(opts, (o) => controllerRef.value!.downloadPdf(o))
     const print = (opts?: PrintOptions) => chain(opts, (o) => controllerRef.value!.print(o))
     async function onExportPdf() { try { await downloadPdf() } catch (e) { reportError(e) } }
+    /** 把 ExportDialog 配置映射成各导出方法的入参并执行 (跟 Vue 3 SFC 同语义) */
+    async function onDialogExport(cfg: ExportConfig) {
+      exportDialogOpen.value = false
+      const target = cfg.scope === 'all' ? 'all' : 'active'
+      const range = cfg.scope === 'selection' ? selection.value ?? undefined : undefined
+      const common = {
+        target: target as 'all' | 'active',
+        range,
+        scale: cfg.scale,
+        includeHeaders: cfg.includeHeaders,
+        gridlines: cfg.gridlines,
+      }
+      const page = {
+        ...(cfg.format !== 'auto' ? { format: cfg.format } : {}),
+        ...(cfg.orientation !== 'auto' ? { orientation: cfg.orientation } : {}),
+        fitToWidth: cfg.fitToWidth,
+      }
+      try {
+        if (cfg.action === 'png') await downloadImage(common)
+        else if (cfg.action === 'pdf') await downloadPdf({ ...common, ...page, vector: cfg.pdfVector })
+        else await print({ ...common, ...page })
+      } catch (e) { reportError(e) }
+    }
     function reportError(e: unknown) {
       const msg = (e as Error)?.message || String(e)
       console.error('[ooxml-excel-editor/vue2] 导出失败:', e)
@@ -688,6 +725,7 @@ export default defineComponent({
         h('button', { class: 'btn', on: { click: () => void downloadImage() } }, '↓PNG'),
         h('button', { class: 'btn', on: { click: onExportPdf } }, '↓PDF'),
         h('button', { class: 'btn', on: { click: () => void viewerApi.downloadXlsx() } }, '↓XLSX'),
+        h('button', { class: 'btn', attrs: { title: '导出/打印高级配置' }, on: { click: () => { exportDialogOpen.value = true; exportForm.scope = selRangeLabel.value ? 'selection' : 'sheet' } } }, '导出设置…'),
       ])
     }
 
@@ -822,6 +860,92 @@ export default defineComponent({
       ])
     }
 
+    /** 导出/打印高级配置对话框 (跟 Vue 3 SFC ExportDialog.vue 同结构) */
+    function renderExportDialog(): VNode | null {
+      if (!exportDialogOpen.value || !workbook.value) return null
+      const sheetCount = visibleSheets().length
+      const sel = selection.value
+      const hasSel = !!sel && !(sel.top === sel.bottom && sel.left === sel.right)
+      const selLabel = sel ? `${colIndexToLetters(sel.left)}${sel.top + 1}:${colIndexToLetters(sel.right)}${sel.bottom + 1}` : ''
+      const close = () => { exportDialogOpen.value = false }
+      const run = (action: ExportConfig['action']) => { onDialogExport({ ...exportForm, action }) }
+      const radio = (name: string, model: keyof ExportConfig, value: any, label: string, hint?: string, disabled?: boolean) => h('label', {
+        class: { disabled: !!disabled },
+      }, [
+        h('input', {
+          attrs: { type: 'radio', name, value: String(value), disabled: disabled ? 'disabled' : undefined },
+          domProps: { checked: (exportForm as any)[model] === value },
+          on: { change: () => { (exportForm as any)[model] = value } },
+        }),
+        ' ' + label,
+        hint ? h('span', { class: 'hint' }, ' ' + hint) : null,
+      ])
+      const check = (model: keyof ExportConfig, label: string) => h('label', [
+        h('input', {
+          attrs: { type: 'checkbox' },
+          domProps: { checked: (exportForm as any)[model] },
+          on: { change: (e: Event) => { (exportForm as any)[model] = (e.target as HTMLInputElement).checked } },
+        }),
+        ' ' + label,
+      ])
+      const select = (model: keyof ExportConfig, opts: Array<[any, string]>, numeric = false) => h('select', {
+        domProps: { value: String((exportForm as any)[model]) },
+        on: { change: (e: Event) => { const v = (e.target as HTMLSelectElement).value; (exportForm as any)[model] = numeric ? Number(v) : v } },
+      }, opts.map(([v, lbl]) => h('option', { domProps: { value: String(v) } }, lbl)))
+      return h('div', {
+        key: 'export-dlg',
+        class: 'ov-dlg-mask',
+        on: { click: (e: MouseEvent) => { if (e.target === e.currentTarget) close() } },
+      }, [
+        h('div', { class: 'ov-dlg', attrs: { role: 'dialog', 'aria-label': '导出设置' } }, [
+          h('div', { class: 'ov-dlg-head' }, [
+            h('span', '导出 / 打印设置'),
+            h('button', { class: 'x', attrs: { title: '关闭' }, on: { click: close } }, '×'),
+          ]),
+          h('div', { class: 'ov-dlg-body' }, [
+            h('div', { class: 'field' }, [
+              h('label', { class: 'lbl' }, '范围'),
+              h('div', { class: 'opts' }, [
+                radio('scope', 'scope', 'selection', '当前选区', hasSel ? selLabel : '(未选多格)', !hasSel),
+                radio('scope', 'scope', 'sheet', '当前工作表'),
+                radio('scope', 'scope', 'all', `全部工作表 (${sheetCount})`),
+              ]),
+            ]),
+            h('div', { class: 'field' }, [
+              h('label', { class: 'lbl' }, '清晰度'),
+              select('scale', [[1, '标准 (1×)'], [2, '高清 (2×)'], [3, '超清 (3×)']], true),
+            ]),
+            h('div', { class: 'field' }, [
+              h('label', { class: 'lbl' }, '内容'),
+              h('div', { class: 'opts inline' }, [check('includeHeaders', '含行列号'), check('gridlines', '网格线')]),
+            ]),
+            h('div', { class: 'field' }, [
+              h('label', { class: 'lbl' }, 'PDF 类型'),
+              h('div', { class: 'opts' }, [
+                radio('pdfVector', 'pdfVector', false, '位图', '(完整还原观感)'),
+                radio('pdfVector', 'pdfVector', true, '矢量', '(文字可选可搜·清晰·文件小;中文需注册字体)'),
+              ]),
+            ]),
+            h('div', { class: 'field' }, [
+              h('label', { class: 'lbl' }, [h('span', '纸张'), h('span', { class: 'hint' }, ' (PDF/打印)')]),
+              h('div', { class: 'opts inline' }, [
+                select('format', [['auto', '自动(跟随表)'], ['a4', 'A4'], ['a3', 'A3'], ['letter', 'Letter']]),
+                select('orientation', [['auto', '方向: 自动'], ['portrait', '纵向'], ['landscape', '横向']]),
+                check('fitToWidth', '适应页宽'),
+              ]),
+            ]),
+          ]),
+          h('div', { class: 'ov-dlg-foot' }, [
+            h('button', { class: 'ghost', on: { click: close } }, '取消'),
+            h('div', { class: 'grow' }),
+            h('button', { on: { click: () => run('png') } }, '导出 PNG'),
+            h('button', { on: { click: () => run('pdf') } }, '导出 PDF'),
+            h('button', { class: 'primary', on: { click: () => run('print') } }, '打印…'),
+          ]),
+        ]),
+      ])
+    }
+
     /** loading / error / empty 三态浮层 (相对 .ooxml-excel-viewer 主体定位) */
     function renderState(): VNode | null {
       if (loading.value) {
@@ -850,17 +974,28 @@ export default defineComponent({
       renderHeader(),
       renderActionToolbar(),
       renderFormulaBar(),
-      // 空 render-area 外壳 — controller 在 onMounted 时手动 createElement + appendChild 进来,
-      // Vue patch 不会动 controller 加的 children (它管的是 VNode children=[], 不扫描 DOM).
-      // 必须给 key, 否则 Vue 2 patch 没 key 时按 tag 匹配, 会把这个 div 复用成其他 chrome div,
-      // 修改它的 className 和内容 — 我们辛苦 append 的 canvas/overlays 全没了, controller.els.renderArea 变 stale.
-      h('div', { key: 'render-area', ref: renderAreaSlot.bind as any, class: 'ov-render-area' }),
+      // render-area 外壳 — controller 在 onMounted 时手动 createElement + appendChild 进来,
+      // Vue patch 不会动 controller 加的 children. 这里 children 是 Vue 管理的 [user-overlay-slot]:
+      // user 通过 v-slot:overlay="{ rectOf, rectOfRange, tick }" 注入自定义 overlay 元素,
+      // 跟 Vue 3 SFC 的 #overlay 同语义. user-slot 会被 Vue 渲染在 render-area 第一个 child,
+      // controller append 的 canvas/overlays 在后面 (z-index 控制层级).
+      // 必须给 key, 否则 Vue 2 patch 没 key 时按 tag 匹配, 会把这个 div 复用成其他 chrome div.
+      h('div', { key: 'render-area', ref: renderAreaSlot.bind as any, class: 'ov-render-area' }, [
+        slots.overlay
+          ? h('div', { key: 'user-overlay', class: 'ov-user-slot' }, slots.overlay({
+              rectOf: (r: number, c: number) => controllerRef.value?.rectOf(r, c) ?? null,
+              rectOfRange: (rg: MergeRange) => controllerRef.value?.rectOfRange(rg) ?? null,
+              tick: renderTick.value,
+            }))
+          : null,
+      ]),
       renderStatusBar(),
       renderSheetTabs(),
       // findbar / state / tooltip / 导出进度 浮层 — 用 absolute 浮在 viewer 主体上方
       renderFindBar(),
       renderState(),
       renderTooltip(),
+      renderExportDialog(),
       renderExportProgress(),
       h('input', {
         key: 'tpl-input',
