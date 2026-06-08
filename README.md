@@ -14,7 +14,7 @@ npm i ooxml-excel-editor react react-dom              # React 壳 (/react 子入
 npm i ooxml-excel-editor vue@2.7 @vue/composition-api # Vue 2.6/2.7+ (/vue2 子入口, 1.3.0+)
 ```
 
-> 1.3.2+ `echarts` / `exceljs` / `jspdf` / `hyperformula` 已改成包内 `dependencies`, 自动随包装, **不用手动 `npm i`**.
+> 1.3.2+ `echarts` / `exceljs` / `jspdf` / `hyperformula` 已 **inline 编进 dist chunks/**, 消费方完全不用装也不解析这些库源码 (`dist` ~6.9 MB, tgz ~1.76 MB). 仅 framework (`vue` / `react` / `@vue/composition-api`) 需消费方装.
 
 **用**(Vue,容器要给高度;`src` 可传 `File` / `Blob` / `ArrayBuffer` / `Uint8Array` / URL 字符串):
 

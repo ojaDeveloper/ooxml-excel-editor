@@ -46,35 +46,28 @@ webpack 4 解析 `ooxml-excel-editor/vue2` → 找包根 `vue2.js` → re-export
 
 文件加进 `package.json` `files` 数组, npm publish 时一并发布.
 
-#### 4. echarts / exceljs / jspdf / hyperformula 改成 `dependencies` (自动随包安装)
+#### 4. echarts / exceljs / jspdf / hyperformula **inline 进 dist chunks/** (彻底)
 
-之前 1.3.1 把它们标 `peerOptional`, npm 7+ 触发 ERESOLVE:
-```
-npm error ERESOLVE could not resolve
-peerOptional echarts@"^5.5.0" from ooxml-excel-editor@1.3.1
-Conflicting peer dependency: echarts@<宿主版本>
-```
+试过 3 个方案都不彻底:
+- 1.3.1 `peerOptional`: npm 7+ 触发 ERESOLVE 冲突
+- 1.3.2 第一版 文档说明 + 用户按需装: webpack 4 静态扫描 `await import()` 找不到模块发 warning
+- 1.3.2 第二版 改 `dependencies` 自动装: webpack 4 解析这些 lib **源码** 时仍报 named-export / class-fields 错误 (因为 lib 用 ES2020+ 语法)
 
-也试过文档说明"按需装", 但 **webpack 4** 静态扫描 `await import('xxx')` 找不到模块就发 warning:
-```
-* hyperformula in ./node_modules/ooxml-excel-editor/dist/vue2.js
-To install them, you can run: npm install --save hyperformula jspdf
-```
-用户被迫装或加 IgnorePlugin, 体验差.
+**终极修复**: rollupOptions.external **不再排除** 这 4 个 lib, 让 vite/rollup 把它们的代码**编进我们 chunks/**, 同时 `target: 'es2017'` 把 class-fields / `??` / `?.` 全降级. 消费方:
+- **完全不用装这些 lib** (从 `dependencies` 移除)
+- 消费方 webpack **永远不解析这些库的源码** — 看到的是 `./chunks/exceljs-xxx.js` 相对路径, 内容已经是我们 ES2017 嚼碎后的产物
+- 不再有任何 named-export / class-fields / `import.meta` / module worker / `??` 等老打包器报错
 
-**最终修复**: 这 4 个 lib 改成 `dependencies` — `npm i ooxml-excel-editor` 时 npm **自动**装它们到消费方 node_modules. webpack 4 找得到, 不再 warn. 仍是 dynamic `await import()` + code-split, **dist 产物体积无变化** (~430 KB), **用户 build 后 bundle (不用对应功能时)体积也无变化** (chunk 不调用就不下载).
+只有 vue / react / @vue/composition-api 保持 external (框架必须跟宿主同实例).
 
 变化:
-- **dependencies** 新增: `echarts` / `exceljs` / `jspdf` / `hyperformula`
-- **peerDependencies** 移除: `exceljs` (跟着移走了)
-- 剩余 peer: `vue` / `react` / `react-dom` / `@vue/composition-api` (框架级, 必须跟宿主同实例)
+- **dependencies** 全部移除: `echarts` / `exceljs` / `jspdf` / `hyperformula`
+- **peerDependencies** 剩余: `vue` / `react` / `react-dom` / `@vue/composition-api`
+- **dist 体积**: 6.9 MB (从之前 ~500 KB), 含 4 个 lib 全 inline
+- **tgz 压缩后**: 1.76 MB
+- vite/rollup target: `es2017` (跟之前 `es2018` 区别: hyperformula 的 class fields 必降, ES2017 才彻底)
 
-体积影响:
-- 消费方 `node_modules` 大小: +~120 MB (4 个 lib 一起)
-- dist 产物大小: 无变化
-- 消费方 build 后 bundle (用图表/PDF/编辑公式): 跟之前一样
-- 消费方 build 后 bundle (只用预览): 跟之前一样 (chunk 不下载)
-- webpack 4 warning: **完全消失** ✓
+消费方 build 后 bundle (不用图表/PDF/编辑公式) **影响很小** — dynamic import 保留 code-split, 不调到 chunk 就不下载.
 
 ### 总效果
 

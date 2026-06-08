@@ -94,30 +94,37 @@ export default defineConfig(({ mode, command }) => {
           emptyOutDir: false,
           copyPublicDir: false,
           outDir: fileURLToPath(new URL('./dist', import.meta.url)),
-          // ES2018 target: 降 `??` / `?.` (ES2020) 等现代语法, 让 webpack 4 / 老 vue-cli 4 可消费.
-          // 保留 async/await + spread/rest (ES2017+, webpack 4 都支持).
-          target: 'es2018',
+          // ES2017 target: 把 class fields / `??` / `?.` (ES2020+) 全部降级, 让 webpack 4 /
+          // 老 vue-cli 4 既不报 SyntaxError 也不必装 babel transpileDependencies.
+          // 跟 ES2018 区别: 把 spread (ES2018) 等也转, hyperformula 的 class fields 必降.
+          target: 'es2017',
           lib: {
             entry: { vue2: fileURLToPath(new URL('./src/vue2/index.ts', import.meta.url)) } as Record<string, string>,
             formats: ['es'],
           },
           rollupOptions: {
-            external: ['vue', 'vue2', '@vue/composition-api', 'react', 'react-dom', 'react/jsx-runtime', 'exceljs', 'echarts', 'jspdf', 'hyperformula'],
+            // ★ 关键: exceljs / echarts / jspdf / hyperformula 都不 external →
+            // rollup 把它们的源码 inline 编译进我们的 chunks/ 一起 ES2017 降级.
+            // 消费方既不用装这些 lib (dependencies 也清掉), 它们的 webpack 也不会
+            // 解析这些库的源码 (已经是我们嚼碎后的产物). 完全消除 named-export / class
+            // fields / import.meta 等老打包器报错.
+            // 仅 framework (vue / react / @vue/composition-api) 保持 external — 它们
+            // 必须跟宿主同实例, 不能 dual.
+            external: ['vue', 'vue2', '@vue/composition-api', 'react', 'react-dom', 'react/jsx-runtime'],
             output: {
               entryFileNames: '[name].js',
               chunkFileNames: 'chunks/[name]-[hash].js',
               assetFileNames: (info) =>
                 info.name && info.name.endsWith('.css') ? 'vue2.css' : 'assets/[name][extname]',
-              // 'vue2' 别名 → 消费者的 'vue';@vue/composition-api 保持不变, 消费者自己解析
               paths: { vue2: 'vue' },
             },
           },
-          chunkSizeWarningLimit: 1500,
+          chunkSizeWarningLimit: 5000,
         }
       : {
           copyPublicDir: false,
-          // ES2018 target: 降 `??` / `?.` (ES2020) 等现代语法, 让 webpack 4 / 老 vue-cli 4 可消费
-          target: 'es2018',
+          // ES2017 target: 把 class fields / `??` / `?.` 全部降级 (一致跟 lib-vue2)
+          target: 'es2017',
           lib: {
             entry: {
               core: fileURLToPath(new URL('./src/core/index.ts', import.meta.url)),
@@ -127,7 +134,9 @@ export default defineConfig(({ mode, command }) => {
             formats: ['es'],
           },
           rollupOptions: {
-            external: ['vue', 'react', 'react-dom', 'react/jsx-runtime', 'exceljs', 'echarts', 'jspdf', 'hyperformula'],
+            // ★ exceljs / echarts / jspdf / hyperformula inline 进 chunks/, 跨三壳共享.
+            // 仅 framework (vue / react) external — 必跟宿主同实例, 不能 dual.
+            external: ['vue', 'react', 'react-dom', 'react/jsx-runtime'],
             output: {
               entryFileNames: '[name].js',
               chunkFileNames: 'chunks/[name]-[hash].js',
@@ -135,7 +144,7 @@ export default defineConfig(({ mode, command }) => {
                 info.name && info.name.endsWith('.css') ? 'style.css' : 'assets/[name][extname]',
             },
           },
-          chunkSizeWarningLimit: 1500,
+          chunkSizeWarningLimit: 5000,
         },
   }
 })

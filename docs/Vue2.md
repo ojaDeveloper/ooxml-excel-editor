@@ -250,11 +250,16 @@ dist 已 `target: 'es2018'`. 没有 `??` (空值合并 ES2020) / `?.` (可选链
 
 1.3.2 起 dist 全部走 `worker-client.stub.ts` (主线程跑解析), **不**用 `new Worker(new URL(..., import.meta.url))`. webpack 4 解析 dist 不会 SyntaxError, 运行也不缺 worker chunk.
 
-### 4. echarts / jspdf / hyperformula / exceljs 自动随包安装 (1.3.3+)
+### 4. echarts / jspdf / hyperformula / exceljs 直接 inline 进 dist (1.3.2+)
 
-1.3.3 起这 4 个 lib 从 `peer` / 文档说明 改成 **`dependencies`**, `npm i ooxml-excel-editor` 时自动装. **不用手动装, 不用配 webpack.config IgnorePlugin, webpack 4 不再 warn**.
+1.3.2 起这 4 个 lib 全部**编进我们的 dist chunks/** (vite/rollup 非 external + ES2017 降级 + 代码 inline). 消费方:
+- **完全不用装这些 lib** (从 `dependencies` 移除, npm i 不会装)
+- 消费方的 **webpack 永远不会去解析这些库的源码** — 它们已经是我们 ES2017 嚼碎后的产物 (`dist/chunks/*.js`), webpack 见到的是相对路径 `./chunks/xxx.js`, 不再去 `node_modules` 找 `echarts` / `jspdf` 等
+- 不再有 named-export / class-fields / `import.meta` / module worker / `??` 等老打包器报错
 
-代价: node_modules 多 ~120 MB. 但 **dist/vue2.js 体积无变化** (~430 KB) — 这 4 个 lib 仍是 dynamic `await import()` + code-split, 不用功能时 chunk 不下载, **用户 build 后 bundle 体积无变化**.
+代价: `dist/` 整体 ~6.9 MB (从 1.3.1 的 ~500 KB 大幅增加). 但 **dynamic import 仍保留 code-split**, 消费方 build 后只有调用到对应功能的 chunk 才会被加载, **runtime bundle 体积影响很小** (不用图表/PDF/编辑公式时这些 chunk 不下载到浏览器).
+
+npm tgz 压缩后 ~1.76 MB.
 
 ### 完整 Vue 2.6.12 + vue-cli 4 用法
 
