@@ -718,7 +718,16 @@ export default defineComponent({
       openTemplateFilePicker,
       clearRuntimeTemplate,
     }
+    // 命令式 API 暴露到 $refs.viewer.* — 跨 Vue 2.6 / 2.7 / Vue 3 三版本兼容:
+    //   - Vue 3 / Vue 2.7 原生: ctx.expose(viewerApi) 标准路径
+    //   - Vue 2.6 + @vue/composition-api shim: ctx.expose 存在但语义是"暴露 setup 返回的 key".
+    //     本组件 setup 返回的是 render function (没有可暴露的 key), 所以 shim 下 expose() 是 no-op,
+    //     $refs.viewer.xxx 拿不到方法. 必须 Object.assign 到 Vue 2 instance proxy 上.
+    // 检测 Vue 2: vm._isVue === true (Vue 2 internal flag, Vue 3 proxy 上没有这个 key).
     expose?.(viewerApi)
+    if (vm && (vm as any)._isVue) {
+      Object.assign(vm, viewerApi)
+    }
 
     // ---- 渲染 helper ----
     function visibleSheets() { const wb = workbook.value; return wb ? wb.sheets.map((s, i) => ({ s, i })).filter(({ s }) => s.state === 'visible') : [] }

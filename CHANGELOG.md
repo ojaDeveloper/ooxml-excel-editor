@@ -6,7 +6,27 @@
 
 **修 webpack 4 / vue-cli 4 / CJS 环境兼容** — 用户反馈 Vue 2.6.12 + @vue/cli 4 (webpack 4) 项目消费 1.3.1 时报多个错. 此版本系统修复 4 个老打包器兼容问题, **任何环境(Vite / webpack 5 / webpack 4 / Snowpack / Parcel)都能消费**.
 
-### 修复 (1.3.2 二次迭代, 同版本号未发布前补丁)
+### 修复 (1.3.2 二次/三次迭代, 同版本号未发布前补丁)
+
+#### Vue 2.6 上 `$refs.viewer.*` 命令式 API 全拿不到 (三次迭代)
+
+**根因**: 之前用 `expose?.(viewerApi)` 暴露 60+ 命令式方法 (load / getSelection / setStyle / downloadXlsx / beginEdit / commitActiveCellValue / undo / ...). Vue 3 / Vue 2.7 原生 expose 走标准路径 OK, **但 Vue 2.6 + @vue/composition-api 1.7.x shim 下 `ctx.expose` 的语义是"暴露 setup 返回值的指定 key"** —— 本组件 setup 返回的是 render function (没有可暴露的 key), shim 下 expose() 是 no-op. 消费方 `this.$refs.viewer.downloadXlsx(...)` 全部 `undefined is not a function`.
+
+**修复** ([src/vue2/ExcelViewer.ts](src/vue2/ExcelViewer.ts)): 在 Vue 2 下用 `Object.assign(vm, viewerApi)` 直接挂到 Vue 2 instance proxy (Vue 2 instance 是普通对象, 可 assign). Vue 3 仍走 `expose()`. 通过 `vm._isVue` 检测 Vue 2 (Vue 3 instance proxy 没这个 flag):
+
+```ts
+expose?.(viewerApi)
+if (vm && (vm as any)._isVue) {
+  Object.assign(vm, viewerApi)
+}
+```
+
+**验证 (Vue 2.6.12 + composition-api 1.7.2 真实环境)**:
+- `$refs.viewer.{getWorkbook, getActiveSheet, getSelection, setSelection, getCellText, getSheetJSON, beginEdit, commitActiveCellValue, isCellEditable, downloadXlsx, downloadJson, undo, canUndo}` 13 个核心方法 `typeof === 'function'` ✓
+- `getWorkbook()` 真返工作簿 (3 sheets, 销售报表) ✓
+- 编辑流: `beginEdit(0,0) → isEditing=true → commitActiveCellValue('VUE26_OK', 'down')` → 单元格值变 "VUE26_OK" ✓
+- `undo()` → 恢复 "2026 年度销售汇总" ✓
+- 0 控制台错误 ✓
 
 #### Vue 2.6 上 renderArea / fb / templateInput 三个 DOM 全拿不到 → canvas 不挂
 
