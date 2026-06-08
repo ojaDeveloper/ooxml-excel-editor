@@ -22,7 +22,10 @@ import { fileURLToPath, URL } from 'node:url'
 export default defineConfig(({ mode, command }) => {
   const isDemoSite = mode === 'demo'
   const isVue2Build = mode === 'lib-vue2'
-  const isLibBuild = command === 'build' && !isDemoSite && !isVue2Build
+  // 库构建(含 Vue 2 入口) 都把 worker-client 别名成 stub(纯主线程)
+  // → 不预打包 worker → 产物不含 `new Worker(new URL(..., import.meta.url))` (老 webpack/老 vue-cli 不识别),
+  //   也不嵌入 1.4MB exceljs 进 worker chunk. 消费方可自己用 parseWorkbook + 自己包 Worker.
+  const isLibBuild = command === 'build' && !isDemoSite
   const isDev = command === 'serve'
   const devTarget: 'vue3' | 'react' | 'vue2' | null = isDev
     ? mode === 'react' ? 'react' : mode === 'vue2' ? 'vue2' : 'vue3'
@@ -91,6 +94,9 @@ export default defineConfig(({ mode, command }) => {
           emptyOutDir: false,
           copyPublicDir: false,
           outDir: fileURLToPath(new URL('./dist', import.meta.url)),
+          // ES2018 target: 降 `??` / `?.` (ES2020) 等现代语法, 让 webpack 4 / 老 vue-cli 4 可消费.
+          // 保留 async/await + spread/rest (ES2017+, webpack 4 都支持).
+          target: 'es2018',
           lib: {
             entry: { vue2: fileURLToPath(new URL('./src/vue2/index.ts', import.meta.url)) } as Record<string, string>,
             formats: ['es'],
@@ -110,6 +116,8 @@ export default defineConfig(({ mode, command }) => {
         }
       : {
           copyPublicDir: false,
+          // ES2018 target: 降 `??` / `?.` (ES2020) 等现代语法, 让 webpack 4 / 老 vue-cli 4 可消费
+          target: 'es2018',
           lib: {
             entry: {
               core: fileURLToPath(new URL('./src/core/index.ts', import.meta.url)),

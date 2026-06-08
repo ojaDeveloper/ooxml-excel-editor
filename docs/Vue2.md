@@ -224,6 +224,81 @@ Vue 2 壳自带跟 Vue 3 同款的 UI:
 
 ---
 
+## ★ webpack 4 / vue-cli 4 兼容 (1.3.2+)
+
+老打包器(webpack 4 / vue-cli 4)有几个独特限制, 1.3.2 已经处理:
+
+### 1. 包根 stub (解决 webpack 4 不读 `package.json#exports`)
+
+webpack 5+ / Vite / Rollup 都支持 `package.json#exports` 字段映射子路径. webpack 4 **不支持**, 解析 `'ooxml-excel-editor/vue2'` 会失败. 我们在包根放了 `vue2.js` / `react.js` / `core.js` stub re-export 到 dist, webpack 4 自动找得到:
+
+```js
+// webpack 4 (Vue CLI 4) — 推荐写法, 通用
+import ExcelViewer from 'ooxml-excel-editor/vue2'
+import 'ooxml-excel-editor/dist/style.css'  // CSS 走真实路径
+import 'ooxml-excel-editor/dist/vue2.css'   // CSS 走真实路径
+
+// 或者直接走真实路径, 任何打包器都识别
+import ExcelViewer from 'ooxml-excel-editor/dist/vue2.js'
+```
+
+### 2. 语法降级 (ES2018, 解决 `??` / `?.` 老 webpack 4 SyntaxError)
+
+dist 已 `target: 'es2018'`. 没有 `??` (空值合并 ES2020) / `?.` (可选链 ES2020). 保留 async/await + spread/rest (ES2017, webpack 4 OK). **无需 `transpileDependencies` 转译本包**.
+
+### 3. 无 module worker / `import.meta.url` (库构建走 stub 主线程解析)
+
+1.3.2 起 dist 全部走 `worker-client.stub.ts` (主线程跑解析), **不**用 `new Worker(new URL(..., import.meta.url))`. webpack 4 解析 dist 不会 SyntaxError, 运行也不缺 worker chunk.
+
+### 4. 可选能力不放 peerDeps (避免 npm 7+ ERESOLVE)
+
+`echarts` / `jspdf` / `hyperformula` **不在 peerDependencies**. 用户按需装:
+
+```bash
+npm i echarts        # 用图表
+npm i jspdf          # 导出 PDF
+npm i hyperformula   # 编辑 + 公式重算
+```
+
+未装时代码 `await import('echarts')` 失败抛友好错误, 不影响其他功能.
+
+### 完整 Vue 2.6.12 + vue-cli 4 用法
+
+```bash
+# 必装
+npm i ooxml-excel-editor vue@2.6 @vue/composition-api exceljs
+# 按需 (用啥装啥)
+npm i echarts jspdf hyperformula
+```
+
+```js
+// src/main.js
+import Vue from 'vue'
+import VueCompositionAPI from '@vue/composition-api'
+Vue.use(VueCompositionAPI)
+```
+
+```vue
+<!-- 你的页面 -->
+<template>
+  <ExcelViewer :src="src" style="height: 100vh" @rendered="onRendered" />
+</template>
+
+<script>
+import ExcelViewer from 'ooxml-excel-editor/vue2'
+import 'ooxml-excel-editor/dist/style.css'
+import 'ooxml-excel-editor/dist/vue2.css'
+
+export default {
+  components: { ExcelViewer },
+  data: () => ({ src: null }),
+  methods: { onRendered(wb) { console.log('sheets:', wb.sheets.length) } },
+}
+</script>
+```
+
+---
+
 ## 7. peer dep 矩阵
 
 ```json
@@ -232,16 +307,23 @@ Vue 2 壳自带跟 Vue 3 同款的 UI:
   "@vue/composition-api": "^1.7.0",
   "react": "^17.0.0 || ^18.0.0 || ^19.0.0",
   "react-dom": "^17.0.0 || ^18.0.0 || ^19.0.0",
-  "exceljs": "^4.4.0",
-  "echarts": "^5.5.0",
-  "hyperformula": "^3.0.0",
-  "jspdf": "^2.5.0 || ^3.0.0 || ^4.0.0"
+  "exceljs": "^4.4.0"
 }
 ```
 
 Vue 2 用户(2.6 或 2.7) 装两个: `vue@2.6` 或 `vue@2.7` + `@vue/composition-api`. **Vue 2.6 用户额外**需要在 main.js 调 `Vue.use(VueCompositionAPI)`. Vue 2.7+ 不需要 Vue.use (plugin 自检测 + noop).
 
-React / Vue 3 用户不装这些, 不影响。`exceljs` / `echarts` / `hyperformula` / `jspdf` 都是可选 peer (动态 `import()` 加载)。
+React / Vue 3 用户不装这些, 不影响。
+
+**按需依赖** (1.3.2 起从 peer 移除, 改文档说明 — 避免 npm 7+ ERESOLVE 冲突):
+
+```bash
+npm i echarts        # 用图表 (动态 import)
+npm i jspdf          # 导出 PDF (动态 import)
+npm i hyperformula   # 编辑模式 + 公式重算 (动态 import)
+```
+
+未装时代码 `await import()` 失败抛友好错误, 不影响其他功能.
 
 ---
 

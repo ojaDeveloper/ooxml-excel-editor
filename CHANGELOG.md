@@ -2,6 +2,89 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.3.2] - 2026-06-08
+
+**修 webpack 4 / vue-cli 4 / CJS 环境兼容** — 用户反馈 Vue 2.6.12 + @vue/cli 4 (webpack 4) 项目消费 1.3.1 时报多个错. 此版本系统修复 4 个老打包器兼容问题, **任何环境(Vite / webpack 5 / webpack 4 / Snowpack / Parcel)都能消费**.
+
+### 修复
+
+#### 1. dist 不再含 `import.meta.url` + module worker (webpack 4 SyntaxError 致命)
+
+之前 lib-vue2 build 没用 worker stub, `dist/vue2.js` 含:
+```js
+new Worker(new URL("/assets/parse.worker-xxx.js", import.meta.url), { type: "module" })
+```
+- `import.meta.url` 是 ESM 专属语法, webpack 4 解析失败 (Module parse failed: Unexpected token)
+- `/assets/parse.worker-xxx.js` 是 Vite 构建产物, 在别的打包器/项目里根本不存在
+
+**修复**: vite.config.ts 把 `isLibBuild` 判定从 `command === 'build' && !isDemoSite && !isVue2Build` 改成 `command === 'build' && !isDemoSite` (Vue 2 lib build 也用 worker-client.stub.ts 走主线程解析). 现在所有 lib 产物 (`dist/index.js` / `react.js` / `vue2.js`) 都不含 `new Worker` 也不含 `import.meta`.
+
+#### 2. dist 降级 `??` / `?.` 等 ES2020 语法 (webpack 4 SyntaxError 致命)
+
+之前用户报:
+```js
+r.onerror = () => o(r.error ?? new Error("文件读取失败"))  // ?? 是 ES2020, webpack 4 不识别
+```
+- 多数项目默认不转译 node_modules (webpack 4 / vue-cli 4 尤甚), 用户被迫加 transpileDependencies
+
+**修复**: vite.config.ts 给所有 lib build 加 `target: 'es2018'`. ES2018 没有 `??` (ES2020) / `?.` (ES2020), 但保留 async/await + spread/rest (ES2017+, webpack 4 都支持), 不引入大量 polyfill.
+
+#### 3. 包根加 vue2.js / react.js / core.js stub (webpack 4 不读 package.json#exports)
+
+之前用户报:
+```js
+import ExcelViewer from 'ooxml-excel-editor/vue2'  // webpack 4 解析失败
+// 被迫: import ExcelViewer from 'ooxml-excel-editor/dist/vue2.js'
+```
+
+**修复**: 包根新增 3 个 stub 文件:
+- `vue2.js` — re-export `./dist/vue2.js`
+- `react.js` — re-export `./dist/react.js`
+- `core.js` — re-export `./dist/core.js`
+
+webpack 4 解析 `ooxml-excel-editor/vue2` → 找包根 `vue2.js` → re-export 到 dist. webpack 5 / Vite / Rollup 仍走 `package.json#exports` → `./dist/vue2.js` (stub 不会被用到, 0 性能影响).
+
+文件加进 `package.json` `files` 数组, npm publish 时一并发布.
+
+#### 4. 移除 echarts / hyperformula / jspdf 从 peerDependencies (npm 7+ ERESOLVE 触发)
+
+之前用户报:
+```
+npm error ERESOLVE could not resolve
+peerOptional echarts@"^5.5.0" from ooxml-excel-editor@1.3.1
+Conflicting peer dependency: echarts@<宿主版本>
+```
+- 这三个库其实是"用到才动态 `await import()` 加载"的纯运行时可选能力, **不必放 peer**
+- 即使标 `optional`, npm 7+ 在严格校验下仍触发 ERESOLVE, 用户被迫 `--legacy-peer-deps`
+
+**修复**: peerDependencies 移除 `echarts` / `hyperformula` / `jspdf`. 这些改成文档"按需依赖"段说明:
+- 用图表: `npm i echarts`
+- 用 PDF 导出: `npm i jspdf`
+- 用编辑模式 + 公式重算: `npm i hyperformula`
+- 未装时代码 `await import()` 失败 → 抛友好错误 (代码已有处理)
+
+剩下的 peerDeps: vue / react / react-dom / exceljs / @vue/composition-api (静态 import, 必装).
+
+### 总效果
+
+任何打包器都能消费 1.3.2:
+- ✅ Vite / webpack 5: 走 `package.json#exports`, 用 dist/ 真实产物
+- ✅ webpack 4 / vue-cli 4: 走包根 stub 文件, dist 已降级语法 + 无 worker
+- ✅ Parcel / Snowpack / esbuild: 同上
+- ✅ Node CJS (SSR): 同 webpack 4 路径
+
+### 升级提示 (从 1.3.0 / 1.3.1 升 1.3.2)
+
+无 breaking, 升级仅 `npm i ooxml-excel-editor@1.3.2`. 但**用图表/PDF/公式重算**的用户需自己装这三个可选包 (之前是 optional peer, 实际行为一样, 升级体验更顺):
+
+```bash
+npm i echarts        # 用图表
+npm i jspdf          # 导出 PDF
+npm i hyperformula   # 编辑模式 + 公式重算
+```
+
+---
+
 ## [1.3.1] - 2026-06-08
 
 **Vue 2 子入口扩展兼容到 Vue 2.6.x** — 通过 `@vue/composition-api` package 让一份代码同时支持 Vue 2.6 + 2.7+. 1.3.0 只支持 2.7+ (内置 Composition API), 此版本不破坏 2.7 用户用法.
