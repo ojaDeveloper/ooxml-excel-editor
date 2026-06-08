@@ -56,6 +56,9 @@
   ],
   "scripts": {
     "dev": "vite",
+    "dev:vue3": "vite",
+    "dev:react": "vite --mode react",
+    "dev:vue2": "vite --mode vue2",
     "build": "vue-tsc --noEmit && vite build && vite build --mode lib-vue2",
     "build:demo": "vite build --mode demo",
     "build:vue2": "vite build --mode lib-vue2",

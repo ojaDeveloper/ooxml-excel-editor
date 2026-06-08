@@ -6,10 +6,16 @@
  *     @vue/compiler-sfc 时拿到 vue@3 的版本, SFC 编译失败. 改用 render function 完全绕开
  *     SFC 编译路径. 工程上跟 React 壳 (.tsx + hook) 几乎同构.
  *
- * 本文件 ~600 行, 全 features 移植 Vue 3 壳 (props / emits / viewerApi / 头部 / 工具栏 /
- * 公式栏 / sheet 标签 / 查找). 跟 Vue 3 壳的代码组织一一对应, 维护时按章节定位即可.
+ * 为什么 canvas / overlays / scroller 用 createElement 手动挂载 (而不是 h() 渲染)?
+ *   - Vue 2 render function 重渲时 patch 会破坏 controller 持有的 DOM 引用 (函数 ref 先解绑
+ *     再重绑, controller.els.canvas 变成 stale 引用挂在已 detach 的旧 canvas 上, paint 时
+ *     设的 width/height 落到死节点上, 用户看到的新 canvas 永远是 300x150).
+ *   - 修复: 把 controller 管理的 DOM 在 onMounted 时手动 createElement + appendChild 到
+ *     .ov-render-area, Vue 完全不碰这些节点. render function 只渲染 chrome (toolbar /
+ *     formula bar / sheet tabs / state overlay / findbar) — 这些是纯响应式 UI, 走 Vue patch
+ *     没问题. 这跟 React 壳的"imperative DOM" 模式一致, 也契合 controller 框架无关的设计.
  */
-import Vue, {
+import {
   defineComponent,
   h,
   ref,
@@ -17,20 +23,16 @@ import Vue, {
   watch,
   onMounted,
   onBeforeUnmount,
-  getCurrentInstance,
   shallowRef,
   nextTick,
   type PropType,
   type VNode,
 } from 'vue2'
 import type {
-  ContextMenuBeforePayload,
-  ContextMenuShowPayload,
   ContextMenuTransform,
   ExcelPlugin,
   ExcelPluginContext,
   OverlayContext,
-  PermissionDeniedPayload,
   PluginEvent,
   ToolbarItem,
   ViewerApi,
@@ -52,21 +54,29 @@ import type {
 } from '@/core/model/types'
 import type { EditableTarget, EditConfig } from '@/core/edit/types'
 import type { FormulaEngineFactory } from '@/core/formula/engine'
-import type {
-  CellChangePayload,
-  DimChangePayload,
-  DirtyChangePayload,
-  ImageChangePayload,
-  StructChangePayload,
-} from '@/core/edit/edit-controller'
 import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
 import { revokeImages } from '@/core/finalize'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '@/core/export'
-import { ViewerController, type ContextMenuBeforePayload as _CMB, type FindState } from '@/core/viewer/controller'
+import { ViewerController, type FindState } from '@/core/viewer/controller'
 import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { getCellValue, getCellText, getSheetData, getRangeData, sheetToJSON, type ReadOptions } from '@/core/model/data-access'
 import { useExcelDocumentVue2 } from './use-excel-document'
 import './excel-viewer.css'
+
+/** 函数 ref 工厂 — 闭包 DOM 拿法, render function 重渲时 ref 会先解绑再重绑, 这里只跟踪最新非空值. */
+function domSlot<T extends HTMLElement>() {
+  const slot: { value: T | null; bind: (el: T | null) => void } = {
+    value: null,
+    bind: (el) => { slot.value = el },
+  }
+  return slot
+}
+
+function ce<K extends keyof HTMLElementTagNameMap>(tag: K, className?: string): HTMLElementTagNameMap[K] {
+  const el = document.createElement(tag)
+  if (className) el.className = className
+  return el
+}
 
 export default defineComponent({
   name: 'OoxmlExcelViewer',
@@ -96,10 +106,22 @@ export default defineComponent({
     formulaEngine: { type: Function as PropType<FormulaEngineFactory>, default: undefined },
     contextMenu: { type: [Boolean, Function] as PropType<boolean | ContextMenuTransform>, default: undefined },
   },
-  // Vue 2 emits is informational (跟 Vue 3 不一样, 不影响 .emit 行为)
   setup(props, { emit, expose }) {
-    const instance = getCurrentInstance()
-    const refs = () => (instance?.proxy?.$refs ?? {}) as Record<string, HTMLElement | undefined>
+    // ---- 由 Vue 管理的 DOM (chrome + 一个空的 render-area 外壳) ----
+    const renderAreaSlot = domSlot<HTMLDivElement>()
+    const fbSlot = domSlot<HTMLTextAreaElement>()
+    const templateInputSlot = domSlot<HTMLInputElement>()
+
+    // ---- 由 controller 持有的 DOM (onMounted 时 createElement + appendChild, Vue 完全不碰) ----
+    let canvasEl: HTMLCanvasElement | null = null
+    let scrollerEl: HTMLDivElement | null = null
+    let spacerEl: HTMLDivElement | null = null
+    let editorSlotEl: HTMLDivElement | null = null
+    let ovMainEl: HTMLDivElement | null = null
+    let ovFRowEl: HTMLDivElement | null = null
+    let ovFColEl: HTMLDivElement | null = null
+    let ovCornerEl: HTMLDivElement | null = null
+    let pluginOvEl: HTMLDivElement | null = null
 
     // ---- 数据加载 + workbook 状态 ----
     const { loading, error, workbook, load, loadModel, progress, sourceBuffer } = useExcelDocumentVue2()
@@ -134,6 +156,24 @@ export default defineComponent({
       finalizeImages(model)
       return model
     }
+
+    // ---- progress 派生 ----
+    const progressLabel = computed(() => {
+      const p = progress.value
+      if (!p) return '加载中…'
+      switch (p.stage) {
+        case 'read': return '读取文件'
+        case 'unzip': return '解压'
+        case 'parse': return '解析'
+        case 'finalize': return '处理图片'
+        default: return '加载中…'
+      }
+    })
+    const progressPct = computed(() => {
+      const p = progress.value
+      if (!p || p.ratio == null) return null
+      return Math.max(0, Math.min(100, Math.round(p.ratio * 100)))
+    })
 
     // ---- 插件 + 钩子合并 ----
     const normalizedPlugins = computed<ExcelPlugin[]>(() => props.plugins ?? [])
@@ -175,7 +215,7 @@ export default defineComponent({
     const hasEditor = computed(() => !!props.editor || normalizedPlugins.value.some((p) => p.editor))
 
     // ---- ViewerController + 渲染管线 ----
-    let controller: ViewerController | null = null
+    const controllerRef = shallowRef<ViewerController | null>(null)
     let resizeObserver: ResizeObserver | null = null
     let pluginOverlayHost: PluginOverlayHost | null = null
     const pluginHandlers = new Map<PluginEvent, Set<(p: any) => void>>()
@@ -186,7 +226,6 @@ export default defineComponent({
       pluginHandlers.get(event)?.forEach((h) => h(payload))
     }
 
-    /** 统一加载入口: xlsx 数据源直接 load, JSON 数据源 + 模板 → 解析模板套样式 + loadModel */
     async function runInitialLoad() {
       const tplSrc = effectiveTemplateSrc.value
       const initDataWb = resolveWorkbookInput(props.workbook)
@@ -214,6 +253,7 @@ export default defineComponent({
 
     function rebuildRenderer() {
       const wb = workbook.value
+      const controller = controllerRef.value
       if (!wb || !controller) return
       const sheet = wb.sheets[activeSheet.value] ?? wb.sheets[0]
       if (!sheet) return
@@ -235,7 +275,7 @@ export default defineComponent({
         if (!set) pluginHandlers.set(event, (set = new Set()))
         set.add(fn)
       }
-      const ctx: ExcelPluginContext = { viewer: viewerApi as ViewerApi, on: register, redraw: () => controller?.render() }
+      const ctx: ExcelPluginContext = { viewer: viewerApi as ViewerApi, on: register, redraw: () => controllerRef.value?.render() }
       for (const p of normalizedPlugins.value) {
         if (p.events) for (const [ev, fn] of Object.entries(p.events)) if (fn) register(ev as PluginEvent, fn)
         const cleanup = p.setup?.(ctx)
@@ -244,10 +284,11 @@ export default defineComponent({
     }
 
     function renderPluginOverlays() {
+      const controller = controllerRef.value
       if (!pluginOverlayHost || !controller) return
       const ctx: OverlayContext = {
-        rectOf: (r, c) => controller!.rectOf(r, c),
-        rectOfRange: (range) => controller!.rectOfRange(range),
+        rectOf: (r, c) => controller.rectOf(r, c),
+        rectOfRange: (range) => controller.rectOfRange(range),
         tick: renderTick.value,
         workbook: workbook.value,
       }
@@ -255,24 +296,68 @@ export default defineComponent({
     }
 
     onMounted(() => {
-      const r = refs()
-      const canvas = r.canvasEl as HTMLCanvasElement | undefined
-      const renderArea = r.renderAreaEl, scroller = r.scrollerEl, spacer = r.spacerEl, editorSlot = r.editorSlotEl
-      const ovMain = r.ovMainEl, ovFRow = r.ovFRowEl, ovFCol = r.ovFColEl, ovCorner = r.ovCornerEl
-      if (!canvas || !renderArea || !scroller || !spacer || !editorSlot || !ovMain || !ovFRow || !ovFCol || !ovCorner) return
-      controller = new ViewerController(
+      const renderArea = renderAreaSlot.value
+      if (!renderArea) {
+        console.error('[ooxml-excel-editor/vue2] onMounted: renderArea DOM 没拿到')
+        return
+      }
+
+      // 手动创建 controller 管理的所有 DOM. Vue 完全不知道它们 → 不会因为重渲销毁/strip.
+      canvasEl = ce('canvas', 'ov-grid-canvas')
+      ovMainEl = ce('div', 'ov ov-main')
+      ovFColEl = ce('div', 'ov ov-fcol')
+      ovFRowEl = ce('div', 'ov ov-frow')
+      ovCornerEl = ce('div', 'ov ov-corner')
+      const ovPluginWrap = ce('div', 'ov ov-plugin')
+      pluginOvEl = ce('div')
+      ovPluginWrap.appendChild(pluginOvEl)
+      scrollerEl = ce('div', 'ov-scroller')
+      scrollerEl.tabIndex = 0
+      spacerEl = ce('div', 'ov-spacer')
+      scrollerEl.appendChild(spacerEl)
+      editorSlotEl = ce('div', 'ov-editor-slot')
+
+      renderArea.appendChild(canvasEl)
+      renderArea.appendChild(ovMainEl)
+      renderArea.appendChild(ovFColEl)
+      renderArea.appendChild(ovFRowEl)
+      renderArea.appendChild(ovCornerEl)
+      renderArea.appendChild(ovPluginWrap)
+      renderArea.appendChild(scrollerEl)
+      renderArea.appendChild(editorSlotEl)
+
+      // scroller / 鼠标 / 键盘事件: addEventListener 直接绑, controller 处理
+      const sc = scrollerEl
+      sc.addEventListener('scroll', (e: Event) => {
+        const t = e.target as HTMLElement
+        controllerRef.value?.setScroll(t.scrollLeft, t.scrollTop)
+      })
+      sc.addEventListener('mousedown', (e: MouseEvent) => controllerRef.value?.onMouseDown(e))
+      sc.addEventListener('mousemove', (e: MouseEvent) => controllerRef.value?.onMouseMove(e))
+      sc.addEventListener('mouseup', (e: MouseEvent) => controllerRef.value?.onMouseUp(e))
+      sc.addEventListener('mouseleave', () => controllerRef.value?.onMouseLeave())
+      sc.addEventListener('dblclick', (e: MouseEvent) => controllerRef.value?.onDblClick(e))
+      sc.addEventListener('contextmenu', (e: MouseEvent) => controllerRef.value?.onContextMenu(e))
+      sc.addEventListener('keydown', (e: KeyboardEvent) => controllerRef.value?.onKeyDown(e))
+
+      const controller = new ViewerController(
         {
-          canvas,
+          canvas: canvasEl,
           renderArea,
-          scroller,
-          spacer,
-          overlays: { main: ovMain, frow: ovFRow, fcol: ovFCol, corner: ovCorner },
-          editorSlot,
+          scroller: scrollerEl,
+          spacer: spacerEl,
+          overlays: { main: ovMainEl, frow: ovFRowEl, fcol: ovFColEl, corner: ovCornerEl },
+          editorSlot: editorSlotEl,
         },
         {
           onRenderer: () => {},
           onRenderTick: () => { renderTick.value++ },
-          onSelectionChange: () => { selVersion.value++; const sel = controller?.getSelection(); const active = controller?.getActiveCell(); if (sel && active) fire('selection-change', { range: sel, active }) },
+          onSelectionChange: () => {
+            selVersion.value++
+            const sel = controllerRef.value?.getSelection()
+            const active = controllerRef.value?.getActiveCell()
+            if (sel && active) fire('selection-change', { range: sel, active })
+          },
           onCellClick: (row, col, text) => fire('cell-click', { row, col, text }),
           onCellDblClick: (row, col, text) => fire('cell-dblclick', { row, col, text }),
           onHyperlink: (url, cell) => { fire('hyperlink-click', { url, cell }); if (props.openLinks) window.open(url, '_blank', 'noopener') },
@@ -298,66 +383,94 @@ export default defineComponent({
       controller.setEditorResolver(hasEditor.value ? resolveEditor : undefined)
       controller.setLightboxEnabled(props.imageLightbox !== false)
       controller.setContextMenuTransform(typeof props.contextMenu === 'function' ? props.contextMenu : null)
-      if (r.pluginOvEl) pluginOverlayHost = new PluginOverlayHost(r.pluginOvEl)
+      controllerRef.value = controller
+      pluginOverlayHost = new PluginOverlayHost(pluginOvEl)
       initPlugins()
       void runInitialLoad()
-      resizeObserver = new ResizeObserver(() => { controller?.measure(); controller?.render() })
+      resizeObserver = new ResizeObserver(() => { controllerRef.value?.measure(); controllerRef.value?.render() })
       resizeObserver.observe(renderArea)
     })
 
     // ---- 各 prop 变化 → 同步到 controller ----
-    watch(() => [props.src, props.workbook, props.templateFile, runtimeTemplateSrc.value], () => { void runInitialLoad() }, { deep: false })
-    watch(() => props.fileName, (v) => { if (controller) controller.fileName = v })
-    watch(effectiveEditConfig, (cfg) => controller?.setEditConfig(cfg))
-    watch(() => props.contextMenu, (cm) => controller?.setContextMenuTransform(typeof cm === 'function' ? cm : null))
-    watch(() => [props.editor, props.plugins], () => controller?.setEditorResolver(hasEditor.value ? resolveEditor : undefined), { deep: true })
-    watch(() => props.cellImageFit, (fit) => { if (fit) controller?.setCellImageFit(fit) })
-    watch(() => props.imageLightbox, (v) => controller?.setLightboxEnabled(v !== false))
-    watch(() => [effectiveTheme.value, props.cellStyle, props.plugins, props.readOnlyCellStyle], () => { if (controller) rebuildRenderer() }, { deep: true })
+    watch(() => [props.src, props.workbook, props.templateFile, runtimeTemplateSrc.value], () => {
+      if (controllerRef.value) void runInitialLoad()
+    }, { deep: false })
+    watch(() => props.fileName, (v) => { const c = controllerRef.value; if (c) c.fileName = v })
+    watch(effectiveEditConfig, (cfg) => controllerRef.value?.setEditConfig(cfg))
+    watch(() => props.contextMenu, (cm) => controllerRef.value?.setContextMenuTransform(typeof cm === 'function' ? cm : null))
+    watch(() => [props.editor, props.plugins], () => controllerRef.value?.setEditorResolver(hasEditor.value ? resolveEditor : undefined), { deep: true })
+    watch(() => props.cellImageFit, (fit) => { if (fit) controllerRef.value?.setCellImageFit(fit) })
+    watch(() => props.imageLightbox, (v) => controllerRef.value?.setLightboxEnabled(v !== false))
+    watch(() => [effectiveTheme.value, props.cellStyle, props.plugins, props.readOnlyCellStyle], () => { if (controllerRef.value) rebuildRenderer() }, { deep: true })
     watch(() => props.plugins, () => initPlugins(), { deep: false })
 
     watch(workbook, async (wb) => {
       if (!wb) return
-      controller?.clearFilterState()
+      controllerRef.value?.clearFilterState()
       activeSheet.value = wb.activeSheet
+      // nextTick 只保证 Vue patch flush, 但 chrome 刚加上, 浏览器 layout/reflow 可能没完成,
+      // 此时 renderArea.clientHeight 是中间态. rAF 等到下一帧才 measure → 拿到 final layout 尺寸.
       await nextTick()
+      await new Promise<void>((r) => requestAnimationFrame(() => r()))
       rebuildRenderer()
       fire('rendered' as never, wb)
     })
     watch(activeSheet, async (idx, oldIdx) => {
-      if (oldIdx != null) controller?.resetFilter(workbook.value?.sheets[oldIdx])
+      if (oldIdx != null) controllerRef.value?.resetFilter(workbook.value?.sheets[oldIdx])
       await nextTick()
       rebuildRenderer()
       const wb = workbook.value
       if (wb?.sheets[idx]) fire('sheet-change', { index: idx, name: wb.sheets[idx].name })
     })
-    watch(zoom, (z) => controller?.setZoom(z))
+    watch(zoom, (z) => controllerRef.value?.setZoom(z))
     watch(error, (msg) => { if (msg) fire('error' as never, msg) })
     watch(progress, (p) => { if (p) fire('progress' as never, p) })
     watch(renderTick, () => renderPluginOverlays())
 
     onBeforeUnmount(() => {
       resizeObserver?.disconnect()
-      controller?.dispose()
+      controllerRef.value?.dispose()
       pluginOverlayHost?.dispose()
       pluginCleanups.forEach((fn) => fn())
       if (workbook.value) revokeImages(workbook.value)
     })
 
     // ---- 选区 / 活动格 / 公式栏派生 ----
-    const selection = computed<MergeRange | null>(() => { void selVersion.value; return controller?.getSelection() ?? null })
-    const activeCellAddr = computed(() => { void selVersion.value; const c = controller?.getActiveCell(); return c ? colIndexToLetters(c.col) + (c.row + 1) : '' })
+    const selection = computed<MergeRange | null>(() => { void selVersion.value; return controllerRef.value?.getSelection() ?? null })
+    const activeCellAddr = computed(() => {
+      void selVersion.value
+      const c = controllerRef.value?.getActiveCell()
+      return c ? colIndexToLetters(c.col) + (c.row + 1) : ''
+    })
     const fbDraft = ref('')
     const fbEditing = ref(false)
-    const fbCanEdit = computed(() => { void selVersion.value; void renderTick.value; return !!controller?.canEditActiveCell() })
-    const formulaBarEditString = computed(() => { void selVersion.value; void renderTick.value; return controller?.getCellEditString() ?? '' })
-    const formulaBarText = computed(() => { void selVersion.value; const r = controller?.renderer; const c = controller?.getActiveCell(); if (!r || !c) return ''; return r.cellFormula(c.row, c.col) ?? r.cellText(c.row, c.col) })
+    // 仅依赖 selVersion (低频). 不读 renderTick — renderTick 每帧 scroll/mousemove ++,
+    // 读它会让整个 render function 每帧重跑 → chrome DOM 全部 patch → 滚动卡顿.
+    const fbCanEdit = computed(() => { void selVersion.value; return !!controllerRef.value?.canEditActiveCell() })
+    const formulaBarEditString = computed(() => { void selVersion.value; return controllerRef.value?.getCellEditString() ?? '' })
+    const formulaBarText = computed(() => {
+      void selVersion.value
+      const r = controllerRef.value?.renderer
+      const c = controllerRef.value?.getActiveCell()
+      if (!r || !c) return ''
+      return r.cellFormula(c.row, c.col) ?? r.cellText(c.row, c.col)
+    })
     watch(formulaBarEditString, (v) => { if (!fbEditing.value) fbDraft.value = v }, { immediate: true })
     watch(fbDraft, () => nextTick(syncFbHeight))
-    function syncFbHeight() { const el = refs().fbEl as HTMLTextAreaElement | undefined; if (!el) return; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px' }
+    function syncFbHeight() {
+      const el = fbSlot.value
+      if (!el) return
+      el.style.height = 'auto'
+      el.style.height = el.scrollHeight + 'px'
+    }
     function fbFocus() { fbEditing.value = true; fbDraft.value = formulaBarEditString.value; nextTick(syncFbHeight) }
-    function fbCommit(move?: 'down') { controller?.commitActiveCellValue(fbDraft.value, move); fbEditing.value = false; fbDraft.value = formulaBarEditString.value; if (move === 'down') (refs().scrollerEl as HTMLElement | undefined)?.focus() }
-    function fbCancel() { fbEditing.value = false; fbDraft.value = formulaBarEditString.value; (refs().scrollerEl as HTMLElement | undefined)?.focus() }
+    function fbCommit(move?: 'down') {
+      controllerRef.value?.commitActiveCellValue(fbDraft.value, move)
+      fbEditing.value = false
+      fbDraft.value = formulaBarEditString.value
+      if (move === 'down') scrollerEl?.focus()
+    }
+    function fbCancel() { fbEditing.value = false; fbDraft.value = formulaBarEditString.value; scrollerEl?.focus() }
     function fbBlur() { if (fbEditing.value) fbCommit() }
     function fbKeydown(e: KeyboardEvent) {
       e.stopPropagation()
@@ -367,25 +480,30 @@ export default defineComponent({
 
     // ---- 查找 / 筛选 ----
     const findOpen = ref(false)
-    const findState = computed<FindState>(() => { void findVersion.value; return controller?.getFindState() ?? { query: '', matchCase: false, wholeCell: false, count: 0, index: -1 } })
+    const findState = computed<FindState>(() => { void findVersion.value; return controllerRef.value?.getFindState() ?? { query: '', matchCase: false, wholeCell: false, count: 0, index: -1 } })
     function openFind() { findOpen.value = true }
-    function closeFind() { findOpen.value = false; controller?.clearFind(); (refs().scrollerEl as HTMLElement | undefined)?.focus() }
-    function toggleAutoFilter() { controller?.toggleAutoFilter() }
+    function closeFind() { findOpen.value = false; controllerRef.value?.clearFind(); scrollerEl?.focus() }
+    function toggleAutoFilter() { controllerRef.value?.toggleAutoFilter() }
     function onRootKeydown(e: KeyboardEvent) {
       if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) { e.preventDefault(); openFind() }
     }
 
-    // ---- 导出 (透传到 controller, 跟 Vue 3 / React 一致) ----
-    const exportImage = (opts?: ImageExportOptions) => controller!.exportImage(opts)
-    const downloadImage = (opts?: ImageExportOptions) => controller!.downloadImage(opts)
-    const exportPdf = (opts?: PdfExportOptions) => controller!.exportPdf(opts)
-    const downloadPdf = (opts?: PdfExportOptions) => controller!.downloadPdf(opts)
-    const print = (opts?: PrintOptions) => controller!.print(opts)
+    // ---- 导出 ----
+    const exportImage = (opts?: ImageExportOptions) => controllerRef.value!.exportImage(opts)
+    const downloadImage = (opts?: ImageExportOptions) => controllerRef.value!.downloadImage(opts)
+    const exportPdf = (opts?: PdfExportOptions) => controllerRef.value!.exportPdf(opts)
+    const downloadPdf = (opts?: PdfExportOptions) => controllerRef.value!.downloadPdf(opts)
+    const print = (opts?: PrintOptions) => controllerRef.value!.print(opts)
     async function onExportPdf() { try { await downloadPdf() } catch (e) { reportError(e) } }
-    function reportError(e: unknown) { const msg = (e as Error)?.message || String(e); console.error('[ooxml-excel-editor/vue2] 导出失败:', e); fire('error' as never, msg); if (typeof window !== 'undefined') window.alert?.(msg) }
+    function reportError(e: unknown) {
+      const msg = (e as Error)?.message || String(e)
+      console.error('[ooxml-excel-editor/vue2] 导出失败:', e)
+      fire('error' as never, msg)
+      if (typeof window !== 'undefined') window.alert?.(msg)
+    }
 
-    // ---- 模板拾取器 ----
-    function openTemplateFilePicker() { (refs().templateInputEl as HTMLInputElement | undefined)?.click() }
+    // ---- 模板拾取 ----
+    function openTemplateFilePicker() { templateInputSlot.value?.click() }
     function onTemplateFilePicked(e: Event) {
       const f = (e.target as HTMLInputElement).files?.[0]; if (!f) return
       runtimeTemplateSrc.value = f
@@ -398,105 +516,118 @@ export default defineComponent({
     function dataSheet(sheetIndex?: number): SheetModel | null { const wb = workbook.value; if (!wb) return null; return wb.sheets[sheetIndex ?? activeSheet.value] ?? null }
     function withDate1904<T extends ReadOptions>(opts?: T): T { return { ...(opts as T), date1904: workbook.value?.date1904 ?? false } }
 
-    // ---- 命令式 API (跟 Vue 3 viewerApi / React Handle 完全对齐) ----
+    // ---- 命令式 API ----
     const viewerApi = {
       load: (src: ExcelSource) => load(src, effectiveTransform),
       getWorkbook: () => workbook.value,
       getActiveSheet: () => activeSheet.value,
       setActiveSheet: (i: number) => { if (workbook.value?.sheets[i]) activeSheet.value = i },
       getSelection: () => selection.value,
-      setSelection: (range: MergeRange) => controller?.setSelectionRange(range),
-      rectOf: (row: number, col: number) => controller?.rectOf(row, col) ?? null,
-      rectOfRange: (range: MergeRange) => controller?.rectOfRange(range) ?? null,
-      redraw: () => controller?.render(),
-      isCellEditable: (row: number, col: number) => controller?.isCellEditable(row, col) ?? false,
-      setEditableTargets: (targets: EditableTarget | EditableTarget[] | undefined) => controller?.setEditableTargets(targets),
-      getEditableTargets: () => controller?.getEditableTargets(),
-      editCell: (row: number, col: number, value: any) => controller?.editCell(row, col, value) ?? false,
-      editRange: (range: MergeRange, values: any[][]) => controller?.editRange(range, values) ?? false,
-      clearRange: (range: MergeRange) => controller?.clearRange(range) ?? false,
-      setStyle: (range: MergeRange, patch: CellStyleOverride) => controller?.setStyle(range, patch) ?? false,
-      getActiveFillColor: () => controller?.getActiveFillColor() ?? '#FFFFFF',
-      getActiveFontColor: () => controller?.getActiveFontColor() ?? '#000000',
-      setSelectionFill: (color: string | null) => controller?.setSelectionFill(color) ?? false,
-      setSelectionFontColor: (color: string) => controller?.setSelectionFontColor(color) ?? false,
-      getSelectionWrapState: () => controller?.getSelectionWrapState() ?? 'none',
-      toggleWrapTextOnSelection: () => controller?.toggleWrapTextOnSelection() ?? false,
-      mergeCells: (range: MergeRange) => controller?.mergeCells(range) ?? false,
-      unmergeCells: (range: MergeRange) => controller?.unmergeCells(range) ?? false,
-      pasteText: (text: string, at?: { row: number; col: number }) => controller?.pasteText(text, at) ?? false,
-      pasteRichHtml: (html: string, at?: { row: number; col: number }) => controller?.pasteRichHtml(html, at) ?? false,
-      pasteImageBlob: (blob: Blob, at?: { row: number; col: number }) => controller?.pasteImageBlob(blob, at) ?? Promise.resolve(false),
-      getImages: () => controller?.getImages() ?? [],
-      addImage: (a: any) => controller?.addImage(a) ?? -1,
-      removeImage: (i: number) => controller?.removeImage(i) ?? false,
-      moveImage: (i: number, dx: number, dy: number) => controller?.moveImage(i, dx, dy) ?? false,
-      resizeImage: (i: number, w: number, h: number) => controller?.resizeImage(i, w, h) ?? false,
-      getCellEditString: () => controller?.getCellEditString() ?? '',
-      canEditActiveCell: () => controller?.canEditActiveCell() ?? false,
-      commitActiveCellValue: (value: string, move?: 'down') => controller?.commitActiveCellValue(value, move) ?? false,
-      getCellImages: () => controller?.getCellImages() ?? [],
-      getCellImageAt: (row: number, col: number) => controller?.getCellImageAt(row, col) ?? null,
-      openImageLightbox: (src: string, fileName?: string, mime?: string) => controller?.openImageLightbox(src, fileName, mime),
-      setCellImageFit: (fit: 'fill' | 'contain' | 'cover') => controller?.setCellImageFit(fit),
-      convertImageToCell: (i: number, row: number, col: number) => controller?.convertImageToCell(i, row, col) ?? false,
-      convertImageToCellAuto: (i: number) => controller?.convertImageToCellAuto(i) ?? false,
-      convertAllImagesToCells: (col?: number) => controller?.convertAllImagesToCells(col) ?? 0,
-      convertImagesInRangeToCell: (range: MergeRange) => Promise.resolve(controller?.convertImagesInRangeToCell(range) ?? 0),
-      convertCellImagesInRangeToFloat: (range: MergeRange, size?: any) => Promise.resolve(controller?.convertCellImagesInRangeToFloat(range, size) ?? 0),
-      openContextMenu: (x: number, y: number, items?: any[]) => controller?.openContextMenu(x, y, items),
-      closeContextMenu: () => controller?.closeContextMenu(),
-      convertCellImageToFloat: (row: number, col: number, size?: any) => controller?.convertCellImageToFloat(row, col, size) ?? false,
-      insertRows: (at: number, count?: number) => controller?.insertRows(at, count) ?? false,
-      deleteRows: (at: number, count?: number) => controller?.deleteRows(at, count) ?? false,
-      insertCols: (at: number, count?: number) => controller?.insertCols(at, count) ?? false,
-      deleteCols: (at: number, count?: number) => controller?.deleteCols(at, count) ?? false,
-      undo: () => controller?.undo(),
-      redo: () => controller?.redo(),
-      canUndo: () => controller?.canUndo() ?? false,
-      canRedo: () => controller?.canRedo() ?? false,
-      getEditingCell: () => controller?.getEditingCell() ?? null,
-      getCellSnapshot: (row: number, col: number) => controller?.getCellSnapshot(row, col) ?? null,
-      inspectCell: (row: number, col: number) => controller?.inspectCell(row, col) ?? null,
-      beginEdit: (row: number, col: number) => controller?.beginEdit(row, col) ?? false,
-      cancelEdit: () => controller?.cancelEdit(),
-      isEditing: () => controller?.isEditing() ?? false,
-      setColumnWidth: (target: any, width: number) => controller?.setColumnWidth(target, width) ?? 0,
-      setRowHeight: (target: any, height: number) => controller?.setRowHeight(target, height) ?? 0,
-      autoFitColumns: (target?: any) => controller?.autoFitColumns(target) ?? 0,
-      autoFitRows: (target?: any) => controller?.autoFitRows(target) ?? 0,
-      resetColumnWidth: (target: any) => controller?.resetColumnWidth(target) ?? 0,
-      resetRowHeight: (target: any) => controller?.resetRowHeight(target) ?? 0,
-      isRecalcReady: () => controller?.isRecalcReady() ?? false,
-      getVirtualExtent: () => controller?.getVirtualExtent() ?? { rows: 0, cols: 0 },
-      isDirty: () => controller?.isDirty() ?? false,
-      resetToOriginal: () => controller?.resetToOriginal() ?? false,
+      setSelection: (range: MergeRange) => controllerRef.value?.setSelectionRange(range),
+      rectOf: (row: number, col: number) => controllerRef.value?.rectOf(row, col) ?? null,
+      rectOfRange: (range: MergeRange) => controllerRef.value?.rectOfRange(range) ?? null,
+      redraw: () => controllerRef.value?.render(),
+      isCellEditable: (row: number, col: number) => controllerRef.value?.isCellEditable(row, col) ?? false,
+      setEditableTargets: (targets: EditableTarget | EditableTarget[] | undefined) => controllerRef.value?.setEditableTargets(targets),
+      getEditableTargets: () => controllerRef.value?.getEditableTargets(),
+      editCell: (row: number, col: number, value: any) => controllerRef.value?.editCell(row, col, value) ?? false,
+      editRange: (range: MergeRange, values: any[][]) => controllerRef.value?.editRange(range, values) ?? false,
+      clearRange: (range: MergeRange) => controllerRef.value?.clearRange(range) ?? false,
+      setStyle: (range: MergeRange, patch: CellStyleOverride) => controllerRef.value?.setStyle(range, patch) ?? false,
+      getActiveFillColor: () => controllerRef.value?.getActiveFillColor() ?? '#FFFFFF',
+      getActiveFontColor: () => controllerRef.value?.getActiveFontColor() ?? '#000000',
+      setSelectionFill: (color: string | null) => controllerRef.value?.setSelectionFill(color) ?? false,
+      setSelectionFontColor: (color: string) => controllerRef.value?.setSelectionFontColor(color) ?? false,
+      getSelectionWrapState: () => controllerRef.value?.getSelectionWrapState() ?? 'none',
+      toggleWrapTextOnSelection: () => controllerRef.value?.toggleWrapTextOnSelection() ?? false,
+      mergeCells: (range: MergeRange) => controllerRef.value?.mergeCells(range) ?? false,
+      unmergeCells: (range: MergeRange) => controllerRef.value?.unmergeCells(range) ?? false,
+      pasteText: (text: string, at?: { row: number; col: number }) => controllerRef.value?.pasteText(text, at) ?? false,
+      pasteRichHtml: (html: string, at?: { row: number; col: number }) => controllerRef.value?.pasteRichHtml(html, at) ?? false,
+      pasteImageBlob: (blob: Blob, at?: { row: number; col: number }) => controllerRef.value?.pasteImageBlob(blob, at) ?? Promise.resolve(false),
+      getImages: () => controllerRef.value?.getImages() ?? [],
+      addImage: (a: any) => controllerRef.value?.addImage(a) ?? -1,
+      removeImage: (i: number) => controllerRef.value?.removeImage(i) ?? false,
+      moveImage: (i: number, dx: number, dy: number) => controllerRef.value?.moveImage(i, dx, dy) ?? false,
+      resizeImage: (i: number, w: number, h: number) => controllerRef.value?.resizeImage(i, w, h) ?? false,
+      getCellEditString: () => controllerRef.value?.getCellEditString() ?? '',
+      canEditActiveCell: () => controllerRef.value?.canEditActiveCell() ?? false,
+      commitActiveCellValue: (value: string, move?: 'down') => controllerRef.value?.commitActiveCellValue(value, move) ?? false,
+      getCellImages: () => controllerRef.value?.getCellImages() ?? [],
+      getCellImageAt: (row: number, col: number) => controllerRef.value?.getCellImageAt(row, col) ?? null,
+      openImageLightbox: (src: string, fileName?: string, mime?: string) => controllerRef.value?.openImageLightbox(src, fileName, mime),
+      setCellImageFit: (fit: 'fill' | 'contain' | 'cover') => controllerRef.value?.setCellImageFit(fit),
+      convertImageToCell: (i: number, row: number, col: number) => controllerRef.value?.convertImageToCell(i, row, col) ?? false,
+      convertImageToCellAuto: (i: number) => controllerRef.value?.convertImageToCellAuto(i) ?? false,
+      convertAllImagesToCells: (col?: number) => controllerRef.value?.convertAllImagesToCells(col) ?? 0,
+      convertImagesInRangeToCell: (range: MergeRange) => Promise.resolve(controllerRef.value?.convertImagesInRangeToCell(range) ?? 0),
+      convertCellImagesInRangeToFloat: (range: MergeRange, size?: any) => Promise.resolve(controllerRef.value?.convertCellImagesInRangeToFloat(range, size) ?? 0),
+      openContextMenu: (x: number, y: number, items?: any[]) => controllerRef.value?.openContextMenu(x, y, items),
+      closeContextMenu: () => controllerRef.value?.closeContextMenu(),
+      convertCellImageToFloat: (row: number, col: number, size?: any) => controllerRef.value?.convertCellImageToFloat(row, col, size) ?? false,
+      insertRows: (at: number, count?: number) => controllerRef.value?.insertRows(at, count) ?? false,
+      deleteRows: (at: number, count?: number) => controllerRef.value?.deleteRows(at, count) ?? false,
+      insertCols: (at: number, count?: number) => controllerRef.value?.insertCols(at, count) ?? false,
+      deleteCols: (at: number, count?: number) => controllerRef.value?.deleteCols(at, count) ?? false,
+      undo: () => controllerRef.value?.undo(),
+      redo: () => controllerRef.value?.redo(),
+      canUndo: () => controllerRef.value?.canUndo() ?? false,
+      canRedo: () => controllerRef.value?.canRedo() ?? false,
+      getEditingCell: () => controllerRef.value?.getEditingCell() ?? null,
+      getCellSnapshot: (row: number, col: number) => controllerRef.value?.getCellSnapshot(row, col) ?? null,
+      inspectCell: (row: number, col: number) => controllerRef.value?.inspectCell(row, col) ?? null,
+      beginEdit: (row: number, col: number) => controllerRef.value?.beginEdit(row, col) ?? false,
+      cancelEdit: () => controllerRef.value?.cancelEdit(),
+      isEditing: () => controllerRef.value?.isEditing() ?? false,
+      setColumnWidth: (target: any, width: number) => controllerRef.value?.setColumnWidth(target, width) ?? 0,
+      setRowHeight: (target: any, height: number) => controllerRef.value?.setRowHeight(target, height) ?? 0,
+      autoFitColumns: (target?: any) => controllerRef.value?.autoFitColumns(target) ?? 0,
+      autoFitRows: (target?: any) => controllerRef.value?.autoFitRows(target) ?? 0,
+      resetColumnWidth: (target: any) => controllerRef.value?.resetColumnWidth(target) ?? 0,
+      resetRowHeight: (target: any) => controllerRef.value?.resetRowHeight(target) ?? 0,
+      isRecalcReady: () => controllerRef.value?.isRecalcReady() ?? false,
+      getVirtualExtent: () => controllerRef.value?.getVirtualExtent() ?? { rows: 0, cols: 0 },
+      isDirty: () => controllerRef.value?.isDirty() ?? false,
+      resetToOriginal: () => controllerRef.value?.resetToOriginal() ?? false,
       exportImage, downloadImage, exportPdf, downloadPdf, print,
-      exportXlsx: (opts?: any) => controller!.exportXlsx(opts),
-      downloadXlsx: (opts?: any) => controller!.downloadXlsx(opts),
-      exportJson: (opts?: any) => controller?.exportJson(opts) ?? '{}',
-      downloadJson: (opts?: any) => controller?.downloadJson(opts),
-      exportCsv: (opts?: any) => controller?.exportCsv(opts) ?? '',
-      downloadCsv: (opts?: any) => controller?.downloadCsv(opts),
+      exportXlsx: (opts?: any) => controllerRef.value!.exportXlsx(opts),
+      downloadXlsx: (opts?: any) => controllerRef.value!.downloadXlsx(opts),
+      exportJson: (opts?: any) => controllerRef.value?.exportJson(opts) ?? '{}',
+      downloadJson: (opts?: any) => controllerRef.value?.downloadJson(opts),
+      exportCsv: (opts?: any) => controllerRef.value?.exportCsv(opts) ?? '',
+      downloadCsv: (opts?: any) => controllerRef.value?.downloadCsv(opts),
       getCellValue: (row: number, col: number, si?: number) => { const s = dataSheet(si); return s ? getCellValue(s, row, col) : null },
       getCellText: (row: number, col: number, si?: number) => { const s = dataSheet(si); return s ? getCellText(s, row, col, workbook.value?.date1904 ?? false) : '' },
       getSheetData: (opts?: ReadOptions, si?: number) => { const s = dataSheet(si); return s ? getSheetData(s, withDate1904(opts)) : [] },
       getSheetJSON: (opts?: any, si?: number) => { const s = dataSheet(si); return s ? sheetToJSON(s, withDate1904(opts)) : [] },
       getRangeData: (range: MergeRange, opts?: ReadOptions, si?: number) => { const s = dataSheet(si); return s ? getRangeData(s, range, withDate1904(opts)) : [] },
+      openTemplateFilePicker,
+      clearRuntimeTemplate,
     }
     expose?.(viewerApi)
 
-    // ---- 渲染 ----
-    function onScroll(e: Event) { const sc = e.target as HTMLElement; controller?.setScroll(sc.scrollLeft, sc.scrollTop) }
+    // ---- 渲染 helper ----
     function visibleSheets() { const wb = workbook.value; return wb ? wb.sheets.map((s, i) => ({ s, i })).filter(({ s }) => s.state === 'visible') : [] }
-    function toggleFreeze() { const s = workbook.value?.sheets[activeSheet.value]; if (!s || !controller) return; const fz = s.freeze; if (fz.frozenRows || fz.frozenCols) s.freeze = { frozenRows: 0, frozenCols: 0 }; else { const c = controller.getActiveCell(); s.freeze = { frozenRows: c ? c.row : 1, frozenCols: c ? c.col : 0 } }; controller.renderer?.rebuildMetrics(); controller.refreshContentSize(); controller.render() }
+    function toggleFreeze() {
+      const s = workbook.value?.sheets[activeSheet.value]
+      const controller = controllerRef.value
+      if (!s || !controller) return
+      const fz = s.freeze
+      if (fz.frozenRows || fz.frozenCols) s.freeze = { frozenRows: 0, frozenCols: 0 }
+      else {
+        const c = controller.getActiveCell()
+        s.freeze = { frozenRows: c ? c.row : 1, frozenCols: c ? c.col : 0 }
+      }
+      controller.renderer?.rebuildMetrics()
+      controller.refreshContentSize()
+      controller.render()
+    }
 
-    /** 渲染头部 (文件名 + 模板名 + 工具栏导出) */
     function renderHeader(): VNode | null {
       if (!workbook.value) return null
       const fname = displayFileName.value
       const tname = effectiveTemplateName.value
-      return h('div', { class: 'ov-toolbar' }, [
+      return h('div', { key: 'header', class: 'ov-toolbar' }, [
         h('span', { class: 'file', attrs: { title: fname + (tname ? ' · 模板: ' + tname : '') } }, [
           h('span', { class: 'name' }, fname || '未命名'),
           tname ? h('span', { class: 'tpl' }, ' · 模板: ' + tname) : null,
@@ -514,17 +645,16 @@ export default defineComponent({
       ])
     }
 
-    /** 渲染 action toolbar (查找/筛选/冻结 + 插件项) */
     function renderActionToolbar(): VNode | null {
       if (!workbook.value || props.toolbar === false) return null
-      void renderTick.value; void selVersion.value; void findVersion.value; void filterVersion.value
+      void selVersion.value; void findVersion.value; void filterVersion.value
+      const controller = controllerRef.value
       const items: VNode[] = []
       items.push(h('button', { class: { tool: true, active: findOpen.value }, attrs: { title: '查找 Ctrl+F' }, on: { click: () => findOpen.value ? closeFind() : openFind() } }, '🔍 查找'))
       items.push(h('button', { class: { tool: true, active: !!workbook.value.sheets[activeSheet.value]?.autoFilterRange }, attrs: { title: '切换自动筛选' }, on: { click: toggleAutoFilter } }, '⏷ 筛选'))
       items.push(h('button', { class: 'tool', attrs: { title: '清除筛选', disabled: !controller?.hasFilters() }, on: { click: () => controller?.clearAllFilters() } }, '✕ 筛选'))
       items.push(h('button', { class: 'tool', attrs: { title: '复制选区', disabled: !selection.value }, on: { click: () => void controller?.copySelection() } }, '⎘'))
       items.push(h('button', { class: { tool: true, active: !!(workbook.value.sheets[activeSheet.value]?.freeze.frozenRows || workbook.value.sheets[activeSheet.value]?.freeze.frozenCols) }, attrs: { title: '冻结活动单元格' }, on: { click: toggleFreeze } }, '❄ 冻结'))
-      // 插件贡献工具栏项
       for (const p of normalizedPlugins.value) {
         for (const it of p.toolbar ?? []) {
           if (it.type === 'separator') continue
@@ -535,19 +665,18 @@ export default defineComponent({
           }, [it.label ?? it.icon ?? it.id]))
         }
       }
-      return h('div', { class: 'ov-action-toolbar' }, items)
+      return h('div', { key: 'action', class: 'ov-action-toolbar' }, items)
     }
 
-    /** 公式栏 textarea + auto-resize (Phase 1.2.1 撑高) */
     function renderFormulaBar(): VNode | null {
       if (!workbook.value) return null
       const editable = fbCanEdit.value
-      return h('div', { class: 'ov-formula-bar' }, [
+      return h('div', { key: 'fbar', class: 'ov-formula-bar' }, [
         h('span', { class: 'addr' }, activeCellAddr.value || '—'),
         h('span', { class: 'fx' }, 'fx'),
         editable
           ? h('textarea', {
-              ref: 'fbEl',
+              ref: fbSlot.bind as any,
               class: 'content content-input',
               attrs: { rows: 1, spellcheck: 'false', title: fbDraft.value },
               domProps: { value: fbDraft.value },
@@ -560,22 +689,21 @@ export default defineComponent({
       ])
     }
 
-    /** sheet 标签 (多表切换) */
     function renderSheetTabs(): VNode | null {
       const sheets = visibleSheets()
       if (!workbook.value || sheets.length < 2) return null
-      return h('div', { class: 'ov-sheet-tabs' }, sheets.map(({ s, i }) => h('button', {
+      return h('div', { key: 'tabs', class: 'ov-sheet-tabs' }, sheets.map(({ s, i }) => h('button', {
         key: i,
         class: { tab: true, active: i === activeSheet.value },
         on: { click: () => { activeSheet.value = i } },
       }, s.name)))
     }
 
-    /** 查找条 (Ctrl+F) */
     function renderFindBar(): VNode | null {
       if (!workbook.value || !findOpen.value) return null
       const st = findState.value
-      return h('div', { class: 'ov-findbar' }, [
+      const controller = controllerRef.value
+      return h('div', { key: 'findbar', class: 'ov-findbar' }, [
         h('input', {
           attrs: { placeholder: '查找…', autofocus: true },
           domProps: { value: st.query },
@@ -594,43 +722,46 @@ export default defineComponent({
       ])
     }
 
+    /** loading / error / empty 三态浮层 (相对 .ooxml-excel-viewer 主体定位) */
+    function renderState(): VNode | null {
+      if (loading.value) {
+        const pct = progressPct.value
+        return h('div', { key: 'state-loading', class: 'ov-state' }, [
+          h('div', { class: 'ov-loader' }, [
+            h('div', { class: 'ov-loader-label' }, [
+              progressLabel.value,
+              pct != null ? h('span', ' ' + pct + '%') : null,
+            ]),
+            h('div', { class: 'ov-loader-track' }, [
+              h('div', { class: pct != null ? 'ov-loader-fill' : 'ov-loader-fill indeterminate', style: pct != null ? { width: pct + '%' } : {} }),
+            ]),
+          ]),
+        ])
+      }
+      if (error.value) return h('div', { key: 'state-error', class: 'ov-state ov-state-error' }, '解析失败: ' + error.value)
+      if (!workbook.value) return h('div', { key: 'state-empty', class: 'ov-state ov-state-hint' }, '拖入或选择一个 .xlsx 文件')
+      return null
+    }
+
     return () => h('div', {
-      ref: 'rootEl',
       class: 'ooxml-excel-viewer',
       on: { keydown: onRootKeydown },
     }, [
       renderHeader(),
       renderActionToolbar(),
       renderFormulaBar(),
-      h('div', { ref: 'renderAreaEl', class: 'ov-render-area' }, [
-        h('canvas', { ref: 'canvasEl', class: 'ov-grid-canvas' }),
-        h('div', { ref: 'ovMainEl', class: 'ov ov-main' }),
-        h('div', { ref: 'ovFColEl', class: 'ov ov-fcol' }),
-        h('div', { ref: 'ovFRowEl', class: 'ov ov-frow' }),
-        h('div', { ref: 'ovCornerEl', class: 'ov ov-corner' }),
-        h('div', { class: 'ov ov-plugin' }, [h('div', { ref: 'pluginOvEl' })]),
-        h('div', {
-          ref: 'scrollerEl',
-          class: 'ov-scroller',
-          attrs: { tabindex: '0' },
-          on: {
-            scroll: onScroll,
-            mousedown: (e: MouseEvent) => controller?.onMouseDown(e),
-            mousemove: (e: MouseEvent) => controller?.onMouseMove(e),
-            mouseup: (e: MouseEvent) => controller?.onMouseUp(e),
-            mouseleave: () => controller?.onMouseLeave(),
-            dblclick: (e: MouseEvent) => controller?.onDblClick(e),
-            contextmenu: (e: MouseEvent) => controller?.onContextMenu(e),
-            keydown: (e: KeyboardEvent) => controller?.onKeyDown(e),
-          },
-        }, [h('div', { ref: 'spacerEl', class: 'ov-spacer' })]),
-        h('div', { ref: 'editorSlotEl', class: 'ov-editor-slot' }),
-        renderFindBar(),
-      ]),
+      // 空 render-area 外壳 — controller 在 onMounted 时手动 createElement + appendChild 进来,
+      // Vue patch 不会动 controller 加的 children (它管的是 VNode children=[], 不扫描 DOM).
+      // 必须给 key, 否则 Vue 2 patch 没 key 时按 tag 匹配, 会把这个 div 复用成其他 chrome div,
+      // 修改它的 className 和内容 — 我们辛苦 append 的 canvas/overlays 全没了, controller.els.renderArea 变 stale.
+      h('div', { key: 'render-area', ref: renderAreaSlot.bind as any, class: 'ov-render-area' }),
       renderSheetTabs(),
-      // 隐藏文件拾取器 (用于工具栏 / 命令式触发 setRuntimeTemplate)
+      // findbar / state 浮层 — 用 absolute 浮在 viewer 主体上方
+      renderFindBar(),
+      renderState(),
       h('input', {
-        ref: 'templateInputEl',
+        key: 'tpl-input',
+        ref: templateInputSlot.bind as any,
         attrs: { type: 'file', accept: '.xlsx,.xlsm', hidden: true },
         on: { change: onTemplateFilePicked },
       }),

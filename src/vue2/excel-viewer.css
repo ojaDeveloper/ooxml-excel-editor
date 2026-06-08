@@ -196,6 +196,59 @@
   pointer-events: none;
 }
 
+/* ============ Loading / Error / Empty 状态浮层 ============ */
+.ooxml-excel-viewer .ov-state {
+  position: absolute;
+  inset: 0;
+  z-index: 8;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.85);
+  color: #444;
+  font-size: 13px;
+  pointer-events: none;
+}
+.ooxml-excel-viewer .ov-state-error {
+  color: #c1272d;
+  font-weight: 600;
+}
+.ooxml-excel-viewer .ov-state-hint {
+  color: #888;
+}
+.ooxml-excel-viewer .ov-loader {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  min-width: 240px;
+}
+.ooxml-excel-viewer .ov-loader-label {
+  font-size: 13px;
+  color: #21a366;
+  font-weight: 600;
+}
+.ooxml-excel-viewer .ov-loader-track {
+  width: 240px;
+  height: 6px;
+  background: #e2e4e7;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.ooxml-excel-viewer .ov-loader-fill {
+  height: 100%;
+  background: #21a366;
+  transition: width 0.18s ease;
+}
+.ooxml-excel-viewer .ov-loader-fill.indeterminate {
+  width: 35%;
+  animation: ov-loader-slide 1.2s ease-in-out infinite;
+}
+@keyframes ov-loader-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(380%); }
+}
+
 /* ============ 查找条 ============ */
 .ooxml-excel-viewer .ov-findbar {
   position: absolute;
