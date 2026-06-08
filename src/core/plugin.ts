@@ -45,6 +45,25 @@ export type PluginEvent =
   | 'dirty-change'
   | 'image-change'
   | 'struct-change'
+  | 'permission-denied'
+
+/**
+ * 权限拒绝事件 payload (Phase A, 2026-06-08):mutation 因 editable / editableTargets /
+ * readOnlyRanges / cellReadOnly 被阻挡时, 一次操作结束**统一**发一次. 默认行为仍是
+ * **静默跳过**(跟 editRange 一致), 此事件**只通知**消费方做 toast / 高亮, 不阻断流程.
+ *
+ * 一次操作只 emit 一次 (避免 N 张图 spam N 次).
+ */
+export interface PermissionDeniedPayload {
+  /** 触发的操作类型 */
+  reason: 'paste' | 'merge' | 'unmerge' | 'image-place' | 'image-convert' | 'dimension' | 'other'
+  /** 被拒的目标格 (粘贴 / 合并 / 图片转换 等场景下的具体位置;'dimension' 时可空) */
+  cells: Array<{ row: number; col: number }>
+  /** 'dimension' 场景下被拒的列 / 行 index 列表 */
+  dims?: { axis: 'col' | 'row'; indices: number[] }
+  /** 给消费方的可读说明 */
+  message?: string
+}
 
 /** 命令式 API(组件 ref 与插件 ctx 共用) */
 export interface ViewerApi {

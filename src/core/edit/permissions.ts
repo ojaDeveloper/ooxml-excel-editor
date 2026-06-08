@@ -37,6 +37,50 @@ export function matchesEditableTarget(row: number, col: number, t: EditableTarge
   return false
 }
 
+/** 把一组格按"是否可编辑"二分. 用于粘贴 / 图片转换 等"批量目标 + 部分跳过"场景. */
+export function partitionByEditable(
+  sheet: SheetModel,
+  cells: Array<{ row: number; col: number }>,
+  cfg: EditConfig,
+): { allowed: Array<{ row: number; col: number }>; denied: Array<{ row: number; col: number }> } {
+  const allowed: Array<{ row: number; col: number }> = []
+  const denied: Array<{ row: number; col: number }> = []
+  for (const c of cells) {
+    if (resolveEditable(sheet, c.row, c.col, cfg)) allowed.push(c)
+    else denied.push(c)
+  }
+  return { allowed, denied }
+}
+
+/** 区域是否**全可编辑**(任一格只读即返 ok=false + firstDenied). 用于 mergeCells / unmergeCells. */
+export function rangeAllEditable(
+  sheet: SheetModel,
+  range: MergeRange,
+  cfg: EditConfig,
+): { ok: boolean; firstDenied?: { row: number; col: number } } {
+  for (let r = range.top; r <= range.bottom; r++) {
+    for (let c = range.left; c <= range.right; c++) {
+      if (!resolveEditable(sheet, r, c, cfg)) return { ok: false, firstDenied: { row: r, col: c } }
+    }
+  }
+  return { ok: true }
+}
+
+/** 收集区域里全部不可编辑的格(用于 emit permission-denied 时填 cells 列表). */
+export function collectDeniedInRange(
+  sheet: SheetModel,
+  range: MergeRange,
+  cfg: EditConfig,
+): Array<{ row: number; col: number }> {
+  const out: Array<{ row: number; col: number }> = []
+  for (let r = range.top; r <= range.bottom; r++) {
+    for (let c = range.left; c <= range.right; c++) {
+      if (!resolveEditable(sheet, r, c, cfg)) out.push({ row: r, col: c })
+    }
+  }
+  return out
+}
+
 export function resolveEditable(sheet: SheetModel, row: number, col: number, cfg: EditConfig): boolean {
   if (!cfg.editable) return false
   // ② 白名单 —— 显式设了就启用(即便 [] 也启用 = 全只读;undefined 才走"默认全可编辑")

@@ -11,6 +11,27 @@ import { cloneImageAnchor, convertFloatToCellImage, convertCellImageToFloat, set
 import { pxToEmu } from '../layout/units'
 import type { ParsedClipboard } from './clipboard-html'
 import { applyCommand, affectedOf, isDimCommand, isImageCommand, isStructCommand, type CellPos, type DimAxis, type EditCommand } from './commands'
+import type { PermissionDeniedPayload } from '../plugin'
+
+/** 区域是否全可编辑(per-cell 检查;走 host.isEditable 闸门). 任一只读 → 返 false. */
+function _rangeAllEditableViaHost(host: EditControllerHost, range: MergeRange): boolean {
+  for (let r = range.top; r <= range.bottom; r++) {
+    for (let c = range.left; c <= range.right; c++) {
+      if (!host.isEditable(r, c)) return false
+    }
+  }
+  return true
+}
+/** 收集区域里全部不可编辑的格(给 permission-denied payload). */
+function _collectDeniedInRangeViaHost(host: EditControllerHost, range: MergeRange): Array<{ row: number; col: number }> {
+  const out: Array<{ row: number; col: number }> = []
+  for (let r = range.top; r <= range.bottom; r++) {
+    for (let c = range.left; c <= range.right; c++) {
+      if (!host.isEditable(r, c)) out.push({ row: r, col: c })
+    }
+  }
+  return out
+}
 import { applyStructOp, type StructOp } from '../model/structure'
 import { rewriteWorkbookFormulas } from '../formula/refs'
 import type { FormulaEngine, FormulaEngineFactory } from '../formula/engine'
@@ -24,6 +45,7 @@ export type EditEventName =
   | 'dirty-change'
   | 'image-change'
   | 'struct-change'
+  | 'permission-denied'
 export type EditSource = 'api' | 'ui' | 'undo' | 'redo'
 
 /** 结构变更事件载荷(增删行列;restore = 撤销/重做的整体还原) */
@@ -265,13 +287,23 @@ export class EditController {
       const col = start.col + s.col
       if (this.host.isEditable(row, col)) applyStyleOverride(sheet, row, col, s.patch)
     }
+    // Phase A 补漏 (2026-06-08): 合并 / 图片粘贴 per-cell editable 检查; 跳过的位置 emit permission-denied
+    const denied: Array<{ row: number; col: number }> = []
     for (const m of merges) {
       const range = { top: start.row + m.top, left: start.col + m.left, bottom: start.row + m.bottom, right: start.col + m.right }
-      if (range.top !== range.bottom || range.left !== range.right) applyCommand(sheet, { kind: 'merge-cells', range })
+      if (range.top === range.bottom && range.left === range.right) continue
+      // 合并区域内任一格只读 → 跳过这块 + 收集 denied
+      if (!_rangeAllEditableViaHost(this.host, range)) {
+        denied.push(..._collectDeniedInRangeViaHost(this.host, range))
+        continue
+      }
+      applyCommand(sheet, { kind: 'merge-cells', range })
     }
     for (const im of images) {
       const row = start.row + im.row
       const col = start.col + im.col
+      // 目标格只读 → 跳过 + 收集 denied
+      if (!this.host.isEditable(row, col)) { denied.push({ row, col }); continue }
       const dec = dataUrlToBytes(im.dataUrl)
       if (!dec) continue
       const idx = addImage(sheet, { src: im.dataUrl, bytes: dec.bytes, mime: dec.mime, from: { col, row, colOffEmu: 0, rowOffEmu: 0 }, extWidthEmu: pxToEmu(96), extHeightEmu: pxToEmu(96) })
@@ -286,6 +318,11 @@ export class EditController {
     affected.forEach((p, i) =>
       this.host.emit('cell-change', { before: before[i], after: buildCellSnapshot(sheet, p.row, p.col, d), source: 'api' } satisfies CellChangePayload),
     )
+    // Phase A: 合并 / 图片粘贴撞只读 → 整次结束发一次 permission-denied
+    if (denied.length) {
+      const payload: PermissionDeniedPayload = { reason: 'paste', cells: denied, message: `粘贴撞 ${denied.length} 个只读格,已跳过` }
+      this.host.emit('permission-denied', payload)
+    }
     return true
   }
 
@@ -345,10 +382,16 @@ export class EditController {
   }
 
   // ---- 合并单元格(G1) ----
-  /** 合并区域(吸收相交旧合并,清空被覆盖格只留左上锚点)。单格不合并。 */
+  /** 合并区域(吸收相交旧合并,清空被覆盖格只留左上锚点)。单格不合并。
+   *  Phase A 补漏 (2026-06-08): 区域内任一格只读 → 拒绝整次合并 + emit permission-denied. */
   mergeCells(range: MergeRange): boolean {
     if (!this.host.isEditingEnabled()) return false
     if (range.top === range.bottom && range.left === range.right) return false
+    const denied = _collectDeniedInRangeViaHost(this.host, range)
+    if (denied.length) {
+      this.host.emit('permission-denied', { reason: 'merge', cells: denied, message: `合并区域内有 ${denied.length} 个只读格,已拒绝` } satisfies PermissionDeniedPayload)
+      return false
+    }
     this.ensureBaseline()
     const inv = this.exec({ kind: 'merge-cells', range }, 'api')
     if (inv) {
@@ -357,9 +400,15 @@ export class EditController {
     }
     return !!inv
   }
-  /** 拆分:移除与区域相交的所有合并。 */
+  /** 拆分:移除与区域相交的所有合并。
+   *  Phase A 补漏 (2026-06-08): 区域内任一格只读 → 拒绝整次拆分 + emit permission-denied. */
   unmergeCells(range: MergeRange): boolean {
     if (!this.host.isEditingEnabled()) return false
+    const denied = _collectDeniedInRangeViaHost(this.host, range)
+    if (denied.length) {
+      this.host.emit('permission-denied', { reason: 'unmerge', cells: denied, message: `拆分区域内有 ${denied.length} 个只读格,已拒绝` } satisfies PermissionDeniedPayload)
+      return false
+    }
     this.ensureBaseline()
     const inv = this.exec({ kind: 'unmerge-cells', range }, 'api')
     if (inv) {
@@ -417,6 +466,11 @@ export class EditController {
    */
   convertImageToCell(imageIndex: number, row: number, col: number): boolean {
     if (!this.host.isEditingEnabled()) return false
+    // Phase A 补漏: 目标格只读 → 拒绝
+    if (!this.host.isEditable(row, col)) {
+      this.host.emit('permission-denied', { reason: 'image-convert', cells: [{ row, col }], message: '目标格只读,无法嵌入图片' } satisfies PermissionDeniedPayload)
+      return false
+    }
     this.ensureBaseline()
     const inv = this.exec({ kind: 'convert-to-cell', imageIndex, row, col }, 'api')
     if (inv) {
@@ -428,13 +482,22 @@ export class EditController {
   /**
    * 批量把多张浮动图嵌入各自的目标格(整表/整列);一次进撤销栈。返回成功嵌入的张数。
    * targets 的 imageIndex 是调用前的浮动图索引(内部按降序 splice,索引互不干扰)。
+   * Phase A 补漏: 过滤掉目标格只读的 targets, denied 一次性 emit.
    */
   convertImagesToCells(targets: { imageIndex: number; row: number; col: number }[]): number {
     if (!this.host.isEditingEnabled() || !targets.length) return 0
+    const denied: Array<{ row: number; col: number }> = []
+    const allowed: typeof targets = []
+    for (const t of targets) {
+      if (this.host.isEditable(t.row, t.col)) allowed.push(t)
+      else denied.push({ row: t.row, col: t.col })
+    }
+    if (denied.length) this.host.emit('permission-denied', { reason: 'image-convert', cells: denied, message: `${denied.length} 个目标格只读,已跳过` } satisfies PermissionDeniedPayload)
+    if (!allowed.length) return 0
     const sheet = this.host.getSheet()
     const before = sheet?.images.length ?? 0
     this.ensureBaseline()
-    const inv = this.exec({ kind: 'convert-to-cells', targets }, 'api')
+    const inv = this.exec({ kind: 'convert-to-cells', targets: allowed }, 'api')
     if (inv) {
       this.pushUndo(inv)
       this.markDirty()
@@ -445,9 +508,14 @@ export class EditController {
   /**
    * 单元格内嵌图 → 浮动图:把 (row,col) 的 DISPIMG 拎出来变成浮动图(默认 96×96px)。
    * 非内嵌图格 → 返 false。入命令栈。
+   * Phase A 补漏: 源格只读 → 拒绝 (拎出来意味着该格内容变了,属于修改).
    */
   convertCellImageToFloat(row: number, col: number, size?: { width: number; height: number }): boolean {
     if (!this.host.isEditingEnabled()) return false
+    if (!this.host.isEditable(row, col)) {
+      this.host.emit('permission-denied', { reason: 'image-convert', cells: [{ row, col }], message: '源格只读,无法转浮动图' } satisfies PermissionDeniedPayload)
+      return false
+    }
     this.ensureBaseline()
     const inv = this.exec({ kind: 'convert-to-float', row, col, size }, 'api')
     if (inv) {
@@ -459,13 +527,22 @@ export class EditController {
   /**
    * 批量把多格 DISPIMG 拎成浮动图(选区批量反向);非内嵌图格自动跳过;一次进撤销栈。
    * 返回成功转换的张数。
+   * Phase A 补漏: 过滤掉源格只读的, denied 一次性 emit.
    */
   convertCellImagesToFloats(cells: { row: number; col: number; size?: { width: number; height: number } }[]): number {
     if (!this.host.isEditingEnabled() || !cells.length) return 0
+    const denied: Array<{ row: number; col: number }> = []
+    const allowed: typeof cells = []
+    for (const c of cells) {
+      if (this.host.isEditable(c.row, c.col)) allowed.push(c)
+      else denied.push({ row: c.row, col: c.col })
+    }
+    if (denied.length) this.host.emit('permission-denied', { reason: 'image-convert', cells: denied, message: `${denied.length} 个源格只读,已跳过` } satisfies PermissionDeniedPayload)
+    if (!allowed.length) return 0
     const sheet = this.host.getSheet()
     const before = sheet?.images.length ?? 0
     this.ensureBaseline()
-    const inv = this.exec({ kind: 'convert-to-floats', cells }, 'api')
+    const inv = this.exec({ kind: 'convert-to-floats', cells: allowed }, 'api')
     if (inv) {
       this.pushUndo(inv)
       this.markDirty()

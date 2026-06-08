@@ -926,23 +926,35 @@ export class ViewerController {
     const rows = range.bottom - range.top + 1
     const cols = range.right - range.left + 1
     const single = ctx.single
+    // Phase A 补漏 (2026-06-08): 各菜单项 disabled 反映 editable 闸门 (UX 跟权限一致)
+    // anyEditable: 区域内至少 1 格可编辑 (粘贴/清除/换行/换需要)
+    // allEditable: 区域内全部可编辑 (合并/拆分需要 — 否则 emit permission-denied 拒绝)
+    let anyEditable = false
+    let allEditable = true
+    for (let r = range.top; r <= range.bottom; r++) {
+      for (let c = range.left; c <= range.right; c++) {
+        if (this.isCellEditable(r, c)) anyEditable = true
+        else allEditable = false
+      }
+    }
     const items: MenuItem[] = [
       { label: '复制', action: () => void this.copySelection() },
-      { label: '粘贴', action: () => void this.pasteFromClipboard() },
+      { label: '粘贴', disabled: !anyEditable, action: () => void this.pasteFromClipboard() },
       { separator: true },
       { label: `在上方插入 ${rows} 行`, action: () => this.insertRows(range.top, rows) },
       { label: `在左侧插入 ${cols} 列`, action: () => this.insertCols(range.left, cols) },
-      { label: `删除 ${rows} 行`, action: () => this.deleteRows(range.top, rows) },
-      { label: `删除 ${cols} 列`, action: () => this.deleteCols(range.left, cols) },
+      { label: `删除 ${rows} 行`, disabled: !allEditable, action: () => this.deleteRows(range.top, rows) },
+      { label: `删除 ${cols} 列`, disabled: !allEditable, action: () => this.deleteCols(range.left, cols) },
       { separator: true },
-      { label: '合并单元格', disabled: single, action: () => this.mergeCells(range) },
-      { label: '拆分单元格', action: () => this.unmergeCells(range) },
+      { label: '合并单元格', disabled: single || !allEditable, action: () => this.mergeCells(range) },
+      { label: '拆分单元格', disabled: !allEditable, action: () => this.unmergeCells(range) },
       {
         label: (this.getSelectionWrapState() === 'all' ? '✓ ' : '') + '自动换行',
+        disabled: !anyEditable,
         action: () => this.toggleWrapTextOnSelection(),
       },
       { separator: true },
-      { label: '清除内容', action: () => this.clearRange(range) },
+      { label: '清除内容', disabled: !anyEditable, action: () => this.clearRange(range) },
     ]
     // 选区批量(多格)— 浮动图批量嵌入 / 嵌入图批量浮动化
     if (!single) {

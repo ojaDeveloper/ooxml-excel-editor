@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import type { ExcelPlugin, ExcelPluginContext, OverlayContext, PluginEvent, ToolbarItem, ViewerApi } from '@/core/plugin'
+import type { ExcelPlugin, ExcelPluginContext, OverlayContext, PermissionDeniedPayload, PluginEvent, ToolbarItem, ViewerApi } from '@/core/plugin'
 import { PluginOverlayHost } from '@/core/viewer/plugin-overlay'
 import { loadArrayBuffer, type ExcelSource } from '@/core/loader'
 import { jsonToWorkbook, isWorkbookModel, type JsonInput, type JsonLoadOptions } from '@/core/loader-json'
@@ -202,6 +202,8 @@ const emit = defineEmits<{
   (e: 'image-change', payload: ImageChangePayload): void
   /** 行列结构变更(增删行列 / 撤销重做的整体还原) */
   (e: 'struct-change', payload: StructChangePayload): void
+  /** 权限拒绝(Phase A, 2026-06-08):粘贴/合并/图片落点等命中只读 → 默认 skip + 此事件通知 */
+  (e: 'permission-denied', payload: PermissionDeniedPayload): void
   /** 右键菜单触发前(Plan C):用户调 `payload.preventDefault()` 阻止内置菜单(然后自渲染) */
   (e: 'before-context-menu', payload: ContextMenuBeforePayload): void
   /** 右键菜单"展示"通知(Plan C):无论内置是否弹都触发,供自渲染或事件流串到业务 */

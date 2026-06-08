@@ -164,6 +164,58 @@ describe('resolveEditable — editableTargets 白名单 (2026-06-08)', () => {
   })
 })
 
+describe('partitionByEditable / rangeAllEditable / collectDeniedInRange — Phase A helpers (2026-06-08)', () => {
+  it('partitionByEditable: 把 5 个格 (3 允许 / 2 拒) 拆开', async () => {
+    const { partitionByEditable } = await import('../permissions')
+    const s = sheetWith()
+    const cfg: EditConfig = {
+      editable: true,
+      editableTargets: [{ row: 0, col: 0 }, { row: 1, col: 1 }, { row: 2, col: 2 }],
+    }
+    const cells = [
+      { row: 0, col: 0 }, // ✓
+      { row: 1, col: 1 }, // ✓
+      { row: 2, col: 2 }, // ✓
+      { row: 0, col: 1 }, // ✗
+      { row: 3, col: 3 }, // ✗
+    ]
+    const { allowed, denied } = partitionByEditable(s, cells, cfg)
+    expect(allowed).toHaveLength(3)
+    expect(denied).toHaveLength(2)
+    expect(denied[0]).toEqual({ row: 0, col: 1 })
+  })
+
+  it('rangeAllEditable: 区域内任一格只读 → ok=false + firstDenied', async () => {
+    const { rangeAllEditable } = await import('../permissions')
+    const s = sheetWith()
+    const cfg: EditConfig = { editable: true, editableTargets: [{ row: 0, col: 0 }] }
+    // 区域 (0,0)-(1,1) 含 (0,1),(1,0),(1,1) 三个非白名单格
+    const got = rangeAllEditable(s, { top: 0, left: 0, bottom: 1, right: 1 }, cfg)
+    expect(got.ok).toBe(false)
+    expect(got.firstDenied).toEqual({ row: 0, col: 1 })
+  })
+
+  it('rangeAllEditable: 区域全可编辑 → ok=true', async () => {
+    const { rangeAllEditable } = await import('../permissions')
+    const s = sheetWith()
+    const cfg: EditConfig = { editable: true }
+    const got = rangeAllEditable(s, { top: 0, left: 0, bottom: 2, right: 2 }, cfg)
+    expect(got.ok).toBe(true)
+    expect(got.firstDenied).toBeUndefined()
+  })
+
+  it('collectDeniedInRange: 返回区域内全部 denied 格', async () => {
+    const { collectDeniedInRange } = await import('../permissions')
+    const s = sheetWith()
+    const cfg: EditConfig = { editable: true, editableTargets: [{ row: 1, col: 1 }] }
+    // 3×3 区域只有中心 (1,1) 允许, 其余 8 格 denied
+    const denied = collectDeniedInRange(s, { top: 0, left: 0, bottom: 2, right: 2 }, cfg)
+    expect(denied).toHaveLength(8)
+    // 验证不包含 (1,1)
+    expect(denied.some((c) => c.row === 1 && c.col === 1)).toBe(false)
+  })
+})
+
 describe('matchesEditableTarget — 形状识别', () => {
   it('每种形状自动识别, 互不混淆', async () => {
     const { matchesEditableTarget } = await import('../permissions')

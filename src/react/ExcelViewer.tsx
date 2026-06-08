@@ -51,6 +51,7 @@ import type {
   ExcelPlugin,
   MenuItem,
   OverlayContext,
+  PermissionDeniedPayload,
   PluginEvent,
   ViewerApi,
 } from '@/core/plugin'
@@ -147,6 +148,8 @@ export interface ExcelViewerProps {
   onImageChange?: (p: ImageChangePayload) => void
   /** 行列结构变更(增删行列) */
   onStructChange?: (p: StructChangePayload) => void
+  /** 权限拒绝(Phase A, 2026-06-08):粘贴/合并/图片落点等命中只读 → 默认 skip + 此事件通知 */
+  onPermissionDenied?: (p: PermissionDeniedPayload) => void
 }
 
 /** 命令式句柄(与 Vue ref / ViewerApi 对齐) */
@@ -453,6 +456,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
           else if (event === 'dirty-change') propsRef.current.onDirtyChange?.(payload as DirtyChangePayload)
           else if (event === 'image-change') propsRef.current.onImageChange?.(payload as ImageChangePayload)
           else if (event === 'struct-change') propsRef.current.onStructChange?.(payload as StructChangePayload)
+          else if (event === 'permission-denied') propsRef.current.onPermissionDenied?.(payload as PermissionDeniedPayload)
           firePlugin(event, payload)
         },
         onContextMenuBefore: (payload) => {
