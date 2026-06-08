@@ -222,6 +222,7 @@ function Demo() {
           recalc={editMode}
           readOnlyRanges={readOnlyRanges}
           editor={demoSelectEditor}
+          toolbar={['find', 'filter', 'clear-filter', 'separator', 'copy', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export']}
           onSelectionChange={() => bumpSel()}
           onCellChange={(p) => {
             bumpSel() // 颜色回显随内容/样式变更刷新

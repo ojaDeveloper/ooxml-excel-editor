@@ -7,38 +7,140 @@
   background: #fff;
   overflow: hidden;
 }
+/* ============ ViewerToolbar (顶部 chrome, 1:1 跟 Vue 3 SFC) ============ */
 .rxl-toolbar {
   display: flex;
   align-items: center;
-  gap: 4px;
-  flex: 0 0 auto;
-  height: 34px;
-  padding: 0 8px;
+  gap: 12px;
+  height: 36px;
+  padding: 0 12px;
+  background: #fbfbfb;
   border-bottom: 1px solid #e2e4e7;
-  background: #fafafa;
+  font-size: 13px;
+  color: #444;
+  flex: 0 0 auto;
 }
-.rxl-toolbar button {
+.rxl-toolbar .file {
+  font-weight: 600;
+  max-width: 460px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.rxl-toolbar .tpl {
+  font-weight: 400;
+  color: #6b7280;
+  font-size: 12px;
+  margin-left: 4px;
+}
+.rxl-toolbar .meta { color: #888; }
+.rxl-toolbar .spacer { flex: 1; }
+.rxl-export-wrap { position: relative; }
+.rxl-export-btn {
   height: 24px;
   padding: 0 10px;
-  border: 1px solid transparent;
+  border: 1px solid #d0d3d6;
+  background: #fff;
   border-radius: 4px;
-  background: transparent;
-  color: #333;
-  font-size: 13px;
   cursor: pointer;
+  font-size: 13px;
+  color: #444;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
-.rxl-toolbar button:hover:not(:disabled) {
-  background: #eceef0;
+.rxl-export-btn:hover { background: #f0f2f4; }
+.rxl-export-btn .caret { font-size: 10px; color: #888; }
+.rxl-tb-menu {
+  position: absolute;
+  z-index: 20;
+  min-width: 160px;
+  background: #fff;
+  border: 1px solid #d8dbde;
+  border-radius: 6px;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.14);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
 }
-.rxl-toolbar button.active {
-  background: #d6e9d9;
-  border-color: #21a366;
-  color: #1b7a4d;
+.rxl-tb-menu.header-menu { right: 0; top: 28px; }
+.rxl-tb-menu .mi {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+  padding: 7px 10px;
+  border: none;
+  background: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #333;
+  white-space: nowrap;
 }
-.rxl-toolbar button:disabled {
-  color: #bbb;
-  cursor: default;
+.rxl-tb-menu .mi:hover:not(:disabled) { background: #f0f4ff; }
+.rxl-tb-menu .mi:disabled { color: #bbb; cursor: default; }
+.rxl-tb-menu .mi.active { color: #1a73e8; }
+.rxl-tb-menu .mi .ic { display: inline-flex; width: 16px; }
+.rxl-tb-menu .mi .ic-e { width: 16px; text-align: center; }
+.rxl-tb-menu .sep { height: 1px; background: #eef0f2; margin: 4px 2px; }
+.rxl-zoom { display: flex; align-items: center; gap: 4px; }
+.rxl-zoom button {
+  width: 24px;
+  height: 24px;
+  border: 1px solid #d0d3d6;
+  background: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 15px;
+  line-height: 1;
 }
+.rxl-zoom button:hover { background: #f0f2f4; }
+.rxl-zoom select {
+  height: 24px;
+  border: 1px solid #d0d3d6;
+  border-radius: 4px;
+  background: #fff;
+}
+
+/* ============ ActionToolbar (操作工具栏, 1:1 跟 Vue 3 SFC) ============ */
+.rxl-action-toolbar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 34px;
+  flex: 0 0 auto;
+  padding: 0 10px;
+  background: #fff;
+  border-bottom: 1px solid #e2e4e7;
+  overflow: visible;
+}
+.rxl-at-dd { position: relative; display: inline-flex; }
+.rxl-at-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 9px;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: none;
+  cursor: pointer;
+  font-size: 13px;
+  color: #444;
+  white-space: nowrap;
+}
+.rxl-at-tool:hover:not(:disabled) { background: #f0f2f4; }
+.rxl-at-tool:disabled { color: #bbb; cursor: default; }
+.rxl-at-tool.active { background: #e8f0fe; color: #1a73e8; border-color: #c5d9fb; }
+.rxl-at-tool.open { background: #eef0f2; }
+.rxl-at-ic { display: inline-flex; }
+.rxl-at-ic-e { font-size: 13px; line-height: 1; }
+.rxl-at-caret { display: inline-flex; opacity: 0.6; margin-left: -2px; }
+.rxl-at-caret svg { width: 12px; height: 12px; }
+.rxl-at-divider { width: 1px; align-self: stretch; margin: 6px 4px; background: #e2e4e7; }
+.rxl-at-dd .rxl-tb-menu { top: 30px; left: 0; }
 /* Phase 1.2.1 (2026-06-08): 公式栏自动撑高跟 textarea 内容一致, 上限 ~6 行 */
 .rxl-formula-bar {
   display: flex;
@@ -304,10 +406,6 @@
 .rxl-state.error {
   color: #c0392b;
 }
-
-/* 标题栏(P3 进阶):显示 displayFileName + 模板后缀 */
-.rxl .rxl-title { padding: 6px 12px; background: #fbfbfb; border-bottom: 1px solid #eceef1; font: 600 13px/1 -apple-system, 'Segoe UI', sans-serif; color: #1f2329; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rxl .rxl-title .tpl { font-weight: 400; color: #6b7280; font-size: 12px; }
 
 /* ExportProgressOverlay(P1.5):居中模态,跟 Vue 端 .export-progress-overlay 同视觉 */
 .rxl-export-progress { position: fixed; inset: 0; z-index: 9999; background: rgba(0, 0, 0, 0.42); display: flex; align-items: center; justify-content: center; font: 13px/1.5 -apple-system, 'Segoe UI', sans-serif; }

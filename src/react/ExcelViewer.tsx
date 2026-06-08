@@ -13,6 +13,9 @@ import {
   useState,
   type CSSProperties,
 } from 'react'
+import type { ResolvedToolbarItem } from '@/components/toolbar-types'
+import { TOOLBAR_ICONS, svgWrap } from '@/components/toolbar-icons'
+import type { ToolbarItem } from '@/core/plugin'
 import type { CellModel, CellStyleFn, CellStyleOverride, ImageAnchor, MergeRange, SheetModel, TransformModelFn, WorkbookModel } from '@/core/model/types'
 import type { EditableTarget, EditConfig } from '@/core/edit/types'
 import type { FormulaEngineFactory } from '@/core/formula/engine'
@@ -138,6 +141,15 @@ export interface ExcelViewerProps {
   recalc?: boolean
   /** 自定义/自研公式引擎工厂(可换引擎);不给则用默认 HyperFormula(需 npm i hyperformula) */
   formulaEngine?: FormulaEngineFactory
+  /**
+   * 操作工具栏配置 (跟 Vue 3/Vue 2 同 API):
+   * - `true`/不传(默认): 显示默认两项 ['find', 'filter']
+   * - `false`: 隐藏整条工具栏
+   * - 数组: 显式控制项与顺序 (内置 id 或自定义 ToolbarItem)
+   * - 内置 id: find / filter / clear-filter / copy / wrap-text / template / image-tools /
+   *   freeze / export / zoom / 'separator' (或 '|')
+   */
+  toolbar?: boolean | Array<string | import('@/core/plugin').ToolbarItem>
   className?: string
   style?: CSSProperties
   onRendered?: (wb: WorkbookModel) => void
@@ -285,6 +297,16 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   }
   const displayFileName = props.fileName || (props.workbook ? 'JSON 数据' : workbook?.sheets[0]?.name || '')
   const [findOpen, setFindOpen] = useState(false)
+  // 工具栏下拉菜单全局唯一 open id (header 导出 + action toolbar 各项的子菜单)
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
+  useEffect(() => {
+    if (typeof document === 'undefined') return
+    const onDocClick = (e: MouseEvent) => {
+      if (!(e.target as HTMLElement)?.closest('[data-tb-menu]')) setMenuOpenId(null)
+    }
+    document.addEventListener('click', onDocClick)
+    return () => document.removeEventListener('click', onDocClick)
+  }, [])
   const [, force] = useReducer((x: number) => x + 1, 0)
   // 公式栏编辑态(draft = 编辑中的文本;ref 标记是否正在编辑栏,改 ref 不触发重渲)
   const [fbDraft, setFbDraft] = useState('')
@@ -963,92 +985,224 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       : ''
   const stats = renderer && selection ? renderer.selectionStats(selection) : null
   const findState = controller?.getFindState() ?? { query: '', matchCase: false, wholeCell: false, count: 0, index: -1 }
+
+  // ---- 工具栏配置 (1:1 跟 Vue 3 SFC builtinTool / resolveItem / resolvedToolbar) ----
+  const I = (name: string) => TOOLBAR_ICONS[name]
+  const bi = (o: Partial<ResolvedToolbarItem> & { id: string }): ResolvedToolbarItem => ({ kind: 'builtin', ...o })
+  const sheet = workbook?.sheets[activeSheet]
+  const onExportPdf = () => void controllerRef.current?.downloadPdf().catch(onExportError)
+  const onExportPdfVector = () => void controllerRef.current?.downloadPdf({ vector: true }).catch(onExportError)
+  const onPrint = () => void controllerRef.current?.print().catch(onExportError)
+  const toggleFreeze = () => {
+    const s = sheet
+    const ctrl = controllerRef.current
+    if (!s || !ctrl) return
+    const fz = s.freeze
+    if (fz.frozenRows || fz.frozenCols) s.freeze = { frozenRows: 0, frozenCols: 0 }
+    else { const c = ctrl.getActiveCell(); s.freeze = { frozenRows: c ? c.row : 1, frozenCols: c ? c.col : 0 } }
+    ctrl.renderer?.rebuildMetrics(); ctrl.refreshContentSize(); ctrl.render()
+  }
+  function builtinTool(id: string): ResolvedToolbarItem | null {
+    const ctrl = controllerRef.current
+    switch (id) {
+      case 'find': return bi({ id, iconSvg: I('find'), label: '查找', title: '查找 (Ctrl+F)', active: findOpen, onClick: () => (findOpen ? closeFind() : setFindOpen(true)) })
+      case 'filter': return bi({ id, iconSvg: I('filter'), label: '筛选', title: '切换自动筛选', active: !!sheet?.autoFilterRange, onClick: () => ctrl?.toggleAutoFilter() })
+      case 'clear-filter': return bi({ id, iconSvg: I('clear-filter'), label: '清除筛选', title: '清除当前表全部筛选', disabled: !ctrl?.hasFilters(), onClick: () => ctrl?.clearAllFilters() })
+      case 'copy': return bi({ id, iconSvg: I('copy'), label: '复制', title: '复制选区 (Ctrl+C)', disabled: !selection, onClick: () => void ctrl?.copySelection() })
+      case 'wrap-text': {
+        const wrapState = ctrl?.getSelectionWrapState() ?? 'none'
+        return bi({ id, iconSvg: I('wrap-text'), label: '自动换行', title: '自动换行(选区,WPS 风格 toggle)', active: wrapState === 'all', disabled: !selection || !props.editable, onClick: () => void ctrl?.toggleWrapTextOnSelection() })
+      }
+      case 'template': {
+        const active2 = !!effectiveTemplateSrc
+        const name = effectiveTemplateName
+        const isXlsxSrc = !!props.src && !props.workbook
+        return bi({
+          id, iconSvg: I('template'), label: '模板',
+          title: isXlsxSrc ? '模板仅对 JSON / 模型数据源生效;当前是 .xlsx 数据源,模板不可用'
+            : active2 ? `模板已加载:${name || '(未命名)'}`
+            : '为 JSON / 模型数据源套用 .xlsx 模板的样式;模板的文字内容会被丢弃',
+          active: active2, disabled: isXlsxSrc,
+          items: [
+            bi({ id: 'tpl-default', label: (!active2 ? '✓ ' : '') + '默认渲染', title: '不套模板,数据按默认样式渲染', disabled: !active2, onClick: clearRuntimeTemplate }),
+            bi({ id: 'tpl-sep', type: 'separator' }),
+            bi({ id: 'tpl-import', label: '导入 .xlsx 模板…', title: '选一份 .xlsx, 把它的 styling 套到当前 JSON 数据上', onClick: openTemplateFilePicker }),
+            bi({ id: 'tpl-clear', label: '清除模板', title: '切回默认样式渲染', disabled: !active2, onClick: clearRuntimeTemplate }),
+          ],
+        })
+      }
+      case 'image-tools': {
+        const sel = selection
+        const act = ctrl?.getActiveCell()
+        const hasFloats = (sheet?.images.length ?? 0) > 0
+        return bi({
+          id, iconSvg: I('image-tools'), label: '图片工具', title: '浮动图 ⇄ 单元格内嵌图(WPS DISPIMG)互转',
+          disabled: !props.editable,
+          items: [
+            bi({ id: 'img-sel-to-cell', label: '选区:浮动 → 嵌入', title: '把选区里"中心格在选区内"的浮动图就近嵌入', disabled: !sel || !hasFloats, onClick: () => sel && ctrl?.convertImagesInRangeToCell(sel) }),
+            bi({ id: 'img-sel-to-float', label: '选区:嵌入 → 浮动', title: '把选区内所有 DISPIMG 格拎成浮动图', disabled: !sel, onClick: () => sel && ctrl?.convertCellImagesInRangeToFloat(sel) }),
+            bi({ id: 'img-sep', type: 'separator' }),
+            bi({ id: 'img-all-to-cell', label: '整表:浮动 → 嵌入', title: '全表浮动图按几何就近嵌入各自单元格', disabled: !hasFloats, onClick: () => ctrl?.convertAllImagesToCells() }),
+            bi({ id: 'img-col-to-cell', label: '整列:浮动 → 嵌入(活动列)', title: '把中心落在活动列的浮动图就近嵌入', disabled: !hasFloats || !act, onClick: () => act && ctrl?.convertAllImagesToCells(act.col) }),
+          ],
+        })
+      }
+      case 'freeze': {
+        const fz = sheet?.freeze
+        return bi({ id, iconSvg: I('freeze'), label: '冻结', title: '冻结/取消冻结(在活动单元格)', active: !!(fz && (fz.frozenRows || fz.frozenCols)), onClick: toggleFreeze })
+      }
+      case 'export':
+        return bi({
+          id, iconSvg: I('export'), label: '导出', title: '导出 / 打印',
+          items: [
+            bi({ id: 'export-png', label: '导出为图片 (PNG)', onClick: () => void ctrl?.downloadImage().catch(onExportError) }),
+            bi({ id: 'export-pdf', label: '导出为 PDF (位图)', onClick: onExportPdf }),
+            bi({ id: 'export-pdf-vector', label: '导出为 PDF (矢量·文字可选)', onClick: onExportPdfVector }),
+            bi({ id: 'export-print', label: '打印…', onClick: onPrint }),
+          ],
+        })
+      case 'zoom':
+        return bi({
+          id, iconSvg: I('zoom'), label: Math.round(zoom * 100) + '%', title: '缩放',
+          items: [50, 75, 100, 125, 150, 200].map((p) => bi({ id: 'zoom-' + p, label: p + '%', active: Math.round(zoom * 100) === p, onClick: () => setZoom(p / 100) })),
+        })
+    }
+    return null
+  }
+  function resolveItem(it: ToolbarItem, kind: 'custom' | 'plugin'): ResolvedToolbarItem {
+    const out: ResolvedToolbarItem = { kind, id: it.id, type: it.type, icon: it.icon, label: it.label, title: it.title }
+    if (it.active) out.active = !!it.active(viewerApi)
+    if (it.disabled) out.disabled = !!it.disabled(viewerApi)
+    if (it.onClick) out.onClick = () => it.onClick?.(viewerApi)
+    if (it.items?.length) out.items = it.items.map((c) => resolveItem(c, kind))
+    return out
+  }
+  const resolvedToolbar: ResolvedToolbarItem[] = (() => {
+    if (props.toolbar === false) return []
+    const entries: Array<string | ToolbarItem> = Array.isArray(props.toolbar) ? props.toolbar : ['find', 'filter']
+    const out: ResolvedToolbarItem[] = []
+    for (const e of entries) {
+      if (typeof e === 'string') {
+        if (e === 'separator' || e === '|') out.push({ id: 'sep-' + out.length, type: 'separator', kind: 'builtin' })
+        else { const b = builtinTool(e); if (b) out.push(b) }
+      } else {
+        out.push(resolveItem(e, 'custom'))
+      }
+    }
+    for (const p of plugins) for (const it of p.toolbar ?? []) out.push(resolveItem(it, 'plugin'))
+    return out
+  })()
+  const showActionBar = props.toolbar !== false && resolvedToolbar.length > 0
+  const visibleSheetCount = workbook ? workbook.sheets.filter((s) => s.state === 'visible').length : 0
+  const STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2]
+  const setZoomClamped = (z: number) => setZoom(Math.min(3, Math.max(0.3, z)))
+  // 子组件: 工具栏下拉菜单 (header 导出 / action toolbar 各项的子菜单 共用)
+  const ToolbarMenu = ({ items, onPick, className = 'rxl-tb-menu' }: { items: ResolvedToolbarItem[]; onPick: (it: ResolvedToolbarItem) => void; className?: string }) => (
+    <div className={className} data-tb-menu="true">
+      {items.map((it) => it.type === 'separator' ? (
+        <div key={it.id} className="sep" />
+      ) : (
+        <button
+          key={it.id}
+          className={'mi' + (it.active ? ' active' : '')}
+          disabled={!!it.disabled}
+          title={it.title}
+          onClick={(e) => { e.stopPropagation(); if (!it.disabled) onPick(it) }}
+        >
+          {it.iconSvg ? <span className="ic" dangerouslySetInnerHTML={{ __html: svgWrap(it.iconSvg) }} />
+            : it.icon ? <span className="ic-e">{it.icon}</span>
+            : null}
+          <span className="lb">{it.label || it.id}</span>
+        </button>
+      ))}
+    </div>
+  )
   const filterPopup = controller?.getFilterPopup() ?? null
   const tooltip = tooltipRef.current
-  const curSheet = workbook?.sheets[activeSheet] ?? null
   const visibleSheets = workbook ? workbook.sheets.map((s, i) => ({ s, i })).filter(({ s }) => s.state === 'visible') : []
 
   return (
     <div className={'rxl' + (props.className ? ' ' + props.className : '')} style={props.style} onKeyDown={onRootKeyDown}>
-      {workbook && (displayFileName || effectiveTemplateName) && (
-        <div className="rxl-title" title={displayFileName + (effectiveTemplateName ? ' · 模板: ' + effectiveTemplateName : '')}>
-          <span className="name">{displayFileName || '未命名工作簿'}</span>
-          {effectiveTemplateName && <span className="tpl"> · 模板: {effectiveTemplateName}</span>}
-        </div>
-      )}
       {/* 工具栏「模板」项的隐藏文件拾取器(P3 进阶) */}
       <input ref={templateInputRef} type="file" accept=".xlsx,.xlsm" hidden onChange={onTemplateFilePicked} />
+      {/* 顶部 ViewerToolbar (1:1 跟 Vue 3 SFC) — 文件名 + 表数 + 导出下拉 + 缩放 [−/+] */}
       {workbook && (
         <div className="rxl-toolbar">
-          <button
-            className={findOpen ? 'active' : ''}
-            onClick={() => (findOpen ? closeFind() : setFindOpen(true))}
-            title="查找 (Ctrl+F)"
-          >
-            查找
-          </button>
-          <button
-            className={curSheet?.autoFilterRange ? 'active' : ''}
-            onClick={() => controllerRef.current?.toggleAutoFilter()}
-            title="切换自动筛选"
-          >
-            筛选
-          </button>
-          <button disabled={!controller?.hasFilters()} onClick={() => controllerRef.current?.clearAllFilters()}>
-            清除筛选
-          </button>
-          <button disabled={!selection} onClick={() => void controllerRef.current?.copySelection()} title="复制 (Ctrl+C)">
-            复制
-          </button>
-          <button onClick={() => void controllerRef.current?.downloadImage().catch(onExportError)}>导出 PNG</button>
-          <button onClick={() => void controllerRef.current?.downloadPdf().catch(onExportError)}>导出 PDF</button>
-          <select value={Math.round(zoom * 100)} onChange={(e) => setZoom(Number(e.target.value) / 100)} title="缩放">
-            {[50, 75, 100, 125, 150, 200].map((p) => (
-              <option key={p} value={p}>
-                {p}%
-              </option>
-            ))}
-          </select>
-          {/* 模板(P3 重设计 2026-06-08):仅在 JSON / 模型数据源下生效;xlsx 数据源禁用 */}
-          {(() => {
-            const isXlsxSrc = !!props.src && !props.workbook
+          <span className="file" title={displayFileName + (effectiveTemplateName ? ' · 模板: ' + effectiveTemplateName : '')}>
+            {displayFileName || '未命名工作簿'}
+            {effectiveTemplateName && <span className="tpl"> · 模板: {effectiveTemplateName}</span>}
+          </span>
+          <span className="meta">{visibleSheetCount} 个工作表</span>
+          <div className="spacer" />
+          {/* 导出下拉 */}
+          <div className="rxl-export-wrap" data-tb-menu="true">
+            <button
+              className={'rxl-export-btn' + (menuOpenId === '__header-export' ? ' open' : '')}
+              onClick={(e) => { e.stopPropagation(); setMenuOpenId(menuOpenId === '__header-export' ? null : '__header-export') }}
+              title="导出 / 打印"
+            >
+              导出 <span className="caret">▾</span>
+            </button>
+            {menuOpenId === '__header-export' && (
+              <ToolbarMenu
+                items={[
+                  bi({ id: 'h-png', label: '导出为图片 (PNG)', onClick: () => void controllerRef.current?.downloadImage().catch(onExportError) }),
+                  bi({ id: 'h-pdf', label: '导出为 PDF (位图)', onClick: onExportPdf }),
+                  bi({ id: 'h-pdf-vec', label: '导出为 PDF (矢量·文字可选)', onClick: onExportPdfVector }),
+                  bi({ id: 'h-print', label: '打印…', onClick: onPrint }),
+                ]}
+                onPick={(it) => { setMenuOpenId(null); it.onClick?.() }}
+                className="rxl-tb-menu header-menu"
+              />
+            )}
+          </div>
+          {/* 缩放组 [−ｓｅｌｅｃｔ＋] */}
+          <div className="rxl-zoom">
+            <button onClick={() => setZoomClamped(zoom - 0.1)} title="缩小">−</button>
+            <select value={zoom} onChange={(e) => setZoomClamped(parseFloat(e.target.value))}>
+              {STEPS.map((s) => <option key={s} value={s}>{Math.round(s * 100)}%</option>)}
+              {!STEPS.includes(zoom) && <option key="cur" value={zoom}>{Math.round(zoom * 100)}%</option>}
+            </select>
+            <button onClick={() => setZoomClamped(zoom + 0.1)} title="放大">+</button>
+          </div>
+        </div>
+      )}
+
+      {/* Action 工具栏 (1:1 跟 Vue 3 SFC ActionToolbar) — SVG 图标 + 下拉子菜单 */}
+      {workbook && showActionBar && (
+        <div className="rxl-action-toolbar">
+          {resolvedToolbar.map((it) => {
+            if (it.type === 'separator') return <span key={it.id} className="rxl-at-divider" />
+            const hasSub = !!it.items?.length
+            const open = menuOpenId === it.id
             return (
-              <>
+              <div key={it.id} className="rxl-at-dd" data-tb-menu="true">
                 <button
-                  className={effectiveTemplateSrc ? 'active' : ''}
-                  disabled={isXlsxSrc}
-                  onClick={openTemplateFilePicker}
-                  title={isXlsxSrc
-                    ? '模板仅对 JSON / 模型数据源生效;当前是 xlsx 数据源,模板不可用'
-                    : effectiveTemplateSrc
-                      ? `模板已加载: ${effectiveTemplateName || '(未命名)'} — 点击重新导入`
-                      : '为 JSON / 模型数据源套用 .xlsx 模板的样式(模板的文字内容会被丢弃)'}
+                  className={'rxl-at-tool' + (it.active ? ' active' : '') + (open ? ' open' : '')}
+                  disabled={!!it.disabled}
+                  title={it.title || it.label || it.id}
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    if (it.disabled) return
+                    if (hasSub) setMenuOpenId(open ? null : it.id)
+                    else { it.onClick?.(); setMenuOpenId(null) }
+                  }}
                 >
-                  模板{effectiveTemplateSrc ? ' ▾' : ''}
+                  {it.iconSvg ? <span className="rxl-at-ic" dangerouslySetInnerHTML={{ __html: svgWrap(it.iconSvg) }} />
+                    : it.icon ? <span className="rxl-at-ic-e">{it.icon}</span>
+                    : null}
+                  {it.label && <span className="rxl-at-lb">{it.label}</span>}
+                  {hasSub && <span className="rxl-at-caret" dangerouslySetInnerHTML={{ __html: svgWrap(I('caret')) }} />}
                 </button>
-                {effectiveTemplateSrc && !isXlsxSrc && (
-                  <button onClick={clearRuntimeTemplate} title="清除模板,切回默认渲染">
-                    清除模板
-                  </button>
+                {hasSub && open && (
+                  <ToolbarMenu
+                    items={it.items!}
+                    onPick={(sub) => { setMenuOpenId(null); sub.onClick?.() }}
+                  />
                 )}
-              </>
+              </div>
             )
-          })()}
-          {/* 插件贡献的工具栏按钮(跨框架同一份插件) */}
-          {plugins
-            .flatMap((p) => p.toolbar ?? [])
-            .filter((it) => it.type !== 'separator')
-            .map((it) => (
-              <button
-                key={it.id}
-                className={it.active?.(viewerApi) ? 'active' : ''}
-                disabled={it.disabled?.(viewerApi)}
-                title={it.title}
-                onClick={() => it.onClick?.(viewerApi)}
-              >
-                {it.label ?? it.icon ?? it.id}
-              </button>
-            ))}
+          })}
         </div>
       )}
 
