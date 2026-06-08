@@ -1,6 +1,6 @@
 # ooxml-excel-editor
 
-> Vue 3 + React 高保真 **.xlsx 预览 / 编辑组件** —— Canvas 渲染,**默认只读预览,可选开启编辑**。从零实现解析与渲染,尽量还原微软 Excel 打开工作簿的观感。
+> Vue 3 + **Vue 2** + React 高保真 **.xlsx 预览 / 编辑组件** —— Canvas 渲染,**默认只读预览,可选开启编辑**。从零实现解析与渲染,尽量还原微软 Excel 打开工作簿的观感。**三个壳 UI 1:1 对齐**(Vue 3 SFC 是标准,Vue 2 / React 复刻)。
 
 [English](#english) · 中文
 
@@ -9,8 +9,9 @@
 **装**(按框架二选一):
 
 ```bash
-npm i ooxml-excel-editor vue exceljs                 # Vue
-npm i ooxml-excel-editor react react-dom exceljs     # React
+npm i ooxml-excel-editor vue exceljs                  # Vue 3 (默认入口)
+npm i ooxml-excel-editor react react-dom exceljs      # React 壳 (/react 子入口)
+npm i ooxml-excel-editor vue@2.7 exceljs              # Vue 2.7+ (/vue2 子入口, 1.3.0+)
 ```
 
 **用**(Vue,容器要给高度;`src` 可传 `File` / `Blob` / `ArrayBuffer` / `Uint8Array` / URL 字符串):
@@ -28,7 +29,7 @@ const src = ref<File>() // 绑个 <input type="file" @change> 给它即可
 </template>
 ```
 
-默认**只读预览**;想编辑加 `:editable="true"`(React 同名 `editable`)。React 写法、props/事件表、编辑 / 导出 API 见下文对应章节。
+默认**只读预览**;想编辑加 `:editable="true"`(React / Vue 2 同名 `editable`)。React / Vue 2 写法、props/事件表、编辑 / 导出 API 见下文对应章节。Vue 2 用法详见 [docs/Vue2.md](./docs/Vue2.md)。
 
 > 纯使用者只需读 **安装 / 使用 / API / 编辑 / 导出** 几节即可接入,无需看源码;类型随包发 `.d.ts`(IDE 自动补全)。「扩展 API / 插件 / 开发」是进阶,可跳过。
 
@@ -55,14 +56,17 @@ const src = ref<File>() // 绑个 <input type="file" @change> 给它即可
 
 ## 安装
 
-一个包,三个子入口 —— **框架无关的 core 引擎被 Vue / React 两个薄壳共享**(`dist/core.js` 只打一份)。按你的框架装对应 peer:
+一个包,**四个子入口** —— 框架无关的 core 引擎被 Vue 3 / React 两个壳共享(`dist/core.js` 只打一份),Vue 2 因 SFC 编译器跟 Vue 3 冲突独立打包(内嵌 core)。按你的框架装对应 peer:
 
 ```bash
-# Vue 项目
+# Vue 3 项目
 npm i ooxml-excel-editor vue exceljs
 
 # React 项目
 npm i ooxml-excel-editor react react-dom exceljs
+
+# Vue 2.7+ 项目 (1.3.0+)
+npm i ooxml-excel-editor vue@2.7 exceljs
 
 # 只解析 / 读数据 / 导出(不渲染 UI)
 npm i ooxml-excel-editor exceljs
@@ -73,15 +77,18 @@ npm i echarts jspdf
 npm i hyperformula
 ```
 
-三个入口:
+四个入口:
 
-| import | 内容 | 需要的 peer |
-|---|---|---|
-| `ooxml-excel-editor` | Vue 3 组件 `<ExcelViewer>` | `vue` + `exceljs` |
-| `ooxml-excel-editor/react` | React 组件 `<ExcelViewer>` | `react` + `react-dom` + `exceljs` |
-| `ooxml-excel-editor/core` | 框架无关引擎(解析/渲染/控制器/导出/读数据) | `exceljs` |
+| import | 内容 | 需要的 peer | 体积 (gzip) |
+|---|---|---|---|
+| `ooxml-excel-editor` | **Vue 3** 组件 `<ExcelViewer>` (参考实现 Standard) | `vue@3` + `exceljs` | ~19 KB + 共享 chunks |
+| `ooxml-excel-editor/react` | **React** 组件 `<ExcelViewer>` (1:1 复刻 Vue 3) | `react` + `react-dom` + `exceljs` | ~11 KB + 共享 chunks |
+| `ooxml-excel-editor/vue2` | **Vue 2.7+** 组件 `<ExcelViewer>` (1:1 复刻 Vue 3) | `vue@2.7` + `exceljs` | ~124 KB (内嵌 core) |
+| `ooxml-excel-editor/core` | 框架无关引擎(解析/渲染/控制器/导出/读数据) | `exceljs` | ~1 KB + 共享 chunks |
 
-`exceljs` 必需;`vue` / `react` / `react-dom` 按框架二选一(均为可选 peer);`echarts` / `jspdf` / `hyperformula` 为**可选** peer —— 未装分别只影响"图表渲染""PDF 导出""公式重算",其余正常,且**绝不打包进你的产物**(运行时才动态加载)。
+`exceljs` 必需;`vue` / `react` / `vue@2` 按框架三选一(均为可选 peer);`echarts` / `jspdf` / `hyperformula` 为**可选** peer —— 未装分别只影响"图表渲染""PDF 导出""公式重算",其余正常,且**绝不打包进你的产物**(运行时才动态加载)。
+
+> **三壳 UI 1:1**: Vue 3 SFC 是参考实现 (Standard), Vue 2 / React 1:1 复刻视觉与交互 (工具栏 SVG 图标 / 下拉子菜单 / 公式栏 / 状态栏 / dialog / 浮层 / 演示 demo 全部对齐). 详见 [docs/Vue2.md](./docs/Vue2.md) 跟 Vue 3 的差异速查 + [CLAUDE.md](./CLAUDE.md) 第 7 中心原则。
 
 > ⚠️ **公式重算的许可证**:默认公式引擎是 [HyperFormula](https://hyperformula.handsontable.com/),**GPL-3.0 / 商业 双授权**。本组件以 `licenseKey: 'gpl-v3'` 调用(适合开源/GPL 场景)。**商业闭源项目**请改用 `formulaEngine` prop 注入你自己持有商业 license 的引擎(或自研引擎),只需实现 `FormulaEngine` 接口即可。不开启 `recalc` 时完全不加载 hyperformula,无许可证负担。
 
@@ -135,6 +142,40 @@ export function Preview() {
   )
 }
 ```
+
+### Vue 2 (1.3.0+)
+
+跟 Vue 3 1:1 复刻 (工具栏 / 公式栏 / dialog / 浮层 / events / API 全对齐). Vue 2 用 Options API + Composition API 都行:
+
+```html
+<template>
+  <ExcelViewer
+    ref="viewer"
+    :src="src"
+    :file-name="fileName"
+    :editable="editMode"
+    style="height: 100vh"
+    @rendered="(wb) => console.log('已渲染', wb.sheets.length, '个工作表')"
+    @cell-change="(p) => console.log(p.before.text, '→', p.after.text)"
+  />
+</template>
+
+<script>
+import ExcelViewer from 'ooxml-excel-editor/vue2'
+import 'ooxml-excel-editor/style.css'
+import 'ooxml-excel-editor/vue2.css'
+
+export default {
+  components: { ExcelViewer },
+  data: () => ({ src: null, fileName: '', editMode: false }),
+  methods: {
+    download() { this.$refs.viewer.downloadXlsx() },
+  },
+}
+</script>
+```
+
+完整 Vue 2 用法 + 跟 Vue 3 的差异表 见 [docs/Vue2.md](./docs/Vue2.md)。
 
 ### 仅引擎(不渲染 UI)
 

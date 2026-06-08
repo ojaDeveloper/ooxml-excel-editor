@@ -2,51 +2,59 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [1.3.0-alpha.1] - 2026-06-08 (开发中 / 预发版)
+## [1.3.0] - 2026-06-08
 
-**Vue 2 兼容子入口 — 一口气完整移植** — 跟 Vue 3 / React 壳 ~100% 功能对齐.
+**Vue 2 兼容子入口 + 三壳 UI 1:1 复刻 + 独立 dev scripts** — Vue 2.7+ / Vue 3 / React 三个壳视觉与交互完全一致 (Vue 3 SFC 是参考实现 Standard, Vue 2 / React 1:1 复刻).
 
-### 完整移植内容(alpha.1, 在 alpha.0 MVP 基础上 + 全部 features)
+### 新增
 
-**主 shell** (`src/vue2/ExcelViewer.ts`, ~600 行):
-- **全部 28 项 props** 跟 Vue 3 壳对齐: src / workbook / jsonOptions / templateFile / templateName /
-  fileName / theme / transformModel / cellStyle / cellImageFit / imageLightbox / openLinks / plugins /
-  toolbar / editable / cellReadOnly / readOnlyRanges / editableTargets / strictDimensions / readOnlyCellStyle /
-  editor / recalc / formulaEngine / contextMenu
-- **全部 15+ events**: rendered / error / progress / cell-click / cell-dblclick / selection-change /
-  sheet-change / hyperlink-click / cell-change / edit-start / edit-commit / dim-change / dirty-change /
-  image-change / struct-change / permission-denied / before-context-menu / context-menu
-- **完整命令式 API** (80+ 方法) 跟 Vue 3 viewerApi / React ExcelViewerHandle 对齐
-- **插件系统**: events / cellStyle / theme / overlay / toolbar / setup / contextMenu / editor 钩子全套
-- **内置 UI**: 顶部工具栏(文件名+模板名+表数+缩放+导出 PNG/PDF/XLSX 按钮) /
-  Action 工具栏(查找+筛选+清除筛选+复制+冻结+插件 toolbar items) / 公式栏(textarea+auto-resize,
-  跟 1.2.1 WPS 撑高一致) / sheet 标签(多表切换) / 查找条(Ctrl+F)
-- **样式 overlay 钩子**: PluginOverlayHost 跟 Vue 3 共用
+- **`ooxml-excel-editor/vue2` 子入口** (`src/vue2/ExcelViewer.ts`, ~1000 行 render function 版): Vue 2.7+ 兼容壳, 跟 Vue 3 壳 1:1 功能对齐
+  - 全部 28 项 props (src / workbook / jsonOptions / templateFile / fileName / theme / cellStyle / cellImageFit / imageLightbox / openLinks / plugins / toolbar / editable / cellReadOnly / readOnlyRanges / editableTargets / strictDimensions / readOnlyCellStyle / editor / recalc / formulaEngine / contextMenu / exportProgress / transformModel / templateName)
+  - 全部 15+ events 跟 Vue 3 同名 (rendered / error / progress / cell-click / cell-dblclick / selection-change / sheet-change / hyperlink-click / cell-change / edit-start / edit-commit / dim-change / dirty-change / image-change / struct-change / permission-denied / before-context-menu / context-menu)
+  - 完整命令式 API (80+ 方法) 跟 Vue 3 `viewerApi` / React `ExcelViewerHandle` 对齐
+  - 插件系统完整 (events / cellStyle / theme / overlay / toolbar / setup / contextMenu / editor)
+- **独立 dev scripts**: `npm run dev:vue3` (port 5300, 默认) / `npm run dev:react` (port 5301) / `npm run dev:vue2` (port 5302), 三个 demo 进程隔离 + 独立端口
 
-**CSS** (`src/vue2/excel-viewer.css`, ~200 行):
-- 跟 Vue 3 `style.css` 互补: 用 `.ov-*` 前缀避免选择器冲突
-- 完整布局: 顶栏 / Action 工具栏 / 公式栏 / 渲染区 / 编辑器叠加层 / 查找条 / sheet 标签
+### UI 1:1 复刻 (★ 新中心原则)
 
-**docs**:
-- 新 [docs/Vue2.md](docs/Vue2.md) — 完整使用文档(架构 / props / events / API / 限制 / 升级路线)
-- README 顶部加入 Vue 2 子入口章节链接
+**Vue 3 SFC 是参考实现 (Standard)**, 任何 UI 变动先 Vue 3 落地再复刻到 Vue 2 / React. 三壳 + 三 demo 视觉/交互对齐:
 
-### 已知限制(1.3.0 正式版 待办)
-- `dist/vue2.js` 396 KB(含内嵌 core)— Vue 2 build pass 独立, 不共享 `chunks/` chunk。后续探索 rollup 多入口共享 chunk(目前 plugin-vue / plugin-vue2 共存有 SFC compiler 冲突, 单 entry 隔离)
-- 暂无 `dist/vue2.d.ts` 类型声明(vue-tsc 不认 Vue 2 SFC; 本入口是 .ts 后续可补)
-- 暂无 Vue 2 e2e 覆盖(Playwright 多入口配置待补)
-- slot 还没暴露 (header / toolbar / statusbar / overlay / export-progress)— Vue 2 作用域插槽语法跟 Vue 3 不同, 后续补
-- 没内置 ExportDialog UI(用方调命令式 `downloadXlsx()` 等即可, 或自渲对话框)
+- **顶部 ViewerToolbar**: 文件名 + " · 模板: <name>" + 灰色 "N 个工作表" + "导出 ▾" 下拉 (PNG / PDF 位图 / PDF 矢量 / 打印 / 导出设置…) + 缩放 [− / select / +]
+- **Action ToolBar**: 完整 9 项内置工具 (find / filter / clear-filter / copy / wrap-text / template / image-tools / freeze / export / zoom) + SVG 图标 (`src/components/toolbar-icons.ts`) + 下拉子菜单 + separator 分组
+- **状态栏**: 选区范围 (A1:E5) + 计数 / 求和 / 平均 / 最大 / 最小 (调 `renderer.selectionStats`)
+- **cell tooltip**: `onTooltip` hook → ref<TooltipState>, 支持 default / comment 黄底批注样式
+- **ExportProgressOverlay**: 居中模态 + stage 标签 + 进度条 + 取消按钮 + `chain()` 包装所有 export API + `:export-progress` prop
+- **ExportDialog**: 高级导出配置 (范围 / 清晰度 / 内容 / PDF 类型 / 纸张) — 工具栏 "导出设置…" 弹出
+- **overlay scoped slot**: `<template v-slot:overlay="{ rectOf, rectOfRange, tick }">` 跨壳同 API
+- **loading / error / empty 三态浮层**: progress bar + 错误提示 + 空状态
+- **三 demo 入口** (App.vue / vue2-demo / react-demo) **绿色头共享** `src/demo-shared/demo-bar.css`:
+  - 共同按钮: 选择 .xlsx / 加载示例 / JSON 示例 / 编辑模式 / PDF(页码+水印) / 数据→JSON / 贴合 select / ↓XLSX / ↓CSV / ↓JSON
+  - 编辑模式按钮组: 设置可编辑 (EditTargets 白名单 dialog) / 高亮只读 / B 加粗选区 / 合并 / 拆分 / 背景 / 字体 / 清除填充 / 整表嵌入 / 格→图 / +行 / -行
+  - "⋯ 更多" 溢出折叠 (ResizeObserver + 测量行)
 
-### 发版
-- 当前 `1.3.0-alpha.1` 预发版, npm publish 用 `--tag alpha` 不影响 latest(仍 1.2.1)
-- 1.3.0 正式版前补: dist/vue2.d.ts / 共享 chunk / e2e / 插槽 / 文档完善
+### 修复
 
----
+- **Vue 2 patch 复用 DOM 致 controller stale 引用 (致命空白渲染 bug)**: Vue 2 patch children 算法没 key 时按 tag 匹配, 把 `.ov-render-area` div 复用成 `.ov-toolbar` (改 className + 替换内容), controller.els.renderArea 变 stale (指向 toolbar 元素), 内部 canvas/overlays 都被 Vue 一并清掉. **修复**: 所有 chrome 子节点加唯一 `key` + canvas/overlays/scroller/editor-slot 改 imperative DOM (onMounted createElement + appendChild, Vue 完全不碰)
+- **chrome computed 读 renderTick 导致滚动卡顿**: `fbCanEdit` / `formulaBarEditString` / `renderActionToolbar` 读了 `renderTick.value`, 每帧 scroll → root render function 重跑 → 整个 chrome DOM patch. **修复**: 只依赖低频 selVersion/findVersion/filterVersion
+- **`updated()` 钩子内改 reactive → 死循环**: `demoRemeasure()` 改 `demoItemWidths` 触发 re-render → 又 `updated()` → CPU 100% 卡死. **修复**: 改用 `watch` 监听具体根本依赖
+- **rAF 等浏览器 layout**: chrome 刚加上时 `renderArea.clientHeight` 是中间态 36px (不是最终 537px), `await nextTick()` 后加 `await rAF` 保证 layout 完成再 measure
 
-## [1.3.0-alpha.0] - 2026-06-08 (Vue 2 MVP, 已被 alpha.1 替代)
+### 已知限制
 
-最小 Vue 2 子入口, MVP 范围(加载渲染 + 基础事件 + 命令式 API). 详见 alpha.1.
+- `dist/vue2.js` 424 KB (含内嵌 core) — Vue 2 build pass 独立, 不共享 `chunks/`。后续探索 rollup 多入口共享 chunk
+- `dist/vue2.d.ts` 类型声明暂未生成 (vue-tsc 不认 Vue 2 SFC; 本入口是 .ts 后续可补)
+- Vue 2 e2e 覆盖待补 (Playwright 多 entry 配置)
+
+### 文档
+
+- 新 [docs/Vue2.md](docs/Vue2.md) — Vue 2 子入口完整使用文档 + 跟 Vue 3 差异表 + Vue 2 壳特殊坑(函数 ref / ResizeObserver / updated 死循环 / template v-for key)
+- [README.md](README.md) 加 Vue 2 入口章节 + 四个子入口对照表 + 三壳 UI 1:1 说明
+- [ARCHITECTURE.md](ARCHITECTURE.md) 加 demo-shared / 三壳对齐 / 第 7 中心原则段
+- [CLAUDE.md](CLAUDE.md) 加第 7 中心原则 (UI 1:1 复刻) + UI 1:1 工作流 + Vue 2 壳特殊坑 + 路线图更新
+
+### Commits (累计 9 个)
+
+`ba6470c` 修空白渲染 + dev scripts → `0f9718a` statusbar/tooltip/ExportProgressOverlay → `d74c9f1` ExportDialog/overlay slot → `e735e8f` Vue 2 1:1 工具栏 → `b075e05` React 1:1 工具栏 → `5462f5e` demo 绿色头 + 演示按钮 → `ee199c3` EditTargets dialog 迁移 → `411e328` Vue 2 ⋯ 更多溢出折叠 → `a312222` 修死循环
 
 ---
 

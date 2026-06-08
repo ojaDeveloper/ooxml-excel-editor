@@ -1,17 +1,18 @@
 # ooxml-excel-editor — 项目开发准则(AI 与贡献者必读)
 
-> Vue3 + React 高保真 .xlsx 预览/编辑组件。从零实现解析与 Canvas 渲染。**默认只读、零回归;开 `editable` 进入编辑**(值/样式/列宽行高/图片/增删行列/公式重算/导出回写 .xlsx·JSON·CSV)。
+> Vue3 + Vue2 + React 高保真 .xlsx 预览/编辑组件。从零实现解析与 Canvas 渲染。**默认只读、零回归;开 `editable` 进入编辑**(值/样式/列宽行高/图片/增删行列/公式重算/导出回写 .xlsx·JSON·CSV)。
 
-## ★ 六条中心原则(任何后续开发都要围绕,不得破坏)
+## ★ 七条中心原则(任何后续开发都要围绕,不得破坏)
 
 1. **好文档** —— 同时服务**调用方**(怎么用)和**二开者**(怎么改/扩展)。改公开 API/扩展点/导出,必须同步更新 README + 相关文档(ARCHITECTURE/CONTRIBUTING/各包 README + CHANGELOG)。README 的 props 表 / 导出表 / 选项表要与代码一致。
 2. **可发布** —— 始终保持能 `npm publish` 的状态:exports/main/module/types 对、`.d.ts` 完整、peer 依赖(vue/react/exceljs 必需,echarts/jspdf 可选)**绝不打包进产物**、占位元数据要清。
-3. **Vue + React 共存** —— `core` 框架无关,Vue/React 各是薄壳共享同一 `core`。**禁止在 `core` 里 import vue/react**。新功能优先做进 `core`(框架无关),壳只做桥接。
-4. **包名清晰** —— 现状: **单包三子入口**(`ooxml-excel-editor` = Vue 壳 / `/react` = React 壳 / `/core` = 框架无关引擎),三者共享同一 `dist/core.js`。后续生态大了可平滑拆成真正的 workspace 三包(`@scope/core`+`/vue`+`/react`);现阶段单包多入口已满足"按框架各取所需",不过度拆包。
-5. **扩展点** —— 保留并尊重已有扩展点:`:theme` / `transformModel` / `cellStyle` / 事件 / `overlay` slot / `rectOf` 命令式 API。新增能力优先做成可配置/可覆盖,而非写死。跨框架时把 Vue 特定扩展点(如 `overlay` 返回 VNode)做成框架无关(返回 DOM/描述)。
+3. **三壳共存** —— `core` 框架无关,Vue3/Vue2/React 各是薄壳共享同一 `core`。**禁止在 `core` 里 import vue/react**。新功能优先做进 `core`(框架无关),壳只做桥接。
+4. **包名清晰** —— 现状: **单包四子入口**(`ooxml-excel-editor` = Vue 3 壳 / `/react` = React 壳 / `/vue2` = Vue 2 壳 / `/core` = 框架无关引擎)。Vue 3 / React / core 共享同一 `dist/core.js`;Vue 2 因 SFC 编译器冲突独立打包(内嵌 core)。后续生态大了可平滑拆成真正的 workspace 多包,现阶段单包多入口已满足"按框架各取所需",不过度拆包。
+5. **扩展点** —— 保留并尊重已有扩展点:`:theme` / `transformModel` / `cellStyle` / 事件 / `overlay` slot / `rectOf` 命令式 API。新增能力优先做成可配置/可覆盖,而非写死。跨框架时把框架特定扩展点(如 Vue 3 `overlay` slot 返回 VNode)做成框架无关(返回 DOM/描述)。
 6. **插件机制** —— `definePlugin` 打包 theme/transformModel/cellStyle/events/overlay/toolbar/setup;多插件按数组合并、组件 props 最后覆盖。改动不得破坏此契约;插件应跨框架可用。
+7. **UI 1:1 复刻 ★(2026-06-08 新增)** —— **Vue 3 SFC 是参考实现 (Standard)**,任何 UI 变动 (props / events / 工具栏 / 公式栏 / 状态栏 / dialog / 浮层 / 演示 demo) 都**先在 Vue 3 上落地**,再**1:1 复刻**到 Vue 2 + React 壳。三个壳 + 三个 demo 必须视觉/交互一致 (类名 / 颜色 / 字号 / padding / 按钮顺序 / 下拉行为 全部对齐)。共享纯 TS/CSS 资源放 `src/demo-shared/` 或 `src/components/toolbar-icons.ts` 等中性目录,Vue 2 / React 直接 import。改 Vue 3 而漏改 Vue 2 / React 视为破坏此原则的 bug。
 
-## 架构(framework-agnostic core + 薄壳)
+## 架构(framework-agnostic core + 三薄壳)
 
 ```
 src/core(纯 TS,零框架依赖)→ 构建产物 dist/core.js
@@ -24,34 +25,76 @@ src/core(纯 TS,零框架依赖)→ 构建产物 dist/core.js
   overlay/  anchor / chart-mapper / echarts-loader
   export/   raster/composite/paginate/pdf/print/vector-pdf + WorkbookExporter(导出编排)
   viewer/   OverlayManager + ViewerController(渲染/选区/交互/查找/筛选/导出 全编排,框架无关)✅
-src/components(Vue 壳)→ dist/index.js:ExcelViewer.vue + 子 SFC(toolbar/find/filter/dialog/tabs)
-                        薄壳, onMounted 起 ViewerController, hooks 桥接响应式
-src/react(React 壳)→ dist/react.js:ExcelViewer.tsx + use-excel-document
-                        薄壳, useLayoutEffect 起同一 ViewerController, useReducer force 桥接
+
+src/components(Vue 3 壳 ★参考实现)→ dist/index.js:ExcelViewer.vue + 子 SFC
+                                      (ViewerToolbar/ActionToolbar/ToolbarMenu/FormulaBar/
+                                       SheetTabs/ExportDialog/ExportProgressOverlay/FindBar/...)
+                                      薄壳, onMounted 起 ViewerController, hooks 桥接响应式
+src/react(React 壳, 复刻 Vue 3)→ dist/react.js:ExcelViewer.tsx + ExportProgressOverlay.tsx
+                                  + 复用 src/components/toolbar-icons.ts / toolbar-types.ts
+                                  薄壳, useLayoutEffect 起同一 ViewerController, useReducer force 桥接
+src/vue2(Vue 2 壳, 复刻 Vue 3)→ dist/vue2.js:ExcelViewer.ts (render function, 不走 SFC)
+                                + 复用 src/components/toolbar-icons.ts
+                                独立打包(内嵌 core, 因 Vue 2/3 SFC 编译器冲突)
+                                canvas/overlays/scroller 用 createElement + appendChild (imperative DOM)
+                                避免 Vue 2 patch 重建 controller 持有的 DOM (vnode key 必须全设)
+src/demo-shared(三 demo 共享 CSS / 工具)→ demo-bar.css (绿色头) + demo-editor.ts
 ```
 数据流:文件 → loader → parser → **中间模型(WorkbookModel)** → ViewerController(含 CanvasRenderer)→ canvas。
 中间模型与 ExcelJS/XML 形状**完全解耦**。`ViewerController` 是壳与引擎的唯一桥:壳给 DOM 元素 + 一组回调 hooks
-(onRenderer/onRenderTick/onSelectionChange/onCellClick/…),控制器回调驱动壳的响应式重渲。**Vue 与 React 壳逻辑同构、共用 ~100% 引擎**。
+(onRenderer/onRenderTick/onSelectionChange/onCellClick/…),控制器回调驱动壳的响应式重渲。**三壳逻辑同构、共用 ~100% 引擎**。
 
 ## 不可破坏的硬约束
 
-- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **219 单测 + 60 e2e(Vue + React 双覆盖)**。
+- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **316 单测 + 60 e2e(Vue 3 + React 双覆盖,Vue 2 e2e 后续补)**。
 - **core 不依赖框架**:`src/core/**` 不得出现 `from 'vue'` / `'react'`(构建后 `dist/core.js` 也不得 import vue/react/hyperformula/exceljs —— 重依赖全动态懒加载)。
-- **两壳同构**:给 `ViewerController` 加能力后,Vue 壳(components/ExcelViewer.vue)与 React 壳(react/ExcelViewer.tsx)都要接上,e2e 各自覆盖。
+- **三壳同构**:给 `ViewerController` 加能力后,Vue 3 壳(components/ExcelViewer.vue)、React 壳(react/ExcelViewer.tsx)、Vue 2 壳(vue2/ExcelViewer.ts)都要接上,各自 e2e 覆盖。**任何 UI 变更先 Vue 3 落地, 再 1:1 复刻到 Vue 2 + React**(详见第 7 中心原则)。
 - **默认只读、零回归**:`editable` 关闭时行为与历史完全一致;编辑能力(单元格/样式/列宽行高/图片/增删行列/公式重算/导出回写)是 **opt-in**,全建在框架无关 core 的命令栈 + 前后快照事件上(见 README「编辑」章节)。
 - **e2e 浏览器**:`@playwright/test` 固定 `1.58.0`(对应本机缓存 chromium-1208,避开需下载的新版)。
 
 ## 常用命令
 
 ```bash
-npm run dev          # 本地 demo(localhost:5300)
-npm test             # 单元测试(node)
+npm run dev          # Vue 3 demo (port 5300, 默认)
+npm run dev:vue3     # Vue 3 demo (alias)
+npm run dev:react    # React demo (port 5301)
+npm run dev:vue2     # Vue 2 demo (port 5302, root=vue2-demo/)
+npm test             # 单元测试(node, 316 个)
 npm run test:e2e     # 真浏览器 e2e(Playwright;先 npx playwright install chromium)
 npm run typecheck    # vue-tsc --noEmit
-npm run build        # 构建库(dist/ 三入口 core.js+index.js+react.js + style.css + .d.ts;不打包 vue/react/exceljs/echarts/jspdf)
-npm run dev          # Vue demo: localhost:5300/  ; React demo: localhost:5300/react.html
+npm run build        # 构建库(dist/ 四入口 core.js+index.js+react.js+vue2.js + style.css/vue2.css + .d.ts;不打包 vue/react/exceljs/echarts/jspdf)
 node scripts/gen-sample.mjs   # 重新生成 public/sample.xlsx
 ```
+
+## UI 1:1 复刻工作流(第 7 中心原则的具体落地)
+
+任何 UI 类改动按以下顺序进行,**漏跳任一步算 bug**:
+
+1. **Vue 3 SFC 先落地** (`src/components/ExcelViewer.vue` 或子 SFC):写 template + scoped CSS + setup 逻辑。这是参考实现 (Standard)。
+2. **抽共享资源**(如果有可跨框架复用的部分):
+   - 纯 TS 模板/图标/类型 → `src/components/toolbar-icons.ts` / `toolbar-types.ts` / `export-types.ts`
+   - 全局 CSS(三 demo 共享绿色头等) → `src/demo-shared/*.css`
+   - 这些文件**禁止 `import 'vue'` / `'react'`**(中性 TS/CSS)
+3. **复刻到 React 壳** (`src/react/ExcelViewer.tsx`):
+   - JSX 结构 + className 用同款类名(或自己加 `rxl-` 前缀但保持视觉一致)
+   - useState / useEffect 桥接同款行为
+   - 复用步骤 2 抽出的资源
+4. **复刻到 Vue 2 壳** (`src/vue2/ExcelViewer.ts`):
+   - render function (h() + VNode) 写同结构;**每个 VNode 必须有 `key`**(否则 Vue 2 patch 会复用 DOM,见 ba6470c)
+   - canvas / overlays / scroller / editor-slot 等 controller 持有的 DOM **必须 onMounted createElement + appendChild**(不交给 Vue patch)
+   - 状态/computed/watch 用 Vue 2.7 Composition API
+   - 复用步骤 2 抽出的资源
+5. **三 demo 也要 1:1**(`src/App.vue` / `src/react-demo/main.tsx` / `vue2-demo/main.ts`):
+   - 顶栏 demo 按钮列表对齐
+   - 按钮顺序、文本、title 一致
+   - 共享 demo-bar.css 类名(`.app-bar` / `.sample-btn` / `.file-btn` / `.edit-toggle`)
+6. **验证**:`typecheck` + `npm test` + Playwright 截图三个 demo 视觉对比 + `npm run build` 全绿。
+
+**已知 Vue 2 壳特殊坑**(在 [src/vue2/ExcelViewer.ts](src/vue2/ExcelViewer.ts) 头部 doc 详述):
+- 函数 ref 每次 patch 会 invoke null + el (即使是同 DOM), controller 用 `instance` 上挂的非 reactive 字段存 DOM 引用
+- Vue 2 把任意 object 转 reactive (包含 ResizeObserver), 用 `_xxx` 挂 instance 避开
+- `updated()` 钩子内改 reactive 会触发 updated 死循环,用 `watch` 监听具体依赖代替
+- `<template v-for>` Vue 2 需要 key 放在 iteree 上,不是 `<template>` 本身
 
 ## 路线图(多框架架构 + 分包 + 发布)
 
@@ -61,8 +104,10 @@ node scripts/gen-sample.mjs   # 重新生成 public/sample.xlsx
 - **Phase D ✅** 文档:ARCHITECTURE / CONTRIBUTING / README(React 用法 + 三入口 + props/导出/编辑表)
 - **编辑能力 E0–E8 ✅(→ 1.0.0)** 配置/只读 → 写数据层+命令栈+前后快照事件 → editor 扩展 → 内置编辑器 → 数据层语义统一(resize 入栈+脏状态/还原)→ 公式重算(可换引擎)→ 样式 → 图片 → 增删行列 → 导出 xlsx/json/csv
 - **保真增强 F1–F3 ✅(→ 1.1.0)** 增删行列公式引用重写 / 图片导出 twoCell+EMU 偏移 / xlsx overlay 高保真
-- **WPS 单元格内嵌图 DISPIMG ✅(并入 1.2.0,开发中)** 三期完成 + UX 打磨:① 解析 `xl/cellimages.xml` + `=DISPIMG()` 公式 → 画进格内展示,贴合方式可配置(`cellImageFit` fill/contain/cover,默认 fill 同 WPS);② 编辑模式互转 —— 就近嵌入(`convertImageToCellAuto`/几何反推)、整表/整列批量(`convertAllImagesToCells`,单次撤销)、嵌入→浮动,右键菜单接入,全入命令栈;③ **导出回注** —— ExcelJS 写出后在 zip 层回注 cellimages.xml + rels + media + Content_Types/workbook-rels 补丁(`export/wps-cellimages.ts`),rebuild/overlay 两模式都让导出 .xlsx 往返 DISPIMG。生成测试件:`node scripts/gen-wps-sample.mjs` → `public/wps-dispimg-sample.xlsx`。
-- **Phase E**(进行中)发布:`ooxml-excel-editor` 1.1.0 → `npm publish`(2FA)
-- 仍未做:真正 workspace 三包拆分(目前单包多入口已够用);透视表 UI;大文件编辑性能
+- **WPS 单元格内嵌图 DISPIMG ✅(1.2.0)** 三期完成 + UX 打磨:① 解析 `xl/cellimages.xml` + `=DISPIMG()` 公式 → 画进格内展示,贴合方式可配置(`cellImageFit` fill/contain/cover,默认 fill 同 WPS);② 编辑模式互转 —— 就近嵌入(`convertImageToCellAuto`/几何反推)、整表/整列批量(`convertAllImagesToCells`,单次撤销)、嵌入→浮动,右键菜单接入,全入命令栈;③ **导出回注** —— ExcelJS 写出后在 zip 层回注 cellimages.xml + rels + media + Content_Types/workbook-rels 补丁(`export/wps-cellimages.ts`),rebuild/overlay 两模式都让导出 .xlsx 往返 DISPIMG。生成测试件:`node scripts/gen-wps-sample.mjs` → `public/wps-dispimg-sample.xlsx`。
+- **WPS 风格长文本编辑 ✅(1.2.1)** 默认编辑器从 `<input>` 改 `<textarea>` + `wrapLines()` 算 desired height + onResize 钩子让 editor-host 浮起撑高;vAlign overflow fallback 修"提交后定位最下面"问题;公式栏 textarea + auto-resize 跟同款。
+- **Vue 2 壳 + 三壳 UI 1:1 ✅(1.3.0)** ① Vue 2.7 壳(`/vue2` 入口)render function 实现, 共用 core;② 修了 Vue 2 patch 复用 DOM 致 controller stale 的根因(key + imperative DOM);③ Vue 3 / Vue 2 / React 三壳 UI 1:1 复刻 ViewerToolbar + ActionToolbar (SVG 图标 + 9 项内置 + 下拉子菜单) + StatusBar + Tooltip + ExportDialog + ExportProgressOverlay + overlay scoped slot;④ 三 demo 入口绿色头共享 `src/demo-shared/demo-bar.css` 视觉对齐 + 完整演示按钮 (JSON 示例 / PDF 水印 / 数据→JSON / EditTargets dialog / 高亮只读 / 编辑模式按钮组 / ⋯ 更多 溢出折叠);⑤ 独立 dev scripts (`dev:vue3` 5300 / `dev:react` 5301 / `dev:vue2` 5302). **★ 自此 UI 1:1 复刻成为第 7 中心原则**。
+- **Phase E**(进行中)发布:`ooxml-excel-editor` 1.3.0 → `npm publish`(2FA)
+- 仍未做:真正 workspace 多包拆分;Vue 2 e2e 覆盖;Vue 2 子入口体积优化 (现 423 KB, 共享 chunk 需自定义 rollup);透视表 UI;大文件编辑性能
 
-每阶段测试 green + 提交,不破坏现有 Vue / React、不破坏「默认只读零回归」。
+每阶段测试 green + 提交,不破坏现有三壳、不破坏「默认只读零回归」、**不破坏 UI 1:1 复刻**。
