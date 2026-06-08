@@ -78,6 +78,13 @@ function onImageChange(p: unknown) {
 function onStructChange(p: unknown) {
   if (import.meta.env.DEV) (window as unknown as { __lastStructChange?: unknown }).__lastStructChange = p
 }
+// Phase A 2026-06-08: 权限拒绝事件 → 红色 toast 提示, 让用户能感知"为啥点了没反应"
+function onPermissionDenied(p: { reason: string; cells: Array<{ row: number; col: number }>; dims?: { axis: string; indices: number[] }; message?: string }) {
+  const reasonLabel = ({ paste: '粘贴', merge: '合并', unmerge: '拆分', 'image-place': '放图', 'image-convert': '图片转换', dimension: '改尺寸', other: '操作' } as Record<string, string>)[p.reason] ?? p.reason
+  const detail = p.dims ? `${p.dims.indices.length} 个 ${p.dims.axis}` : `${p.cells.length} 个格`
+  lastEvent.value = `🚫 [${reasonLabel}] 拒绝: ${detail} 在白名单外 — ${p.message ?? ''}`
+  if (import.meta.env.DEV) (window as unknown as { __lastPermissionDenied?: unknown }).__lastPermissionDenied = p
+}
 // E7: 在选区上方插入一行 / 删除选区所在行
 function insertRowAtSel() {
   const v = viewerRef.value
@@ -510,6 +517,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         @dirty-change="onDirtyChange"
         @image-change="onImageChange"
         @struct-change="onStructChange"
+        @permission-denied="onPermissionDenied"
       >
         <!-- 分层 UI 演示: B3 上叠一个可点徽标,随滚动跟随 -->
         <template #overlay="{ rectOf, tick }">

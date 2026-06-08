@@ -48,6 +48,9 @@ function run(label: string, url: string, canvasSel: string, renderAreaSel: strin
     await expect(menu).toBeHidden()
     expect(await call(page, handle, 'getCellValue', 2, 1)).toBeNull()
 
+    // 并发跑时这里偶发 flake (菜单关闭事件 + 鼠标焦点切换时序),给一点缓冲
+    await page.waitForTimeout(80)
+
     // 再右键 → 点菜单外部关闭(菜单向下展开,选网格左上角一点必在菜单外,避免点中菜单项)
     await page.mouse.click(c.x, c.y, { button: 'right' })
     await expect(menu).toBeVisible()
