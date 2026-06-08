@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import ExcelViewer from './components/ExcelViewer.vue'
 import { definePlugin } from './core/plugin'
 import type { ViewerApi } from './core/plugin'
+import type { EditableTarget } from './core/edit/types'
 import type { PdfPageContext } from './core/export/types'
 import { demoSelectEditor } from './demo-shared/demo-editor'
 
@@ -139,6 +140,90 @@ function clearFill() {
   selTick.value++
 }
 
+// ---- 「设置可编辑单元格」演示(白名单 API,2026-06-08) ----
+// 默认 undefined = 白名单未启用(老行为:editable=true 时全可编辑);
+// applied = [] 或 [...targets] = 白名单生效(只 targets 可编辑)
+const editableTargetsApplied = ref<EditableTarget[] | undefined>(undefined)
+const editTargetsDialogOpen = ref(false)
+// 弹窗里的临时选区: 用 "r:c" 字符串集合记录(可独立勾选不相邻格)
+const editTargetsDraft = ref<Set<string>>(new Set())
+// 弹窗里"行/列整选"勾(独立于单格勾)
+const editTargetsRowDraft = ref<Set<number>>(new Set())
+const editTargetsColDraft = ref<Set<number>>(new Set())
+
+const EDIT_DIALOG_ROWS = 12
+const EDIT_DIALOG_COLS = 8
+
+function openEditTargetsDialog() {
+  // 用上一次应用的状态回灌, 没就空开
+  editTargetsDraft.value = new Set()
+  editTargetsRowDraft.value = new Set()
+  editTargetsColDraft.value = new Set()
+  for (const t of editableTargetsApplied.value ?? []) {
+    if ('top' in t) continue // 矩形跳过(demo 只用单格/整行/整列)
+    if ('row' in t && 'col' in t && typeof t.col === 'number') {
+      editTargetsDraft.value.add(`${t.row}:${t.col}`)
+    } else if ('row' in t && typeof t.row === 'number') {
+      editTargetsRowDraft.value.add(t.row)
+    } else if ('col' in t && typeof t.col === 'number') {
+      editTargetsColDraft.value.add(t.col)
+    }
+  }
+  editTargetsDialogOpen.value = true
+}
+function toggleEditTargetCell(r: number, c: number) {
+  const k = `${r}:${c}`
+  if (editTargetsDraft.value.has(k)) editTargetsDraft.value.delete(k)
+  else editTargetsDraft.value.add(k)
+  editTargetsDraft.value = new Set(editTargetsDraft.value) // trigger reactivity
+}
+function toggleEditTargetRow(r: number) {
+  if (editTargetsRowDraft.value.has(r)) editTargetsRowDraft.value.delete(r)
+  else editTargetsRowDraft.value.add(r)
+  editTargetsRowDraft.value = new Set(editTargetsRowDraft.value)
+}
+function toggleEditTargetCol(c: number) {
+  if (editTargetsColDraft.value.has(c)) editTargetsColDraft.value.delete(c)
+  else editTargetsColDraft.value.add(c)
+  editTargetsColDraft.value = new Set(editTargetsColDraft.value)
+}
+function isCellInDraft(r: number, c: number): boolean {
+  return editTargetsDraft.value.has(`${r}:${c}`) ||
+    editTargetsRowDraft.value.has(r) ||
+    editTargetsColDraft.value.has(c)
+}
+function applyEditTargets() {
+  const arr: EditableTarget[] = []
+  // 整行 / 整列 优先(更省内存 + 范围更直观)
+  for (const r of editTargetsRowDraft.value) arr.push({ row: r })
+  for (const c of editTargetsColDraft.value) arr.push({ col: c })
+  // 单格(排除已经被整行/整列覆盖的, 避免重复)
+  for (const k of editTargetsDraft.value) {
+    const [r, c] = k.split(':').map(Number)
+    if (editTargetsRowDraft.value.has(r) || editTargetsColDraft.value.has(c)) continue
+    arr.push({ row: r, col: c })
+  }
+  editableTargetsApplied.value = arr
+  editTargetsDialogOpen.value = false
+  lastEvent.value = `[白名单] ${arr.length} 项 target 已应用; 其它格只读`
+}
+function clearEditTargets() {
+  editableTargetsApplied.value = undefined
+  editTargetsDialogOpen.value = false
+  lastEvent.value = '[白名单] 已关闭, 恢复默认 (全可编辑)'
+}
+/** 弹窗里某格的预览文字(显示用), 取自当前工作簿;无则空 */
+function previewCellText(r: number, c: number): string {
+  const v = viewerRef.value?.getCellText(r, c) ?? ''
+  return v.length > 6 ? v.slice(0, 6) + '…' : v
+}
+function colLetter(c: number): string {
+  let s = ''
+  let n = c
+  while (true) { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1; if (n < 0) break }
+  return s
+}
+
 // 开发环境把命令式 API 挂到 window,便于 e2e 计算 canvas 上的几何(如筛选按钮位置)
 if (import.meta.env.DEV) {
   watch(viewerRef, (v) => {
@@ -252,6 +337,10 @@ const demoBarItems = computed<DemoItem[]>(() => {
   ]
   if (editMode.value) {
     arr.unshift(
+      { id: 'edit-targets', type: 'btn',
+        label: editableTargetsApplied.value ? `可编辑 (${editableTargetsApplied.value.length})` : '设置可编辑',
+        title: '白名单模式: 弹窗里点选要可编辑的格 / 行 / 列, 应用后只这些可编辑 (其它一律只读)',
+        onClick: openEditTargetsDialog },
       { id: 'bold', type: 'btn', label: 'B 加粗选区', title: '给选区加粗(E5)', onClick: boldSelection },
       { id: 'merge', type: 'btn', label: '合并', title: '合并选区(G1)', onClick: mergeSelection },
       { id: 'unmerge', type: 'btn', label: '拆分', title: '拆分选区(G1)', onClick: unmergeSelection },
@@ -405,6 +494,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         :editable="editMode"
         :recalc="editMode"
         :read-only-ranges="[{ top: 1, left: 0, bottom: 1, right: 4 }]"
+        :editable-targets="editableTargetsApplied"
         :editor="demoSelectEditor"
         :toolbar="['find', 'filter', 'clear-filter', 'separator', 'copy', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export']"
         @selection-change="(s) => { lastEvent = `选区 ${s.range.top + 1},${s.range.left + 1} → ${s.range.bottom + 1},${s.range.right + 1}`; selTick++ }"
@@ -428,6 +518,59 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
       </ExcelViewer>
       <div v-if="lastEvent" class="event-toast">{{ lastEvent }}</div>
       <div v-if="dragOver" class="drop-hint">松开以加载文件</div>
+
+      <!-- 「设置可编辑」对话框: 网格化点选 + 行/列整选 + 应用 (演示 editableTargets 白名单 API) -->
+      <div v-if="editTargetsDialogOpen" class="edit-targets-overlay" @click.self="editTargetsDialogOpen = false">
+        <div class="edit-targets-dialog">
+          <header>
+            <h3>设置可编辑单元格 (白名单)</h3>
+            <p class="hint">
+              点击单元格 = 该格可编辑;点击列标题 (A/B/C…) = 整列可编辑;点击行号 = 整行可编辑.
+              应用后,只有勾选的位置可编辑,其它全部只读. 关闭白名单 = 恢复默认 (整表可编辑).
+            </p>
+          </header>
+          <div class="edit-targets-grid">
+            <table>
+              <thead>
+                <tr>
+                  <th class="corner">#</th>
+                  <th
+                    v-for="c in EDIT_DIALOG_COLS"
+                    :key="'h' + c"
+                    :class="{ picked: editTargetsColDraft.has(c - 1) }"
+                    @click="toggleEditTargetCol(c - 1)"
+                    :title="`整列 ${colLetter(c - 1)} 可编辑`"
+                  >{{ colLetter(c - 1) }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in EDIT_DIALOG_ROWS" :key="'r' + r">
+                  <th
+                    :class="{ picked: editTargetsRowDraft.has(r - 1) }"
+                    @click="toggleEditTargetRow(r - 1)"
+                    :title="`整行 ${r} 可编辑`"
+                  >{{ r }}</th>
+                  <td
+                    v-for="c in EDIT_DIALOG_COLS"
+                    :key="'c' + r + ',' + c"
+                    :class="{ picked: isCellInDraft(r - 1, c - 1), 'row-col-hit': editTargetsRowDraft.has(r - 1) || editTargetsColDraft.has(c - 1) }"
+                    @click="toggleEditTargetCell(r - 1, c - 1)"
+                    :title="`R${r}C${c} (${colLetter(c - 1)}${r}) 切换`"
+                  >{{ previewCellText(r - 1, c - 1) || '·' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <footer>
+            <span class="count-hint">
+              已选:{{ editTargetsDraft.size }} 单格 / {{ editTargetsRowDraft.size }} 整行 / {{ editTargetsColDraft.size }} 整列
+            </span>
+            <button class="dlg-btn ghost" @click="editTargetsDialogOpen = false">取消</button>
+            <button class="dlg-btn ghost" @click="clearEditTargets" title="移除白名单, 恢复默认 (全可编辑)">关闭白名单</button>
+            <button class="dlg-btn primary" @click="applyEditTargets">应用</button>
+          </footer>
+        </div>
+      </div>
     </main>
   </div>
 </template>
@@ -564,4 +707,96 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
   color: #21a366;
   pointer-events: none;
 }
+
+/* ---- 「设置可编辑」对话框 ---- */
+.edit-targets-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+}
+.edit-targets-dialog {
+  background: #fff;
+  border-radius: 10px;
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+.edit-targets-dialog header {
+  padding: 14px 18px 8px;
+  border-bottom: 1px solid #eef0f3;
+}
+.edit-targets-dialog h3 { margin: 0 0 6px; font-size: 15px; color: #1f2329; }
+.edit-targets-dialog .hint { margin: 0; font-size: 12px; color: #707481; line-height: 1.6; }
+.edit-targets-grid {
+  padding: 12px 18px;
+  overflow: auto;
+  flex: 1 1 auto;
+}
+.edit-targets-grid table { border-collapse: collapse; font-size: 12px; }
+.edit-targets-grid th,
+.edit-targets-grid td {
+  border: 1px solid #dce0e6;
+  padding: 4px 6px;
+  min-width: 44px;
+  height: 26px;
+  text-align: center;
+  cursor: pointer;
+  color: #1f2329;
+  background: #fff;
+  user-select: none;
+}
+.edit-targets-grid thead th,
+.edit-targets-grid tbody th {
+  background: #f5f7fa;
+  color: #707481;
+  font-weight: 600;
+}
+.edit-targets-grid tbody td:hover,
+.edit-targets-grid thead th:hover,
+.edit-targets-grid tbody th:hover { background: #eef3fe; }
+.edit-targets-grid tbody td.picked,
+.edit-targets-grid thead th.picked,
+.edit-targets-grid tbody th.picked {
+  background: #d6f0e0;
+  color: #146c2e;
+  font-weight: 600;
+}
+.edit-targets-grid tbody td.row-col-hit {
+  background: linear-gradient(135deg, #eef9f1 25%, transparent 25%, transparent 50%, #eef9f1 50%, #eef9f1 75%, transparent 75%);
+  background-size: 8px 8px;
+}
+.edit-targets-grid .corner { background: #ebeef2 !important; cursor: default; }
+.edit-targets-dialog footer {
+  padding: 10px 18px;
+  border-top: 1px solid #eef0f3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fafbfc;
+}
+.edit-targets-dialog footer .count-hint {
+  flex: 1 1 auto;
+  font-size: 12px;
+  color: #707481;
+}
+.dlg-btn {
+  border: 1px solid #d8dbde;
+  background: #fff;
+  color: #1f2329;
+  padding: 6px 14px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.dlg-btn:hover { background: #f5f7fa; }
+.dlg-btn.primary { background: #21a366; border-color: #21a366; color: #fff; }
+.dlg-btn.primary:hover { background: #1a8c56; }
+.dlg-btn.ghost { background: transparent; }
 </style>

@@ -14,7 +14,7 @@ import {
   type CSSProperties,
 } from 'react'
 import type { CellModel, CellStyleFn, CellStyleOverride, ImageAnchor, MergeRange, SheetModel, TransformModelFn, WorkbookModel } from '@/core/model/types'
-import type { EditConfig } from '@/core/edit/types'
+import type { EditableTarget, EditConfig } from '@/core/edit/types'
 import type { FormulaEngineFactory } from '@/core/formula/engine'
 import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload, StructChangePayload } from '@/core/edit/edit-controller'
 import type { CellSnapshot } from '@/core/model/snapshot'
@@ -114,6 +114,12 @@ export interface ExcelViewerProps {
   cellReadOnly?: (cell: CellModel | null, pos: { row: number; col: number }) => boolean | void
   /** 只读区域(0-based 闭区间);命中即只读 */
   readOnlyRanges?: MergeRange[]
+  /**
+   * **可编辑白名单**(2026-06-08 新增):设了就是白名单语义,只命中**任一** target 的格才可编辑.
+   * 4 种 target 形状自动识别:`{row,col}` 单格 / `{row}` 整行 / `{col}` 整列 / `MergeRange` 矩形.
+   * 单值或数组都支持;允许**不相邻**多 target. `undefined`=默认全可编辑(老行为),`[]`=全只读.
+   */
+  editableTargets?: EditableTarget | EditableTarget[]
   /** 自定义单元格编辑器(按格返回工厂;覆盖插件 editor)。需 editable 开启 */
   editor?: EditorResolver
   /** 公式重算(E4):默认 false 沿用缓存值。开启后编辑公式/被引用格 → 依赖格自动重算。需 editable */
@@ -155,6 +161,8 @@ export interface ExcelViewerHandle {
   rectOfRange: (range: MergeRange) => { x: number; y: number; w: number; h: number } | null
   redraw: () => void
   isCellEditable: (row: number, col: number) => boolean
+  setEditableTargets: (targets: EditableTarget | EditableTarget[] | undefined) => void
+  getEditableTargets: () => EditableTarget | EditableTarget[] | undefined
   editCell: (row: number, col: number, value: CellValue) => boolean
   editRange: (range: MergeRange, values: CellValue[][]) => boolean
   clearRange: (range: MergeRange) => boolean
@@ -321,6 +329,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       editable: p.editable,
       cellReadOnly: p.cellReadOnly,
       readOnlyRanges: p.readOnlyRanges,
+      editableTargets: p.editableTargets,
       recalc: p.recalc,
       formulaEngine: p.formulaEngine,
     }
@@ -538,7 +547,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   useEffect(() => {
     controllerRef.current?.setEditConfig(buildEditConfig())
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.editable, props.cellReadOnly, props.readOnlyRanges, props.recalc, props.formulaEngine])
+  }, [props.editable, props.cellReadOnly, props.readOnlyRanges, props.editableTargets, props.recalc, props.formulaEngine])
 
   // ---- 右键菜单 transform 同步(Plan C) ----
   useEffect(() => {
@@ -628,6 +637,8 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       rectOfRange: (range) => controllerRef.current?.rectOfRange(range) ?? null,
       redraw: () => controllerRef.current?.render(),
       isCellEditable: (row, col) => controllerRef.current?.isCellEditable(row, col) ?? false,
+      setEditableTargets: (targets) => controllerRef.current?.setEditableTargets(targets),
+      getEditableTargets: () => controllerRef.current?.getEditableTargets(),
       editCell: (row, col, value) => controllerRef.current?.editCell(row, col, value) ?? false,
       editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
       clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
@@ -735,6 +746,8 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     rectOfRange: (range) => controllerRef.current?.rectOfRange(range) ?? null,
     redraw: () => controllerRef.current?.render(),
     isCellEditable: (row, col) => controllerRef.current?.isCellEditable(row, col) ?? false,
+    setEditableTargets: (targets) => controllerRef.current?.setEditableTargets(targets),
+    getEditableTargets: () => controllerRef.current?.getEditableTargets(),
     editCell: (row, col, value) => controllerRef.current?.editCell(row, col, value) ?? false,
     editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
     clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,

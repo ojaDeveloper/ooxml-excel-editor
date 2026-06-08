@@ -23,7 +23,7 @@ import { useExcelDocument } from '@/composables/useExcelDocument'
 import { CanvasRenderer, type ViewState } from '@/core/render/canvas-renderer'
 import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { ViewerController, type ContextMenuBeforePayload, type ContextMenuShowPayload, type ContextMenuTransform, type TooltipState, type FindState } from '@/core/viewer/controller'
-import type { EditConfig } from '@/core/edit/types'
+import type { EditableTarget, EditConfig } from '@/core/edit/types'
 import type { FormulaEngineFactory } from '@/core/formula/engine'
 import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload, StructChangePayload } from '@/core/edit/edit-controller'
 import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
@@ -91,6 +91,15 @@ const props = withDefaults(
     cellReadOnly?: (cell: CellModel | null, pos: { row: number; col: number }) => boolean | void
     /** 只读区域(0-based 闭区间);命中即只读 */
     readOnlyRanges?: MergeRange[]
+    /**
+     * **可编辑白名单**(2026-06-08 新增) —— 设了就是白名单语义:默认只读,只有命中**任一**
+     * target 的格才可编辑。4 种 target 形状:`{row,col}` 单格 / `{row}` 整行 / `{col}` 整列 /
+     * `MergeRange` 矩形。可单值可数组,允许**不相邻**多个 target.
+     *
+     * `undefined`(不传)= 不启用白名单(老行为:默认全可编辑);`[]`(显式空数组)= 全只读.
+     * 与 `readOnlyRanges` / `cellReadOnly` 叠加 — 白名单命中后仍可被它们二次"黑"掉.
+     */
+    editableTargets?: EditableTarget | EditableTarget[]
     /** 自定义单元格编辑器(按格返回工厂;覆盖插件 editor)。需 editable 开启 */
     editor?: EditorResolver
     /** 公式重算(E4):默认 false 沿用缓存值。开启后编辑公式/被引用格 → 依赖格自动重算。需 editable */
@@ -147,6 +156,7 @@ const effectiveEditConfig = computed<EditConfig>(() => ({
   editable: props.editable,
   cellReadOnly: props.cellReadOnly,
   readOnlyRanges: props.readOnlyRanges,
+  editableTargets: props.editableTargets,
   recalc: props.recalc,
   formulaEngine: props.formulaEngine,
 }))
@@ -766,6 +776,8 @@ const viewerApi: ViewerApi = {
   rectOfRange,
   redraw: () => doRender(),
   isCellEditable: (row, col) => controller?.isCellEditable(row, col) ?? false,
+  setEditableTargets: (targets) => controller?.setEditableTargets(targets),
+  getEditableTargets: () => controller?.getEditableTargets(),
   editCell: (row, col, value) => controller?.editCell(row, col, value) ?? false,
   editRange: (range, values) => controller?.editRange(range, values) ?? false,
   clearRange: (range) => controller?.clearRange(range) ?? false,

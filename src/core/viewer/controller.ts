@@ -1660,9 +1660,24 @@ export class ViewerController {
     this.edit.refreshEngine() // recalc/formulaEngine 可能变了 → 重置引擎并按需点火
   }
 
-  /** 该格当前是否可编辑(综合 editable + readOnlyRanges + cellReadOnly) */
+  /** 该格当前是否可编辑(综合 editable + editableTargets 白名单 + readOnlyRanges + cellReadOnly) */
   isCellEditable(row: number, col: number): boolean {
     return this.sheet ? resolveEditable(this.sheet, row, col, this.editCfg) : false
+  }
+
+  /**
+   * **运行时**改可编辑白名单(2026-06-08 新增) —— 不动 `:editableTargets` prop,
+   * 直接覆盖 `editCfg.editableTargets`. 立即重绘以反映只读光标变化.
+   * 传 `undefined` = 关闭白名单(默认全可编辑);`[]` = 全只读;单值或数组 = 白名单.
+   */
+  setEditableTargets(targets: EditConfig['editableTargets']): void {
+    this.editCfg = { ...this.editCfg, editableTargets: targets }
+    this.render() // editable 状态变了, 重绘以触发外部 cell-style 钩子重算 (可视化只读/可编辑)
+  }
+
+  /** 当前生效的可编辑白名单(运行时 setEditableTargets 或初始 prop). 用 `undefined` 表示未启用白名单 */
+  getEditableTargets(): EditConfig['editableTargets'] {
+    return this.editCfg.editableTargets
   }
 
   // ---- 命令式编辑 API(委托 EditController;E1) ----

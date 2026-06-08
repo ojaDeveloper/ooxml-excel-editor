@@ -19,6 +19,7 @@ import type { CellSnapshot } from './model/snapshot'
 import type { CellInspection } from './model/inspect'
 import type { MenuItem } from './edit/context-menu'
 import type { EditorResolver } from './edit/editor-context'
+import type { EditableTarget } from './edit/types'
 import type { ViewerTheme } from './render/theme'
 import type { ExcelSource } from './loader'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from './export/types'
@@ -56,8 +57,17 @@ export interface ViewerApi {
   rectOf(row: number, col: number): Rect | null
   rectOfRange(range: MergeRange): Rect | null
   redraw(): void
-  /** 该格当前是否可编辑(综合 editable + readOnlyRanges + cellReadOnly) */
+  /** 该格当前是否可编辑(综合 editable + editableTargets 白名单 + readOnlyRanges + cellReadOnly) */
   isCellEditable(row: number, col: number): boolean
+  /**
+   * **运行时**改可编辑白名单 (2026-06-08 新增). 接受 4 种 target 形状:
+   * `{row,col}` 单格 / `{row}` 整行 / `{col}` 整列 / `MergeRange` 矩形;单值或数组都支持,允许**不相邻**.
+   * 传 `undefined` = 关闭白名单(默认全可编辑);`[]` = 全只读;命中**任一** target → 可编辑.
+   * 立即生效, 不动 `:editableTargets` prop.
+   */
+  setEditableTargets(targets: EditableTarget | EditableTarget[] | undefined): void
+  /** 当前生效的可编辑白名单. `undefined` 表示未启用白名单. */
+  getEditableTargets(): EditableTarget | EditableTarget[] | undefined
   /** 导出当前/指定表为图片 Blob(默认 png) */
   exportImage(opts?: ImageExportOptions): Promise<Blob>
   /** 导出为图片并触发下载 */
@@ -276,6 +286,7 @@ export function definePlugin(plugin: ExcelPlugin): ExcelPlugin {
 export { jsonToWorkbook, isWorkbookModel, type JsonInput, type JsonLoadOptions, type JsonRow, type JsonSheetInput } from './loader-json'
 export { applyStyleTemplate } from './template/style-overlay'
 export type { CellInspection } from './model/inspect'
+export type { EditableTarget, EditConfig } from './edit/types'
 export type { MenuItem } from './edit/context-menu'
 export type {
   ContextMenuCtx,
