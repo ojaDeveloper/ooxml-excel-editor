@@ -30,6 +30,8 @@ import {
   type VNode,
 } from 'vue2'
 import type { ExportConfig } from '@/components/export-types'
+import type { ResolvedToolbarItem } from '@/components/toolbar-types'
+import { TOOLBAR_ICONS, svgWrap } from '@/components/toolbar-icons'
 import type {
   ContextMenuTransform,
   ExcelPlugin,
@@ -140,6 +142,13 @@ export default defineComponent({
     const exportBusy = ref(false)
     let exportCtrl: AbortController | null = null
     const exportDialogOpen = ref(false)
+    // 下拉菜单全局唯一 open id (header 导出菜单 / action toolbar 各项的子菜单 / 「更多」折叠菜单 共用)
+    const menuOpenId = ref<string | null>(null)
+    function setMenuOpen(id: string | null) { menuOpenId.value = id }
+    function toggleMenu(id: string) { menuOpenId.value = menuOpenId.value === id ? null : id }
+    function onDocClick(e: MouseEvent) {
+      if (!(e.target as HTMLElement)?.closest('[data-tb-menu]')) menuOpenId.value = null
+    }
     const exportForm = reactive<ExportConfig>({
       action: 'png',
       scope: 'sheet',
@@ -409,6 +418,7 @@ export default defineComponent({
       void runInitialLoad()
       resizeObserver = new ResizeObserver(() => { controllerRef.value?.measure(); controllerRef.value?.render() })
       resizeObserver.observe(renderArea)
+      if (typeof document !== 'undefined') document.addEventListener('click', onDocClick)
     })
 
     // ---- 各 prop 变化 → 同步到 controller ----
@@ -453,6 +463,7 @@ export default defineComponent({
       pluginOverlayHost?.dispose()
       pluginCleanups.forEach((fn) => fn())
       if (workbook.value) revokeImages(workbook.value)
+      if (typeof document !== 'undefined') document.removeEventListener('click', onDocClick)
     })
 
     // ---- 选区 / 活动格 / 公式栏派生 ----
@@ -706,50 +717,212 @@ export default defineComponent({
       controller.render()
     }
 
+    /** 内置 toolbar item 工厂 — 跟 Vue 3 SFC builtinTool 完全对齐 */
+    function bi(o: Partial<ResolvedToolbarItem> & { id: string }): ResolvedToolbarItem {
+      return { kind: 'builtin', ...o }
+    }
+    const I = (name: string) => TOOLBAR_ICONS[name]
+    function builtinTool(id: string): ResolvedToolbarItem | null {
+      const controller = controllerRef.value
+      const sheet = workbook.value?.sheets[activeSheet.value]
+      switch (id) {
+        case 'find':
+          return bi({ id, iconSvg: I('find'), label: '查找', title: '查找 (Ctrl+F)', active: findOpen.value, onClick: () => (findOpen.value ? closeFind() : openFind()) })
+        case 'filter':
+          return bi({ id, iconSvg: I('filter'), label: '筛选', title: '切换自动筛选', active: !!sheet?.autoFilterRange, onClick: toggleAutoFilter })
+        case 'clear-filter':
+          return bi({ id, iconSvg: I('clear-filter'), label: '清除筛选', title: '清除当前表全部筛选', disabled: !controller?.hasFilters(), onClick: () => controller?.clearAllFilters() })
+        case 'copy':
+          return bi({ id, iconSvg: I('copy'), label: '复制', title: '复制选区 (Ctrl+C)', disabled: !selection.value, onClick: () => void controller?.copySelection() })
+        case 'wrap-text': {
+          const wrapState = controller?.getSelectionWrapState() ?? 'none'
+          return bi({ id, iconSvg: I('wrap-text'), label: '自动换行', title: '自动换行(选区,WPS 风格 toggle)', active: wrapState === 'all', disabled: !selection.value || !props.editable, onClick: () => void controller?.toggleWrapTextOnSelection() })
+        }
+        case 'template': {
+          const active = !!effectiveTemplateSrc.value
+          const name = effectiveTemplateName.value
+          const isXlsxSrc = !!props.src && !props.workbook
+          return bi({
+            id, iconSvg: I('template'), label: '模板',
+            title: isXlsxSrc ? '模板仅对 JSON / 模型数据源生效;当前是 .xlsx 数据源,模板不可用'
+              : active ? `模板已加载:${name || '(未命名)'}`
+              : '为 JSON / 模型数据源套用 .xlsx 模板的样式;模板的文字内容会被丢弃',
+            active, disabled: isXlsxSrc,
+            items: [
+              bi({ id: 'tpl-default', label: (!active ? '✓ ' : '') + '默认渲染', title: '不套模板,数据按默认样式渲染', disabled: !active, onClick: clearRuntimeTemplate }),
+              bi({ id: 'tpl-sep', type: 'separator' }),
+              bi({ id: 'tpl-import', label: '导入 .xlsx 模板…', title: '选一份 .xlsx, 把它的 styling 套到当前 JSON 数据上', onClick: openTemplateFilePicker }),
+              bi({ id: 'tpl-clear', label: '清除模板', title: '切回默认样式渲染', disabled: !active, onClick: clearRuntimeTemplate }),
+            ],
+          })
+        }
+        case 'image-tools': {
+          const sel = selection.value
+          const active = controller?.getActiveCell()
+          const hasFloats = (sheet?.images.length ?? 0) > 0
+          return bi({
+            id, iconSvg: I('image-tools'), label: '图片工具', title: '浮动图 ⇄ 单元格内嵌图(WPS DISPIMG)互转',
+            disabled: !props.editable,
+            items: [
+              bi({ id: 'img-sel-to-cell', label: '选区:浮动 → 嵌入', title: '把选区里"中心格在选区内"的浮动图就近嵌入', disabled: !sel || !hasFloats, onClick: () => sel && controller?.convertImagesInRangeToCell(sel) }),
+              bi({ id: 'img-sel-to-float', label: '选区:嵌入 → 浮动', title: '把选区内所有 DISPIMG 格拎成浮动图', disabled: !sel, onClick: () => sel && controller?.convertCellImagesInRangeToFloat(sel) }),
+              bi({ id: 'img-sep', type: 'separator' }),
+              bi({ id: 'img-all-to-cell', label: '整表:浮动 → 嵌入', title: '全表浮动图按几何就近嵌入各自单元格', disabled: !hasFloats, onClick: () => controller?.convertAllImagesToCells() }),
+              bi({ id: 'img-col-to-cell', label: '整列:浮动 → 嵌入(活动列)', title: '把中心落在活动列的浮动图就近嵌入', disabled: !hasFloats || !active, onClick: () => active && controller?.convertAllImagesToCells(active.col) }),
+            ],
+          })
+        }
+        case 'freeze': {
+          const fz = sheet?.freeze
+          return bi({ id, iconSvg: I('freeze'), label: '冻结', title: '冻结/取消冻结(在活动单元格)', active: !!(fz && (fz.frozenRows || fz.frozenCols)), onClick: toggleFreeze })
+        }
+        case 'export':
+          return bi({
+            id, iconSvg: I('export'), label: '导出', title: '导出 / 打印',
+            items: [
+              bi({ id: 'export-png', label: '导出为图片 (PNG)', onClick: () => void downloadImage() }),
+              bi({ id: 'export-pdf', label: '导出为 PDF (位图)', onClick: onExportPdf }),
+              bi({ id: 'export-pdf-vector', label: '导出为 PDF (矢量·文字可选)', onClick: () => void downloadPdf({ vector: true }).catch(reportError) }),
+              bi({ id: 'export-print', label: '打印…', onClick: () => void print() }),
+              bi({ id: 'export-sep', type: 'separator' }),
+              bi({ id: 'export-settings', label: '导出设置…', onClick: () => { exportDialogOpen.value = true; exportForm.scope = selRangeLabel.value ? 'selection' : 'sheet' } }),
+            ],
+          })
+        case 'zoom':
+          return bi({
+            id, iconSvg: I('zoom'), label: Math.round(zoom.value * 100) + '%', title: '缩放',
+            items: [50, 75, 100, 125, 150, 200].map((p) => bi({ id: 'zoom-' + p, label: p + '%', active: Math.round(zoom.value * 100) === p, onClick: () => { zoom.value = p / 100 } })),
+          })
+      }
+      return null
+    }
+    function resolveItem(it: any, kind: 'custom' | 'plugin'): ResolvedToolbarItem {
+      const out: ResolvedToolbarItem = { kind, id: it.id, type: it.type, icon: it.icon, label: it.label, title: it.title }
+      if (it.active) out.active = !!it.active(viewerApi as ViewerApi)
+      if (it.disabled) out.disabled = !!it.disabled(viewerApi as ViewerApi)
+      if (it.onClick) out.onClick = () => it.onClick?.(viewerApi as ViewerApi)
+      if (it.items?.length) out.items = it.items.map((c: any) => resolveItem(c, kind))
+      return out
+    }
+    const resolvedToolbar = computed<ResolvedToolbarItem[]>(() => {
+      void selVersion.value; void findVersion.value; void filterVersion.value
+      if (props.toolbar === false) return []
+      const entries: Array<string | any> = Array.isArray(props.toolbar) ? props.toolbar : ['find', 'filter']
+      const out: ResolvedToolbarItem[] = []
+      for (const e of entries) {
+        if (typeof e === 'string') {
+          if (e === 'separator' || e === '|') out.push({ id: 'sep-' + out.length, type: 'separator', kind: 'builtin' })
+          else { const b = builtinTool(e); if (b) out.push(b) }
+        } else {
+          out.push(resolveItem(e, 'custom'))
+        }
+      }
+      for (const p of normalizedPlugins.value) {
+        for (const it of p.toolbar ?? []) out.push(resolveItem(it, 'plugin'))
+      }
+      return out
+    })
+    const showActionBar = computed(() => props.toolbar !== false && resolvedToolbar.value.length > 0)
+
+    /** 公共下拉菜单渲染 (用于 header 导出 + action toolbar 各下拉) */
+    function renderToolbarMenu(items: ResolvedToolbarItem[], onPick: (it: ResolvedToolbarItem) => void, menuClass = 'ov-tb-menu'): VNode {
+      return h('div', { class: menuClass, attrs: { 'data-tb-menu': 'true' } },
+        items.map((it) => it.type === 'separator'
+          ? h('div', { key: it.id, class: 'sep' })
+          : h('button', {
+              key: it.id,
+              class: { mi: true, active: !!it.active },
+              attrs: { disabled: !!it.disabled, title: it.title },
+              on: { click: (e: Event) => { e.stopPropagation(); if (!it.disabled) onPick(it) } },
+            }, [
+              it.iconSvg ? h('span', { class: 'ic', domProps: { innerHTML: svgWrap(it.iconSvg) } })
+                : it.icon ? h('span', { class: 'ic-e' }, it.icon)
+                : null,
+              h('span', { class: 'lb' }, it.label || it.id),
+            ]),
+        ),
+      )
+    }
+
+    /** 顶部 ViewerToolbar (1:1 跟 Vue 3 SFC) — 文件名 + 表数 + 导出下拉 + 缩放 [−/+] */
     function renderHeader(): VNode | null {
       if (!workbook.value) return null
       const fname = displayFileName.value
       const tname = effectiveTemplateName.value
+      const STEPS = [0.5, 0.75, 1, 1.25, 1.5, 2]
+      const exportMenuOpen = menuOpenId.value === '__header-export'
+      const exportMenuItems: ResolvedToolbarItem[] = [
+        bi({ id: 'h-png', label: '导出为图片 (PNG)', onClick: () => void downloadImage() }),
+        bi({ id: 'h-pdf', label: '导出为 PDF (位图)', onClick: onExportPdf }),
+        bi({ id: 'h-pdf-vec', label: '导出为 PDF (矢量·文字可选)', onClick: () => void downloadPdf({ vector: true }).catch(reportError) }),
+        bi({ id: 'h-print', label: '打印…', onClick: () => void print() }),
+        bi({ id: 'h-sep', type: 'separator' }),
+        bi({ id: 'h-settings', label: '导出设置…', onClick: () => { exportDialogOpen.value = true; exportForm.scope = selRangeLabel.value ? 'selection' : 'sheet' } }),
+      ]
+      const setZoom = (z: number) => { zoom.value = Math.min(3, Math.max(0.3, z)) }
       return h('div', { key: 'header', class: 'ov-toolbar' }, [
         h('span', { class: 'file', attrs: { title: fname + (tname ? ' · 模板: ' + tname : '') } }, [
-          h('span', { class: 'name' }, fname || '未命名'),
+          fname || '未命名工作簿',
           tname ? h('span', { class: 'tpl' }, ' · 模板: ' + tname) : null,
-          h('span', { class: 'sheets' }, ' · ' + visibleSheets().length + ' 表'),
         ]),
-        h('span', { class: 'spacer' }),
-        h('select', {
-          attrs: { title: '缩放' },
-          domProps: { value: Math.round(zoom.value * 100) },
-          on: { change: (e: Event) => { zoom.value = Number((e.target as HTMLSelectElement).value) / 100 } },
-        }, [50, 75, 100, 125, 150, 200].map((p) => h('option', { domProps: { value: p } }, p + '%'))),
-        h('button', { class: 'btn', on: { click: () => void downloadImage() } }, '↓PNG'),
-        h('button', { class: 'btn', on: { click: onExportPdf } }, '↓PDF'),
-        h('button', { class: 'btn', on: { click: () => void viewerApi.downloadXlsx() } }, '↓XLSX'),
-        h('button', { class: 'btn', attrs: { title: '导出/打印高级配置' }, on: { click: () => { exportDialogOpen.value = true; exportForm.scope = selRangeLabel.value ? 'selection' : 'sheet' } } }, '导出设置…'),
+        h('span', { class: 'meta' }, visibleSheets().length + ' 个工作表'),
+        h('div', { class: 'spacer' }),
+        // 导出下拉
+        h('div', { class: 'ov-export-wrap', attrs: { 'data-tb-menu': 'true' } }, [
+          h('button', {
+            class: { 'ov-export-btn': true, open: exportMenuOpen },
+            attrs: { title: '导出 / 打印' },
+            on: { click: (e: Event) => { e.stopPropagation(); toggleMenu('__header-export') } },
+          }, ['导出 ', h('span', { class: 'caret' }, '▾')]),
+          exportMenuOpen ? renderToolbarMenu(exportMenuItems, (it) => { setMenuOpen(null); it.onClick?.() }, 'ov-tb-menu header-menu') : null,
+        ]),
+        // 缩放组 [-/select/+]
+        h('div', { class: 'ov-zoom' }, [
+          h('button', { attrs: { title: '缩小' }, on: { click: () => setZoom(zoom.value - 0.1) } }, '−'),
+          h('select', {
+            domProps: { value: String(zoom.value) },
+            on: { change: (e: Event) => setZoom(parseFloat((e.target as HTMLSelectElement).value)) },
+          }, [
+            ...STEPS.map((s) => h('option', { key: s, domProps: { value: String(s) } }, Math.round(s * 100) + '%')),
+            !STEPS.includes(zoom.value)
+              ? h('option', { key: 'cur', domProps: { value: String(zoom.value) } }, Math.round(zoom.value * 100) + '%')
+              : null,
+          ]),
+          h('button', { attrs: { title: '放大' }, on: { click: () => setZoom(zoom.value + 0.1) } }, '+'),
+        ]),
       ])
     }
 
+    /** Action 工具栏 (1:1 跟 Vue 3 SFC ActionToolbar) — SVG 图标 + 下拉子菜单 */
     function renderActionToolbar(): VNode | null {
-      if (!workbook.value || props.toolbar === false) return null
-      void selVersion.value; void findVersion.value; void filterVersion.value
-      const controller = controllerRef.value
-      const items: VNode[] = []
-      items.push(h('button', { class: { tool: true, active: findOpen.value }, attrs: { title: '查找 Ctrl+F' }, on: { click: () => findOpen.value ? closeFind() : openFind() } }, '🔍 查找'))
-      items.push(h('button', { class: { tool: true, active: !!workbook.value.sheets[activeSheet.value]?.autoFilterRange }, attrs: { title: '切换自动筛选' }, on: { click: toggleAutoFilter } }, '⏷ 筛选'))
-      items.push(h('button', { class: 'tool', attrs: { title: '清除筛选', disabled: !controller?.hasFilters() }, on: { click: () => controller?.clearAllFilters() } }, '✕ 筛选'))
-      items.push(h('button', { class: 'tool', attrs: { title: '复制选区', disabled: !selection.value }, on: { click: () => void controller?.copySelection() } }, '⎘'))
-      items.push(h('button', { class: { tool: true, active: !!(workbook.value.sheets[activeSheet.value]?.freeze.frozenRows || workbook.value.sheets[activeSheet.value]?.freeze.frozenCols) }, attrs: { title: '冻结活动单元格' }, on: { click: toggleFreeze } }, '❄ 冻结'))
-      for (const p of normalizedPlugins.value) {
-        for (const it of p.toolbar ?? []) {
-          if (it.type === 'separator') continue
-          items.push(h('button', {
-            class: { tool: true, active: !!it.active?.(viewerApi as ViewerApi) },
-            attrs: { title: it.title, disabled: !!it.disabled?.(viewerApi as ViewerApi) },
-            on: { click: () => it.onClick?.(viewerApi as ViewerApi) },
-          }, [it.label ?? it.icon ?? it.id]))
+      if (!workbook.value || !showActionBar.value) return null
+      const items = resolvedToolbar.value
+      const renderItem = (it: ResolvedToolbarItem): VNode => {
+        if (it.type === 'separator') return h('span', { key: it.id, class: 'ov-at-divider' })
+        const hasSub = !!it.items?.length
+        const open = menuOpenId.value === it.id
+        const onBtnClick = (e: Event) => {
+          e.stopPropagation()
+          if (it.disabled) return
+          if (hasSub) toggleMenu(it.id)
+          else { it.onClick?.(); setMenuOpen(null) }
         }
+        return h('div', { key: it.id, class: 'ov-at-dd', attrs: { 'data-tb-menu': 'true' } }, [
+          h('button', {
+            class: { 'ov-at-tool': true, active: !!it.active, open },
+            attrs: { disabled: !!it.disabled, title: it.title || it.label || it.id },
+            on: { click: onBtnClick },
+          }, [
+            it.iconSvg ? h('span', { class: 'ov-at-ic', domProps: { innerHTML: svgWrap(it.iconSvg) } })
+              : it.icon ? h('span', { class: 'ov-at-ic-e' }, it.icon)
+              : null,
+            it.label ? h('span', { class: 'ov-at-lb' }, it.label) : null,
+            hasSub ? h('span', { class: 'ov-at-caret', domProps: { innerHTML: svgWrap(I('caret')) } }) : null,
+          ]),
+          (hasSub && open) ? renderToolbarMenu(it.items!, (sub) => { setMenuOpen(null); sub.onClick?.() }) : null,
+        ])
       }
-      return h('div', { key: 'action', class: 'ov-action-toolbar' }, items)
+      return h('div', { key: 'action', class: 'ov-action-toolbar' }, items.map(renderItem))
     }
 
     function renderFormulaBar(): VNode | null {

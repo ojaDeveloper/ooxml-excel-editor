@@ -16,6 +16,8 @@ new Vue({
       editMode: false,
       lastEvent: '',
       fileName: '',
+      // 跟 Vue 3 demo (src/App.vue) 同款完整工具栏配置
+      toolbarItems: ['find', 'filter', 'clear-filter', 'separator', 'copy', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export'],
     }
   },
   methods: {
@@ -63,6 +65,7 @@ new Vue({
           :file-name="fileName"
           :editable="editMode"
           :recalc="editMode"
+          :toolbar="toolbarItems"
           @rendered="onRendered"
           @error="onError"
           @cell-click="onCellClick"
