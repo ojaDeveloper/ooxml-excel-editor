@@ -100,6 +100,11 @@ const props = withDefaults(
      * 与 `readOnlyRanges` / `cellReadOnly` 叠加 — 白名单命中后仍可被它们二次"黑"掉.
      */
     editableTargets?: EditableTarget | EditableTarget[]
+    /**
+     * **严格尺寸闸门**(Phase B, 2026-06-08) —— 默认 `false`: setColumnWidth/setRowHeight/autoFit 仅受全局
+     * `editable` 控制(老行为). 设 `true` + `editableTargets` 启用了 → 该列/行至少有 1 格在白名单内才能改尺寸.
+     */
+    strictDimensions?: boolean
     /** 自定义单元格编辑器(按格返回工厂;覆盖插件 editor)。需 editable 开启 */
     editor?: EditorResolver
     /** 公式重算(E4):默认 false 沿用缓存值。开启后编辑公式/被引用格 → 依赖格自动重算。需 editable */
@@ -157,6 +162,7 @@ const effectiveEditConfig = computed<EditConfig>(() => ({
   cellReadOnly: props.cellReadOnly,
   readOnlyRanges: props.readOnlyRanges,
   editableTargets: props.editableTargets,
+  strictDimensions: props.strictDimensions,
   recalc: props.recalc,
   formulaEngine: props.formulaEngine,
 }))
@@ -837,8 +843,12 @@ const viewerApi: ViewerApi = {
   beginEdit: (row, col) => controller?.beginEdit(row, col) ?? false,
   cancelEdit: () => controller?.cancelEdit(),
   isEditing: () => controller?.isEditing() ?? false,
-  setColumnWidth: (col, width) => controller?.setColumnWidth(col, width) ?? false,
-  setRowHeight: (row, height) => controller?.setRowHeight(row, height) ?? false,
+  setColumnWidth: (target, width) => controller?.setColumnWidth(target, width) ?? 0,
+  setRowHeight: (target, height) => controller?.setRowHeight(target, height) ?? 0,
+  autoFitColumns: (target) => controller?.autoFitColumns(target) ?? 0,
+  autoFitRows: (target) => controller?.autoFitRows(target) ?? 0,
+  resetColumnWidth: (target) => controller?.resetColumnWidth(target) ?? 0,
+  resetRowHeight: (target) => controller?.resetRowHeight(target) ?? 0,
   isRecalcReady: () => controller?.isRecalcReady() ?? false,
   getVirtualExtent: () => controller?.getVirtualExtent() ?? { rows: 0, cols: 0 },
   isDirty: () => controller?.isDirty() ?? false,

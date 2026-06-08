@@ -17,7 +17,8 @@ import { pxToEmu } from '../layout/units'
 import { deleteIntersectsMerge } from '../model/structure'
 import { anchorRect } from '../overlay/anchor'
 import type { EditConfig } from '../edit/types'
-import { resolveEditable } from '../edit/permissions'
+import { resolveEditable, canEditDimension, normalizeDimTarget } from '../edit/permissions'
+import { cloneWorkbook } from '../model/clone'
 import { EditController, type EditControllerHost, type EditEventName } from '../edit/edit-controller'
 import { defaultFormulaEngineFactory } from '../formula/hyperformula-adapter'
 import type { CellValue, SheetToJSONOptions } from '../model/data-access'
@@ -385,14 +386,109 @@ export class ViewerController {
     if (this.editCfg.editable) this.endResizeRecord('row', row)
   }
 
-  // ---- 维度 / 脏状态 命令式 API(E3.5) ----
-  /** 程序化设列宽(px,模型单位/非缩放);editable 时走命令栈(可撤销+发 dim-change+记脏)。 */
-  setColumnWidth(col: number, width: number): boolean {
-    return this.edit.setDimension('col', col, width)
+  // ---- 维度 / 脏状态 命令式 API(E3.5;Phase B 多形态 2026-06-08) ----
+  /**
+   * 程序化设列宽 (px, 模型单位/非缩放). Phase B 2026-06-08:
+   * target 接 `number | number[] | {from,to}` (DimTarget). 多 index 时聚合成单次 undo.
+   * editable 时走命令栈;strictDimensions=true 时该列至少 1 格在白名单内才生效.
+   * 返回**成功条数** (0 = 全部 skip / editable=false).
+   */
+  setColumnWidth(target: import('../edit/types').DimTarget, width: number): number {
+    const sheet = this.sheet
+    if (!sheet) return 0
+    const indices = normalizeDimTarget(target)
+    return this.edit.setDimensions('col', indices, width, (i) => canEditDimension(sheet, 'col', i, this.editCfg))
   }
-  /** 程序化设行高(px,模型单位/非缩放);editable 时走命令栈。 */
-  setRowHeight(row: number, height: number): boolean {
-    return this.edit.setDimension('row', row, height)
+  /** 程序化设行高 (px, 模型单位/非缩放). 同 setColumnWidth, 维度 = 'row'. */
+  setRowHeight(target: import('../edit/types').DimTarget, height: number): number {
+    const sheet = this.sheet
+    if (!sheet) return 0
+    const indices = normalizeDimTarget(target)
+    return this.edit.setDimensions('row', indices, height, (i) => canEditDimension(sheet, 'row', i, this.editCfg))
+  }
+  /**
+   * 批量 autoFit 列宽 (Phase B 2026-06-08). target 不传 = 整表; 传 DimTarget = 选定列.
+   * 单 index 走 autoFitColumn (含 resize-record); 多 index 单次 restore-wb undo + 循环 autofit.
+   * 返回成功条数.
+   */
+  autoFitColumns(target?: import('../edit/types').DimTarget): number {
+    const sheet = this.sheet
+    const r = this.renderer
+    if (!sheet || !r) return 0
+    const indices = target === undefined ? Array.from({ length: sheet.dimension.cols }, (_, i) => i) : normalizeDimTarget(target)
+    const allowed = indices.filter((i) => i >= 0 && canEditDimension(sheet, 'col', i, this.editCfg))
+    const denied = indices.filter((i) => i >= 0 && !canEditDimension(sheet, 'col', i, this.editCfg))
+    if (denied.length) {
+      this.hooks.onEditEvent('permission-denied', { reason: 'dimension', cells: [], dims: { axis: 'col', indices: denied }, message: `${denied.length} 列未覆盖白名单,autoFit 跳过` })
+    }
+    if (!allowed.length) return 0
+    if (allowed.length === 1) {
+      this.autoFitColumn(allowed[0])
+      return 1
+    }
+    // 多列: 单次快照, 循环 autoFit (renderer.autoFitColumn 内部直接写 sheet.columns); 一次 undo
+    const wb = this.workbook
+    if (!wb) return 0
+    this.edit.ensureBaseline()
+    const snap = cloneWorkbook(wb)
+    let written = 0
+    for (const i of allowed) {
+      r.autoFitColumn(i)
+      written++
+    }
+    this.edit.pushUndoExternal({ kind: 'restore-wb', snapshot: snap })
+    this.edit.markDirtyExternal()
+    this.refreshContentSize()
+    this.render()
+    return written
+  }
+  /** 批量 autoFit 行高 (Phase B 2026-06-08). 同 autoFitColumns, 维度 = 'row'. */
+  autoFitRows(target?: import('../edit/types').DimTarget): number {
+    const sheet = this.sheet
+    const r = this.renderer
+    if (!sheet || !r) return 0
+    const indices = target === undefined ? Array.from({ length: sheet.dimension.rows }, (_, i) => i) : normalizeDimTarget(target)
+    const allowed = indices.filter((i) => i >= 0 && canEditDimension(sheet, 'row', i, this.editCfg))
+    const denied = indices.filter((i) => i >= 0 && !canEditDimension(sheet, 'row', i, this.editCfg))
+    if (denied.length) {
+      this.hooks.onEditEvent('permission-denied', { reason: 'dimension', cells: [], dims: { axis: 'row', indices: denied }, message: `${denied.length} 行未覆盖白名单,autoFit 跳过` })
+    }
+    if (!allowed.length) return 0
+    if (allowed.length === 1) {
+      this.autoFitRow(allowed[0])
+      return 1
+    }
+    const wb = this.workbook
+    if (!wb) return 0
+    this.edit.ensureBaseline()
+    const snap = cloneWorkbook(wb)
+    let written = 0
+    for (const i of allowed) {
+      r.autoFitRow(i)
+      written++
+    }
+    this.edit.pushUndoExternal({ kind: 'restore-wb', snapshot: snap })
+    this.edit.markDirtyExternal()
+    this.refreshContentSize()
+    this.render()
+    return written
+  }
+  /**
+   * 重置列宽到默认 (Phase B 2026-06-08) — 移除 sheet.columns Map 条目, 回落到 defaultColWidth.
+   * 多 index 单次 undo. 返回成功条数.
+   */
+  resetColumnWidth(target: import('../edit/types').DimTarget): number {
+    const sheet = this.sheet
+    if (!sheet) return 0
+    const indices = normalizeDimTarget(target)
+    return this.edit.resetDimensions('col', indices, (i) => canEditDimension(sheet, 'col', i, this.editCfg))
+  }
+  /** 重置行高到默认. 同 resetColumnWidth, 维度 = 'row'. */
+  resetRowHeight(target: import('../edit/types').DimTarget): number {
+    const sheet = this.sheet
+    if (!sheet) return 0
+    const indices = normalizeDimTarget(target)
+    return this.edit.resetDimensions('row', indices, (i) => canEditDimension(sheet, 'row', i, this.editCfg))
   }
   /** 公式引擎是否已就绪(recalc 开启 + 异步 warm 完成);未开重算恒 false。 */
   isRecalcReady(): boolean {

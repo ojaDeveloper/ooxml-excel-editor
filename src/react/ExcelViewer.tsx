@@ -121,6 +121,11 @@ export interface ExcelViewerProps {
    * 单值或数组都支持;允许**不相邻**多 target. `undefined`=默认全可编辑(老行为),`[]`=全只读.
    */
   editableTargets?: EditableTarget | EditableTarget[]
+  /**
+   * **严格尺寸闸门**(Phase B, 2026-06-08) —— 默认 `false`: 尺寸 API 仅受全局 editable 控制. 设 `true` +
+   * editableTargets 启用了 → 该列/行至少有 1 格在白名单内才能改尺寸.
+   */
+  strictDimensions?: boolean
   /** 自定义单元格编辑器(按格返回工厂;覆盖插件 editor)。需 editable 开启 */
   editor?: EditorResolver
   /** 公式重算(E4):默认 false 沿用缓存值。开启后编辑公式/被引用格 → 依赖格自动重算。需 editable */
@@ -218,8 +223,12 @@ export interface ExcelViewerHandle {
   beginEdit: (row: number, col: number) => boolean
   cancelEdit: () => void
   isEditing: () => boolean
-  setColumnWidth: (col: number, width: number) => boolean
-  setRowHeight: (row: number, height: number) => boolean
+  setColumnWidth: (target: import('@/core/edit/types').DimTarget, width: number) => number
+  setRowHeight: (target: import('@/core/edit/types').DimTarget, height: number) => number
+  autoFitColumns: (target?: import('@/core/edit/types').DimTarget) => number
+  autoFitRows: (target?: import('@/core/edit/types').DimTarget) => number
+  resetColumnWidth: (target: import('@/core/edit/types').DimTarget) => number
+  resetRowHeight: (target: import('@/core/edit/types').DimTarget) => number
   isRecalcReady: () => boolean
   getVirtualExtent: () => { rows: number; cols: number }
   isDirty: () => boolean
@@ -333,6 +342,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       cellReadOnly: p.cellReadOnly,
       readOnlyRanges: p.readOnlyRanges,
       editableTargets: p.editableTargets,
+      strictDimensions: p.strictDimensions,
       recalc: p.recalc,
       formulaEngine: p.formulaEngine,
     }
@@ -551,7 +561,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   useEffect(() => {
     controllerRef.current?.setEditConfig(buildEditConfig())
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.editable, props.cellReadOnly, props.readOnlyRanges, props.editableTargets, props.recalc, props.formulaEngine])
+  }, [props.editable, props.cellReadOnly, props.readOnlyRanges, props.editableTargets, props.strictDimensions, props.recalc, props.formulaEngine])
 
   // ---- 右键菜单 transform 同步(Plan C) ----
   useEffect(() => {
@@ -692,8 +702,12 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       beginEdit: (row, col) => controllerRef.current?.beginEdit(row, col) ?? false,
       cancelEdit: () => controllerRef.current?.cancelEdit(),
       isEditing: () => controllerRef.current?.isEditing() ?? false,
-      setColumnWidth: (col, width) => controllerRef.current?.setColumnWidth(col, width) ?? false,
-      setRowHeight: (row, height) => controllerRef.current?.setRowHeight(row, height) ?? false,
+      setColumnWidth: (target, width) => controllerRef.current?.setColumnWidth(target, width) ?? 0,
+      setRowHeight: (target, height) => controllerRef.current?.setRowHeight(target, height) ?? 0,
+      autoFitColumns: (target) => controllerRef.current?.autoFitColumns(target) ?? 0,
+      autoFitRows: (target) => controllerRef.current?.autoFitRows(target) ?? 0,
+      resetColumnWidth: (target) => controllerRef.current?.resetColumnWidth(target) ?? 0,
+      resetRowHeight: (target) => controllerRef.current?.resetRowHeight(target) ?? 0,
       isRecalcReady: () => controllerRef.current?.isRecalcReady() ?? false,
       getVirtualExtent: () => controllerRef.current?.getVirtualExtent() ?? { rows: 0, cols: 0 },
       isDirty: () => controllerRef.current?.isDirty() ?? false,
@@ -801,8 +815,12 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     beginEdit: (row, col) => controllerRef.current?.beginEdit(row, col) ?? false,
     cancelEdit: () => controllerRef.current?.cancelEdit(),
     isEditing: () => controllerRef.current?.isEditing() ?? false,
-    setColumnWidth: (col, width) => controllerRef.current?.setColumnWidth(col, width) ?? false,
-    setRowHeight: (row, height) => controllerRef.current?.setRowHeight(row, height) ?? false,
+    setColumnWidth: (target, width) => controllerRef.current?.setColumnWidth(target, width) ?? 0,
+    setRowHeight: (target, height) => controllerRef.current?.setRowHeight(target, height) ?? 0,
+    autoFitColumns: (target) => controllerRef.current?.autoFitColumns(target) ?? 0,
+    autoFitRows: (target) => controllerRef.current?.autoFitRows(target) ?? 0,
+    resetColumnWidth: (target) => controllerRef.current?.resetColumnWidth(target) ?? 0,
+    resetRowHeight: (target) => controllerRef.current?.resetRowHeight(target) ?? 0,
     isRecalcReady: () => controllerRef.current?.isRecalcReady() ?? false,
     getVirtualExtent: () => controllerRef.current?.getVirtualExtent() ?? { rows: 0, cols: 0 },
     isDirty: () => controllerRef.current?.isDirty() ?? false,

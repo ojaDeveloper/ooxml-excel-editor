@@ -164,6 +164,79 @@ describe('resolveEditable — editableTargets 白名单 (2026-06-08)', () => {
   })
 })
 
+describe('canEditDimension / normalizeDimTarget — Phase B helpers (2026-06-08)', () => {
+  it('normalizeDimTarget: 单值 / 数组 / 范围 三形态规范化', async () => {
+    const { normalizeDimTarget } = await import('../permissions')
+    expect(normalizeDimTarget(5)).toEqual([5])
+    expect(normalizeDimTarget([2, 5, 8])).toEqual([2, 5, 8])
+    expect(normalizeDimTarget({ from: 2, to: 5 })).toEqual([2, 3, 4, 5])
+    expect(normalizeDimTarget({ from: 5, to: 2 })).toEqual([2, 3, 4, 5]) // 兜底正序
+    expect(normalizeDimTarget({ from: 3, to: 3 })).toEqual([3]) // 闭区间单点
+  })
+
+  it('canEditDimension: editable=false → 一律 false', async () => {
+    const { canEditDimension } = await import('../permissions')
+    const s = { ...sheetWith(), dimension: { rows: 10, cols: 10 } } as SheetModel
+    expect(canEditDimension(s, 'col', 5, { editable: false })).toBe(false)
+  })
+
+  it('canEditDimension: 默认 strictDimensions=false → 一律 true (老行为)', async () => {
+    const { canEditDimension } = await import('../permissions')
+    const s = { ...sheetWith(), dimension: { rows: 10, cols: 10 } } as SheetModel
+    expect(canEditDimension(s, 'col', 5, { editable: true })).toBe(true)
+    // 即便设了白名单, 没开 strict 也不限尺寸
+    expect(canEditDimension(s, 'col', 5, { editable: true, editableTargets: [{ row: 0, col: 0 }] })).toBe(true)
+  })
+
+  it('canEditDimension: strict + 无白名单 → 一律 true', async () => {
+    const { canEditDimension } = await import('../permissions')
+    const s = { ...sheetWith(), dimension: { rows: 10, cols: 10 } } as SheetModel
+    expect(canEditDimension(s, 'col', 5, { editable: true, strictDimensions: true })).toBe(true)
+  })
+
+  it('canEditDimension: strict + 白名单含该列任一格 → true', async () => {
+    const { canEditDimension } = await import('../permissions')
+    const s = { ...sheetWith(), dimension: { rows: 10, cols: 10 } } as SheetModel
+    const cfg: EditConfig = {
+      editable: true,
+      strictDimensions: true,
+      editableTargets: [{ row: 3, col: 5 }], // 单格在第 5 列
+    }
+    expect(canEditDimension(s, 'col', 5, cfg)).toBe(true) // 5 列有该格
+    expect(canEditDimension(s, 'col', 6, cfg)).toBe(false) // 6 列没格在白名单
+    expect(canEditDimension(s, 'row', 3, cfg)).toBe(true) // 3 行有该格
+    expect(canEditDimension(s, 'row', 4, cfg)).toBe(false)
+  })
+
+  it('canEditDimension: strict + 整列 target → 该列每格都通过', async () => {
+    const { canEditDimension } = await import('../permissions')
+    const s = { ...sheetWith(), dimension: { rows: 10, cols: 10 } } as SheetModel
+    const cfg: EditConfig = {
+      editable: true,
+      strictDimensions: true,
+      editableTargets: [{ col: 5 }], // 整列 5
+    }
+    expect(canEditDimension(s, 'col', 5, cfg)).toBe(true)
+    expect(canEditDimension(s, 'col', 6, cfg)).toBe(false)
+  })
+
+  it('canEditDimension: strict + 矩形 target → 命中矩形所在列/行 都 true', async () => {
+    const { canEditDimension } = await import('../permissions')
+    const s = { ...sheetWith(), dimension: { rows: 10, cols: 10 } } as SheetModel
+    const cfg: EditConfig = {
+      editable: true,
+      strictDimensions: true,
+      editableTargets: [{ top: 2, left: 3, bottom: 4, right: 5 }], // 矩形覆盖 row 2-4, col 3-5
+    }
+    expect(canEditDimension(s, 'col', 3, cfg)).toBe(true)
+    expect(canEditDimension(s, 'col', 5, cfg)).toBe(true)
+    expect(canEditDimension(s, 'col', 6, cfg)).toBe(false)
+    expect(canEditDimension(s, 'row', 2, cfg)).toBe(true)
+    expect(canEditDimension(s, 'row', 4, cfg)).toBe(true)
+    expect(canEditDimension(s, 'row', 5, cfg)).toBe(false)
+  })
+})
+
 describe('partitionByEditable / rangeAllEditable / collectDeniedInRange — Phase A helpers (2026-06-08)', () => {
   it('partitionByEditable: 把 5 个格 (3 允许 / 2 拒) 拆开', async () => {
     const { partitionByEditable } = await import('../permissions')

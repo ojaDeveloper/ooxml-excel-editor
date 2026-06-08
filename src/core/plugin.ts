@@ -217,10 +217,22 @@ export interface ViewerApi {
   insertCols(at: number, count?: number): boolean
   /** 删除 [at, at+count) 列 */
   deleteCols(at: number, count?: number): boolean
-  /** 程序化设列宽(px,模型单位);editable 时入命令栈(可撤销 + 发 dim-change + 记脏) */
-  setColumnWidth(col: number, width: number): boolean
-  /** 程序化设行高(px,模型单位);editable 时入命令栈 */
-  setRowHeight(row: number, height: number): boolean
+  /**
+   * 程序化设列宽 (px, 模型单位). Phase B 2026-06-08:
+   * target 接 `number | number[] | {from,to}` (DimTarget). 多 index 时聚合成单次 undo.
+   * 返回**成功条数** (0 = 全 skip / editable=false). 老 `setColumnWidth(5, 100)` 单值用法兼容.
+   */
+  setColumnWidth(target: import('./edit/types').DimTarget, width: number): number
+  /** 程序化设行高. 同 setColumnWidth, 维度 = 'row'. */
+  setRowHeight(target: import('./edit/types').DimTarget, height: number): number
+  /** 批量 autoFit 列宽 (Phase B). target 不传 = 整表; 传 DimTarget = 选定列. 返成功条数. */
+  autoFitColumns(target?: import('./edit/types').DimTarget): number
+  /** 批量 autoFit 行高 (Phase B). 同上, 维度 = 'row'. */
+  autoFitRows(target?: import('./edit/types').DimTarget): number
+  /** 重置列宽到默认 (Phase B) — 移除 columns Map 条目, 回落 defaultColWidth. 返成功条数. */
+  resetColumnWidth(target: import('./edit/types').DimTarget): number
+  /** 重置行高到默认. 同上, 维度 = 'row'. */
+  resetRowHeight(target: import('./edit/types').DimTarget): number
   /** 公式引擎是否已就绪(recalc 开启 + 异步 warm 完成);未开重算恒 false */
   isRecalcReady(): boolean
   /** 当前虚拟范围(滚动出空行/列的外推上限,含 dimension 兜底);不动 dimension/文件 */

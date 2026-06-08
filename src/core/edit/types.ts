@@ -6,6 +6,23 @@ import type { CellModel, MergeRange } from '../model/types'
 import type { FormulaEngineFactory } from '../formula/engine'
 
 /**
+ * 行/列维度目标 (Phase B, 2026-06-08) —— 用于尺寸 API (setColumnWidth / setRowHeight /
+ * autoFitColumns / resetColumnWidth ...) 的参数. 3 种形状自动识别:
+ *
+ *   ┌────────────────────┬──────────────────────────┐
+ *   │ 形状                │ 含义                      │
+ *   ├────────────────────┼──────────────────────────┤
+ *   │ `number`           │ 单个 index               │
+ *   │ `number[]`         │ 多 index (允许不相邻)     │
+ *   │ `{ from, to }`     │ 闭区间范围               │
+ *   └────────────────────┴──────────────────────────┘
+ */
+export type DimTarget =
+  | number
+  | number[]
+  | { from: number; to: number }
+
+/**
  * 可编辑目标 —— 用于 `EditConfig.editableTargets` 的白名单元素;接受 4 种形状,
  * 自动识别(看带哪些字段):
  *
@@ -44,6 +61,16 @@ export interface EditConfig {
    * 命中 `readOnlyRanges` → 只读 ► `cellReadOnly` 返 true → 只读 ► 否则可编辑.
    */
   editableTargets?: EditableTarget | EditableTarget[]
+  /**
+   * **严格尺寸闸门**(Phase B, 2026-06-08) —— 默认 `false`:setColumnWidth / setRowHeight /
+   * autoFit / resetDimensions 等尺寸 API 仅受 `editable` 全局闸门控制 (老行为, 简单).
+   *
+   * 设 `true` + 启用了 `editableTargets` 白名单 → 升级语义:**该列/行至少有 1 格在白名单内**
+   * 才能改它的宽高; 否则拒绝 + emit permission-denied (reason='dimension').
+   *
+   * 跟"白名单未覆盖 = 完全只读"的严格语义一致, 防"用户改不了数据但能改列宽行高"。
+   */
+  strictDimensions?: boolean
   /**
    * 公式重算(E4):默认 false = 沿用 Excel 缓存值(只读/无公式路径零成本)。
    * 开启后,编辑公式格或被公式引用的格 → 依赖格自动重算并逐个发 cell-change。

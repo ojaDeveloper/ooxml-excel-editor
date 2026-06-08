@@ -11,7 +11,50 @@
  */
 import type { MergeRange, SheetModel } from '../model/types'
 import { cellKey } from '../model/types'
-import type { EditableTarget, EditConfig } from './types'
+import type { DimTarget, EditableTarget, EditConfig } from './types'
+
+/** 把 DimTarget 3 形态规范化成 index 数组. 重复 / 越界由调用方各自处理. */
+export function normalizeDimTarget(target: DimTarget): number[] {
+  if (typeof target === 'number') return [target]
+  if (Array.isArray(target)) return target.slice()
+  // 闭区间 from..to (允许 from > to, 兜底正序)
+  const lo = Math.min(target.from, target.to)
+  const hi = Math.max(target.from, target.to)
+  const out: number[] = []
+  for (let i = lo; i <= hi; i++) out.push(i)
+  return out
+}
+
+/**
+ * 该列/行能否改尺寸 (Phase B, 2026-06-08).
+ * - editable=false → 一律 false
+ * - strictDimensions=false (默认) → 仅受全局 editable 控制, 一律 true
+ * - strictDimensions=true + 没设白名单 → true (没白名单 = 默认全可编辑)
+ * - strictDimensions=true + 设了白名单 → 该轴 index 上至少 1 格在白名单内才 true
+ */
+export function canEditDimension(
+  sheet: SheetModel,
+  axis: 'col' | 'row',
+  index: number,
+  cfg: EditConfig,
+): boolean {
+  if (!cfg.editable) return false
+  if (!cfg.strictDimensions) return true
+  if (cfg.editableTargets === undefined) return true
+  // 严格模式: 扫该列/行, 找至少 1 格命中白名单
+  const dim = sheet.dimension
+  if (axis === 'col') {
+    for (let r = 0; r < dim.rows; r++) {
+      if (resolveEditable(sheet, r, index, cfg)) return true
+    }
+    return false
+  } else {
+    for (let c = 0; c < dim.cols; c++) {
+      if (resolveEditable(sheet, index, c, cfg)) return true
+    }
+    return false
+  }
+}
 
 function inRange(row: number, col: number, r: MergeRange): boolean {
   return row >= r.top && row <= r.bottom && col >= r.left && col <= r.right

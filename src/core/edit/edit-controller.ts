@@ -563,6 +563,94 @@ export class EditController {
     }
     return !!inv
   }
+
+  /**
+   * 批量设维度尺寸 (Phase B, 2026-06-08). target 接 number | number[] | {from,to}.
+   * 多 index 时聚合成单次 restore-wb undo (跟 convertImagesToCells 范式一致).
+   * strictDimensions=true + 白名单未覆盖某 index → skip 那个 + 累计 deniedDims; 整次结束 emit 一次 permission-denied.
+   * 返回成功条数 (0 = 全 skip / editable=false).
+   */
+  setDimensions(axis: DimAxis, indices: number[], size: number, canDim: (i: number) => boolean): number {
+    if (!this.host.isEditingEnabled() || !indices.length) return 0
+    const sheet = this.host.getSheet()
+    const wb = this.host.getWorkbook()
+    if (!sheet || !wb) return 0
+    const allowed: number[] = []
+    const denied: number[] = []
+    for (const i of indices) {
+      if (i < 0) continue
+      if (canDim(i)) allowed.push(i)
+      else denied.push(i)
+    }
+    if (denied.length) {
+      this.host.emit('permission-denied', { reason: 'dimension', cells: [], dims: { axis: axis as 'col' | 'row', indices: denied }, message: `${denied.length} 个 ${axis} 未覆盖白名单,已跳过` } satisfies PermissionDeniedPayload)
+    }
+    if (!allowed.length) return 0
+    // 单条直接走 setDimension (复用现有 dim-change emit + 命令栈)
+    if (allowed.length === 1) {
+      return this.setDimension(axis, allowed[0], size) ? 1 : 0
+    }
+    // 多条: 一次 snap + 循环 setCellSize-via-mutation + 单 restore-wb undo
+    this.ensureBaseline()
+    const snap = cloneWorkbook(wb)
+    let written = 0
+    for (const i of allowed) {
+      const beforeSize = currentDimSize(sheet, axis, i)
+      // 直接走 mutation, 不入单条命令栈
+      if (axis === 'col') {
+        const info = sheet.columns.get(i)
+        sheet.columns.set(i, { width: size, hidden: info?.hidden ?? false })
+      } else {
+        const info = sheet.rows.get(i)
+        sheet.rows.set(i, { height: size, hidden: info?.hidden ?? false })
+      }
+      written++
+      this.host.emit('dim-change', { axis, index: i, before: beforeSize, after: size, source: 'api' } satisfies DimChangePayload)
+    }
+    this.pushUndo({ kind: 'restore-wb', snapshot: snap })
+    this.markDirty()
+    this.host.onModelChange()
+    return written
+  }
+
+  /**
+   * 重置某些列宽/行高到默认 (Phase B, 2026-06-08) — 移除 columns/rows Map 条目, 渲染回落 defaultColWidth/Height.
+   * 多 index 时单次 restore-wb undo.
+   */
+  resetDimensions(axis: DimAxis, indices: number[], canDim: (i: number) => boolean): number {
+    if (!this.host.isEditingEnabled() || !indices.length) return 0
+    const sheet = this.host.getSheet()
+    const wb = this.host.getWorkbook()
+    if (!sheet || !wb) return 0
+    const allowed: number[] = []
+    const denied: number[] = []
+    for (const i of indices) {
+      if (i < 0) continue
+      if (canDim(i)) allowed.push(i)
+      else denied.push(i)
+    }
+    if (denied.length) {
+      this.host.emit('permission-denied', { reason: 'dimension', cells: [], dims: { axis: axis as 'col' | 'row', indices: denied }, message: `${denied.length} 个 ${axis} 未覆盖白名单,已跳过 reset` } satisfies PermissionDeniedPayload)
+    }
+    if (!allowed.length) return 0
+    this.ensureBaseline()
+    const snap = cloneWorkbook(wb)
+    let written = 0
+    const defaultSize = axis === 'col' ? sheet.defaultColWidth : sheet.defaultRowHeight
+    for (const i of allowed) {
+      const beforeSize = currentDimSize(sheet, axis, i)
+      if (axis === 'col') sheet.columns.delete(i)
+      else sheet.rows.delete(i)
+      written++
+      if (beforeSize !== defaultSize) {
+        this.host.emit('dim-change', { axis, index: i, before: beforeSize, after: defaultSize, source: 'api' } satisfies DimChangePayload)
+      }
+    }
+    this.pushUndo({ kind: 'restore-wb', snapshot: snap })
+    this.markDirty()
+    this.host.onModelChange()
+    return written
+  }
   /**
    * 补登一次维度变更(拖拽/autofit 路径:模型已被 renderer 改完,这里只补 undo 项 + 发事件)。
    * baseline 须在变更前(拖拽起始/autofit 前)由调用方 ensureBaseline() 捕获。
@@ -646,6 +734,14 @@ export class EditController {
     this.undoStack.push(inverse)
     if (this.undoStack.length > this.limit) this.undoStack.shift()
     this.redoStack = [] // 新编辑使 redo 作废
+  }
+  /** 公开版 pushUndo (Phase B 2026-06-08): 给 controller 的批量 autoFit 用. 一般业务不要直调. */
+  pushUndoExternal(inverse: EditCommand): void {
+    this.pushUndo(inverse)
+  }
+  /** 公开版 markDirty: 给 controller 的批量 autoFit 用. 一般业务不要直调. */
+  markDirtyExternal(): void {
+    this.markDirty()
   }
 
   /** 应用一条命令:建前快照 → apply → 重绘 → 发事件(cell 族 cell-change / dim 族 dim-change)。返回逆命令。 */

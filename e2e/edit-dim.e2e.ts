@@ -33,7 +33,8 @@ function run(label: string, url: string, canvasSel: string, handle: string) {
 
     // 程序化改列宽 → 列变宽 + isDirty + dim-change(after 精确=模型值)+ dirty-change
     const target = Math.round(before + 100)
-    expect(await call(page, handle, 'setColumnWidth', 2, target)).toBe(true)
+    // Phase B 2026-06-08: setColumnWidth 返回成功条数 (number), 而非 boolean. 单值返 1.
+    expect(await call(page, handle, 'setColumnWidth', 2, target)).toBe(1)
     const after = ((await call(page, handle, 'rectOf', 2, 2)) as { w: number }).w
     expect(after).toBeGreaterThan(before + 50) // 明显变宽(demo zoom=1)
     expect(await call(page, handle, 'isDirty')).toBe(true)
