@@ -9,10 +9,12 @@
 **装**(按框架二选一):
 
 ```bash
-npm i ooxml-excel-editor vue exceljs                  # Vue 3 (默认入口)
-npm i ooxml-excel-editor react react-dom exceljs      # React 壳 (/react 子入口)
-npm i ooxml-excel-editor vue@2.7 @vue/composition-api exceljs  # Vue 2.6/2.7+ (/vue2 子入口, 1.3.0+)
+npm i ooxml-excel-editor vue                          # Vue 3 (默认入口)
+npm i ooxml-excel-editor react react-dom              # React 壳 (/react 子入口)
+npm i ooxml-excel-editor vue@2.7 @vue/composition-api # Vue 2.6/2.7+ (/vue2 子入口, 1.3.0+)
 ```
+
+> 1.3.2+ `echarts` / `exceljs` / `jspdf` / `hyperformula` 已改成包内 `dependencies`, 自动随包装, **不用手动 `npm i`**.
 
 **用**(Vue,容器要给高度;`src` 可传 `File` / `Blob` / `ArrayBuffer` / `Uint8Array` / URL 字符串):
 

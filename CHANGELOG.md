@@ -46,24 +46,35 @@ webpack 4 解析 `ooxml-excel-editor/vue2` → 找包根 `vue2.js` → re-export
 
 文件加进 `package.json` `files` 数组, npm publish 时一并发布.
 
-#### 4. 移除 echarts / hyperformula / jspdf 从 peerDependencies (npm 7+ ERESOLVE 触发)
+#### 4. echarts / exceljs / jspdf / hyperformula 改成 `dependencies` (自动随包安装)
 
-之前用户报:
+之前 1.3.1 把它们标 `peerOptional`, npm 7+ 触发 ERESOLVE:
 ```
 npm error ERESOLVE could not resolve
 peerOptional echarts@"^5.5.0" from ooxml-excel-editor@1.3.1
 Conflicting peer dependency: echarts@<宿主版本>
 ```
-- 这三个库其实是"用到才动态 `await import()` 加载"的纯运行时可选能力, **不必放 peer**
-- 即使标 `optional`, npm 7+ 在严格校验下仍触发 ERESOLVE, 用户被迫 `--legacy-peer-deps`
 
-**修复**: peerDependencies 移除 `echarts` / `hyperformula` / `jspdf`. 这些改成文档"按需依赖"段说明:
-- 用图表: `npm i echarts`
-- 用 PDF 导出: `npm i jspdf`
-- 用编辑模式 + 公式重算: `npm i hyperformula`
-- 未装时代码 `await import()` 失败 → 抛友好错误 (代码已有处理)
+也试过文档说明"按需装", 但 **webpack 4** 静态扫描 `await import('xxx')` 找不到模块就发 warning:
+```
+* hyperformula in ./node_modules/ooxml-excel-editor/dist/vue2.js
+To install them, you can run: npm install --save hyperformula jspdf
+```
+用户被迫装或加 IgnorePlugin, 体验差.
 
-剩下的 peerDeps: vue / react / react-dom / exceljs / @vue/composition-api (静态 import, 必装).
+**最终修复**: 这 4 个 lib 改成 `dependencies` — `npm i ooxml-excel-editor` 时 npm **自动**装它们到消费方 node_modules. webpack 4 找得到, 不再 warn. 仍是 dynamic `await import()` + code-split, **dist 产物体积无变化** (~430 KB), **用户 build 后 bundle (不用对应功能时)体积也无变化** (chunk 不调用就不下载).
+
+变化:
+- **dependencies** 新增: `echarts` / `exceljs` / `jspdf` / `hyperformula`
+- **peerDependencies** 移除: `exceljs` (跟着移走了)
+- 剩余 peer: `vue` / `react` / `react-dom` / `@vue/composition-api` (框架级, 必须跟宿主同实例)
+
+体积影响:
+- 消费方 `node_modules` 大小: +~120 MB (4 个 lib 一起)
+- dist 产物大小: 无变化
+- 消费方 build 后 bundle (用图表/PDF/编辑公式): 跟之前一样
+- 消费方 build 后 bundle (只用预览): 跟之前一样 (chunk 不下载)
+- webpack 4 warning: **完全消失** ✓
 
 ### 总效果
 
@@ -75,13 +86,9 @@ Conflicting peer dependency: echarts@<宿主版本>
 
 ### 升级提示 (从 1.3.0 / 1.3.1 升 1.3.2)
 
-无 breaking, 升级仅 `npm i ooxml-excel-editor@1.3.2`. 但**用图表/PDF/公式重算**的用户需自己装这三个可选包 (之前是 optional peer, 实际行为一样, 升级体验更顺):
+无 breaking, `npm i ooxml-excel-editor@1.3.2`. 4 个运行时 lib (`echarts` / `exceljs` / `jspdf` / `hyperformula`) 已改成 `dependencies` 随包自动装, **不用手动 `npm i`**. 之前手动装的不用卸载, npm 会复用现有版本 (前提是 `^range` 满足).
 
-```bash
-npm i echarts        # 用图表
-npm i jspdf          # 导出 PDF
-npm i hyperformula   # 编辑模式 + 公式重算
-```
+Vue 3 / React 用户**无变化**.
 
 ---
 

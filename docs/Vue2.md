@@ -250,47 +250,11 @@ dist 已 `target: 'es2018'`. 没有 `??` (空值合并 ES2020) / `?.` (可选链
 
 1.3.2 起 dist 全部走 `worker-client.stub.ts` (主线程跑解析), **不**用 `new Worker(new URL(..., import.meta.url))`. webpack 4 解析 dist 不会 SyntaxError, 运行也不缺 worker chunk.
 
-### 4. 可选能力不放 peerDeps (避免 npm 7+ ERESOLVE)
+### 4. echarts / jspdf / hyperformula / exceljs 自动随包安装 (1.3.3+)
 
-`echarts` / `jspdf` / `hyperformula` **不在 peerDependencies**. 但 **webpack 4** 静态扫描 `await import('xxx')` 时如果 lib 没装会发 **warning** (不是 error, build 仍通过, 不调相应功能时也不会 runtime 报错). warning 格式:
+1.3.3 起这 4 个 lib 从 `peer` / 文档说明 改成 **`dependencies`**, `npm i ooxml-excel-editor` 时自动装. **不用手动装, 不用配 webpack.config IgnorePlugin, webpack 4 不再 warn**.
 
-```
-* hyperformula in ./node_modules/ooxml-excel-editor/dist/vue2.js
-* jspdf in ./node_modules/ooxml-excel-editor/dist/vue2.js
-To install them, you can run: npm install --save hyperformula jspdf
-```
-
-#### 消除 warning 方案 A (推荐): webpack.config IgnorePlugin
-
-`vue.config.js` 加 IgnorePlugin 让 webpack 跳过这 3 个 lib 的解析:
-
-```js
-// vue.config.js
-const { IgnorePlugin } = require('webpack')
-
-module.exports = {
-  configureWebpack: {
-    plugins: [
-      new IgnorePlugin({ resourceRegExp: /^(echarts|hyperformula|jspdf)$/ }),
-    ],
-  },
-}
-```
-
-用对应功能时再注释掉 + 装:
-- 用图表: 注释掉 `echarts` + `npm i echarts`
-- 用 PDF: 注释掉 `jspdf` + `npm i jspdf`
-- 用编辑 + 公式重算: 注释掉 `hyperformula` + `npm i hyperformula`
-
-#### 方案 B: 直接装 3 个 lib (一劳永逸)
-
-```bash
-npm i echarts jspdf hyperformula
-```
-
-webpack 4 静态分析后做 code-split, **不调到对应代码时这些 chunk 不下载**, runtime bundle 体积无影响. 仅 node_modules 多 80MB.
-
-> 注: webpack 5 / Vite / Parcel 等支持 dynamic import 跳过的现代打包器, **完全不会有这个 warning**, 也不需任何配置. 仅 webpack 4 / 老 vue-cli 4 受影响.
+代价: node_modules 多 ~120 MB. 但 **dist/vue2.js 体积无变化** (~430 KB) — 这 4 个 lib 仍是 dynamic `await import()` + code-split, 不用功能时 chunk 不下载, **用户 build 后 bundle 体积无变化**.
 
 ### 完整 Vue 2.6.12 + vue-cli 4 用法
 
