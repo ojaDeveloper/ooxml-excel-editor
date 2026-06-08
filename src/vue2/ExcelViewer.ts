@@ -57,7 +57,8 @@ import type { FormulaEngineFactory } from '@/core/formula/engine'
 import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
 import { revokeImages } from '@/core/finalize'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '@/core/export'
-import { ViewerController, type FindState } from '@/core/viewer/controller'
+import type { ExportProgress } from '@/core/progress'
+import { ViewerController, type FindState, type TooltipState } from '@/core/viewer/controller'
 import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { getCellValue, getCellText, getSheetData, getRangeData, sheetToJSON, type ReadOptions } from '@/core/model/data-access'
 import { useExcelDocumentVue2 } from './use-excel-document'
@@ -105,6 +106,7 @@ export default defineComponent({
     recalc: { type: Boolean, default: false },
     formulaEngine: { type: Function as PropType<FormulaEngineFactory>, default: undefined },
     contextMenu: { type: [Boolean, Function] as PropType<boolean | ContextMenuTransform>, default: undefined },
+    exportProgress: { type: Boolean, default: true },
   },
   setup(props, { emit, expose }) {
     // ---- 由 Vue 管理的 DOM (chrome + 一个空的 render-area 外壳) ----
@@ -131,6 +133,10 @@ export default defineComponent({
     const selVersion = ref(0)
     const findVersion = ref(0)
     const filterVersion = ref(0)
+    const tooltip = ref<TooltipState | null>(null)
+    const exportState = ref<ExportProgress | null>(null)
+    const exportBusy = ref(false)
+    let exportCtrl: AbortController | null = null
 
     // ---- 模板 + JSON 数据源 ----
     const runtimeTemplateSrc = ref<ExcelSource | null>(null)
@@ -361,7 +367,7 @@ export default defineComponent({
           onCellClick: (row, col, text) => fire('cell-click', { row, col, text }),
           onCellDblClick: (row, col, text) => fire('cell-dblclick', { row, col, text }),
           onHyperlink: (url, cell) => { fire('hyperlink-click', { url, cell }); if (props.openLinks) window.open(url, '_blank', 'noopener') },
-          onTooltip: () => {},
+          onTooltip: (tip) => { tooltip.value = tip },
           onFindChange: () => { findVersion.value++ },
           onFilterChange: () => { filterVersion.value++ },
           onEditEvent: (event, payload) => fire(event as PluginEvent, payload),
@@ -442,6 +448,21 @@ export default defineComponent({
       const c = controllerRef.value?.getActiveCell()
       return c ? colIndexToLetters(c.col) + (c.row + 1) : ''
     })
+    const selRangeLabel = computed(() => {
+      const s = selection.value
+      if (!s || (s.top === s.bottom && s.left === s.right)) return ''
+      return `${colIndexToLetters(s.left)}${s.top + 1}:${colIndexToLetters(s.right)}${s.bottom + 1}`
+    })
+    const stats = computed(() => {
+      void selVersion.value
+      const r = controllerRef.value?.renderer
+      const s = controllerRef.value?.getSelection() ?? null
+      return r && s ? r.selectionStats(s) : null
+    })
+    function fmtNum(n: number): string {
+      if (!isFinite(n)) return '—'
+      return n.toLocaleString('en-US', { maximumFractionDigits: 2 })
+    }
     const fbDraft = ref('')
     const fbEditing = ref(false)
     // 仅依赖 selVersion (低频). 不读 renderTick — renderTick 每帧 scroll/mousemove ++,
@@ -488,12 +509,37 @@ export default defineComponent({
       if ((e.ctrlKey || e.metaKey) && (e.key === 'f' || e.key === 'F')) { e.preventDefault(); openFind() }
     }
 
-    // ---- 导出 ----
-    const exportImage = (opts?: ImageExportOptions) => controllerRef.value!.exportImage(opts)
-    const downloadImage = (opts?: ImageExportOptions) => controllerRef.value!.downloadImage(opts)
-    const exportPdf = (opts?: PdfExportOptions) => controllerRef.value!.exportPdf(opts)
-    const downloadPdf = (opts?: PdfExportOptions) => controllerRef.value!.downloadPdf(opts)
-    const print = (opts?: PrintOptions) => controllerRef.value!.print(opts)
+    // ---- 导出 (含进度遮罩链路, 跟 Vue 3 SFC 同语义) ----
+    function cancelExport() { exportCtrl?.abort() }
+    function chain<T, O extends { onProgress?: (p: ExportProgress) => void; signal?: AbortSignal } | undefined>(
+      userOpts: O,
+      run: (opts: O) => Promise<T>,
+    ): Promise<T> {
+      if (props.exportProgress === false) return run(userOpts)
+      const ctrl = new AbortController()
+      exportCtrl = ctrl
+      if (userOpts?.signal) {
+        if (userOpts.signal.aborted) ctrl.abort()
+        else userOpts.signal.addEventListener('abort', () => ctrl.abort(), { once: true })
+      }
+      exportBusy.value = true
+      exportState.value = null
+      const onProgress = (p: ExportProgress) => {
+        exportState.value = p
+        userOpts?.onProgress?.(p)
+      }
+      const merged = { ...(userOpts ?? {}), onProgress, signal: ctrl.signal } as O
+      return run(merged).finally(() => {
+        exportBusy.value = false
+        exportState.value = null
+        exportCtrl = null
+      })
+    }
+    const exportImage = (opts?: ImageExportOptions) => chain(opts, (o) => controllerRef.value!.exportImage(o))
+    const downloadImage = (opts?: ImageExportOptions) => chain(opts, (o) => controllerRef.value!.downloadImage(o))
+    const exportPdf = (opts?: PdfExportOptions) => chain(opts, (o) => controllerRef.value!.exportPdf(o))
+    const downloadPdf = (opts?: PdfExportOptions) => chain(opts, (o) => controllerRef.value!.downloadPdf(o))
+    const print = (opts?: PrintOptions) => chain(opts, (o) => controllerRef.value!.print(o))
     async function onExportPdf() { try { await downloadPdf() } catch (e) { reportError(e) } }
     function reportError(e: unknown) {
       const msg = (e as Error)?.message || String(e)
@@ -722,6 +768,60 @@ export default defineComponent({
       ])
     }
 
+    function renderStatusBar(): VNode | null {
+      if (!workbook.value) return null
+      const range = selRangeLabel.value || activeCellAddr.value
+      const s = stats.value
+      const items: VNode[] = []
+      items.push(h('span', { class: 'sel' }, range))
+      items.push(h('div', { class: 'grow' }))
+      if (s && s.numCount > 0) {
+        items.push(h('span', '计数 ' + s.count))
+        items.push(h('span', '求和 ' + fmtNum(s.sum)))
+        items.push(h('span', '平均 ' + fmtNum(s.avg)))
+        items.push(h('span', '最大 ' + fmtNum(s.max)))
+        items.push(h('span', '最小 ' + fmtNum(s.min)))
+      } else if (s && s.count > 0) {
+        items.push(h('span', '计数 ' + s.count))
+      }
+      return h('div', { key: 'statusbar', class: 'ov-status-bar' }, items)
+    }
+
+    function renderTooltip(): VNode | null {
+      const t = tooltip.value
+      if (!t) return null
+      return h('div', {
+        key: 'tooltip',
+        class: 'ov-cell-tooltip ' + (t.kind || ''),
+        style: { left: t.x + 'px', top: t.y + 'px' },
+      }, t.text)
+    }
+
+    /** 内置导出进度遮罩 (P1.5): exportProgress=false 关闭. 居中模态 + stage 标签 + 进度条 + 取消. */
+    function renderExportProgress(): VNode | null {
+      if (props.exportProgress === false || !exportBusy.value) return null
+      const st = exportState.value
+      const stageLabel: Record<string, string> = {
+        render: '渲染中', compose: '合成中', paginate: '分页中',
+        write: '写出文件', zip: 'zip 压缩', convert: '批量转换',
+      }
+      const ratio = st?.ratio
+      const pct = ratio != null ? Math.round(ratio * 100) : null
+      const title = st?.label || stageLabel[st?.stage ?? ''] || '处理中…'
+      return h('div', { key: 'exp-overlay', class: 'ov-export-progress', attrs: { role: 'dialog', 'aria-modal': 'true' } }, [
+        h('div', { class: 'card' }, [
+          h('div', { class: 'title' }, title),
+          h('div', { class: pct != null ? 'bar' : 'bar indeterminate' }, [
+            pct != null ? h('div', { class: 'fill', style: { width: pct + '%' } }) : null,
+          ]),
+          h('div', { class: 'row' }, [
+            h('span', { class: 'pct' }, pct != null ? pct + '%' : '正在处理…'),
+            h('button', { class: 'cancel', attrs: { title: '按 Esc 也可取消' }, on: { click: cancelExport } }, '取消'),
+          ]),
+        ]),
+      ])
+    }
+
     /** loading / error / empty 三态浮层 (相对 .ooxml-excel-viewer 主体定位) */
     function renderState(): VNode | null {
       if (loading.value) {
@@ -755,10 +855,13 @@ export default defineComponent({
       // 必须给 key, 否则 Vue 2 patch 没 key 时按 tag 匹配, 会把这个 div 复用成其他 chrome div,
       // 修改它的 className 和内容 — 我们辛苦 append 的 canvas/overlays 全没了, controller.els.renderArea 变 stale.
       h('div', { key: 'render-area', ref: renderAreaSlot.bind as any, class: 'ov-render-area' }),
+      renderStatusBar(),
       renderSheetTabs(),
-      // findbar / state 浮层 — 用 absolute 浮在 viewer 主体上方
+      // findbar / state / tooltip / 导出进度 浮层 — 用 absolute 浮在 viewer 主体上方
       renderFindBar(),
       renderState(),
+      renderTooltip(),
+      renderExportProgress(),
       h('input', {
         key: 'tpl-input',
         ref: templateInputSlot.bind as any,
