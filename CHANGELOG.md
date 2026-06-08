@@ -2,6 +2,29 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.3.0-alpha.0] - 2026-06-08 (开发中 / 预发版)
+
+**Vue 2 兼容子入口 MVP** — 老 Vue 2 项目想用本库. 架构上零障碍 (core 早已 framework-agnostic),
+新加 `ooxml-excel-editor/vue2` 子入口, 复用同一份 `dist/core.js`. 跟 React 壳同套路.
+
+### 新增
+- **★ Vue 2 壳 (MVP)** — `import ExcelViewer from 'ooxml-excel-editor/vue2'`. 加载 + 渲染 + 基础事件 (rendered / error / cell-click / cell-dblclick / selection-change / hyperlink-click / cell-change) + 完整命令式 API (load / getWorkbook / setSelection / rectOf / downloadXlsx / downloadPdf / downloadImage / exportCsv / undo / redo / editCell / getCellValue / getCellText 等). **MVP 不带**内置工具栏 / 公式栏 / 查找 / 筛选 / 标签 / 导出对话框 / 右键菜单 — 后续 1.3.0 正式版逐步补 (跟 Vue 3 / React 壳同构).
+- **架构**: `src/vue2/ExcelViewer.ts` 用 Vue 2.7+ 内置 Composition API + render function (`h`) — 不依赖 SFC 编译器 (避开 vue@3/vue@2 SFC 双编译器冲突), 跟 React 壳 (.tsx + hook) 写法接近.
+- **构建**: `npm run build` 现在串两次 — 主 build (Vue 3 + React + core) + `vite build --mode lib-vue2` (产 `dist/vue2.js`). `package.json exports` 加 `./vue2` 子路径. `peerDependencies.vue` 升级为 `^2.7.0 || ^3.4.0` (两版兼容).
+- **dev**: vite dev server 同时支持 vue3-demo (主) 和 `vue2-demo/index.html` (Vue 2 demo, 用 `vue2` alias 加载 vue@2.7).
+- **devDependency** 加 `vue2: npm:vue@^2.7.16` (alias) + `@vitejs/plugin-vue2` (虽然 MVP 走 render function 没用到, 留着备用 — 未来子组件可能用 SFC).
+
+### 已知限制 (MVP → 1.3.0 待办)
+- `dist/vue2.js` 374 KB (含内嵌 core), 不像 `index.js` / `react.js` 那样共享 `dist/core.js` chunk. 后续优化.
+- 暂无内置子组件 (toolbar / find / filter / sheet-tabs / formula-bar / export-dialog / progress-overlay / 右键菜单).
+- 暂无 Vue 2 e2e 覆盖 (需要 Playwright 多入口配置).
+- `dist/vue2.d.ts` 类型声明文件未生成 (vue-tsc 不认 Vue 2 SFC; 但本 MVP 是 .ts 不是 .vue, 后续可加).
+
+发版策略: 当前 `1.3.0-alpha.0` 是**预发版**, npm publish 时用 `--tag alpha` (`npm publish --tag alpha`),
+不影响 `latest` (仍是 1.2.1). 子组件 + e2e + docs 完成后发 `1.3.0` 正式版.
+
+---
+
 ## [1.2.1] - 2026-06-08
 
 **WPS 风格长文本编辑** — 默认编辑器从 `<input>` 升级 `<textarea>`, 输入长文本自动换行 + 向下撑高, 跟 WPS / Excel 用户习惯一致。

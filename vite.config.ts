@@ -1,17 +1,20 @@
 import { defineConfig } from 'vite'
 import vue from '@vitejs/plugin-vue'
+import vue2 from '@vitejs/plugin-vue2'
 import react from '@vitejs/plugin-react'
 import dts from 'vite-plugin-dts'
 import { fileURLToPath, URL } from 'node:url'
 
 /**
- * 两种构建:
- * - 默认 `vite build`            → 组件库(lib 模式),产物给别的项目 import
+ * 三种构建:
+ * - 默认 `vite build`            → 组件库 Vue 3 + React 壳 (lib 模式), 产物给别的项目 import
+ * - `vite build --mode lib-vue2` → Vue 2 子入口 (单独跑, 跟主构建合在 npm run build 里)
  * - `vite build --mode demo`     → demo 站点(预览/部署用)
  * 开发 `vite dev` 始终走 demo(index.html + main.ts),不受 lib 配置影响。
  */
 export default defineConfig(({ mode, command }) => {
   const isDemo = mode === 'demo'
+  const isVue2Build = mode === 'lib-vue2'
   // 库构建(vite build,非 demo): 把 worker-client 别名成 stub(纯主线程),
   // 这样 vite 不会扫到 new Worker(...) → 不预打包 worker → 不把 1.4MB exceljs 打进库。
   // dev / demo 用真正的 worker-client(大文件不卡)。
@@ -23,16 +26,16 @@ export default defineConfig(({ mode, command }) => {
     // 解析 Worker 内部用动态 import(exceljs) → 需 ES 格式(iife 不支持代码分割)
     worker: { format: 'es' },
     plugins: [
-      vue(),
-      // React 壳(.tsx)走 react 插件;与 vue 插件并存,各管各的文件类型
-      react(),
-      // 仅 lib 构建时生成 .d.ts(只针对 Vue 库入口;React 壳的 .tsx/react-demo 不进 Vue 包)
-      ...(isDemo
+      // Vue 2 入口构建: 只装 plugin-vue2 (处理 .vue, 编译成 Vue 2 runtime), 不要 plugin-vue (会冲突)
+      // 其他构建: 装 plugin-vue + plugin-react, 各管各的文件类型
+      ...(isVue2Build ? [vue2()] : [vue(), react()]),
+      // 仅 lib 构建时生成 .d.ts(只针对 Vue 3 库入口;Vue 2 入口暂不生成 .d.ts, 避免 vue-tsc 不认 Vue 2 SFC)
+      ...(isDemo || isVue2Build
         ? []
         : [
             dts({
               include: ['src/**/*.ts', 'src/**/*.tsx', 'src/**/*.vue'],
-              exclude: ['src/**/__tests__/**', 'src/main.ts', 'src/App.vue', 'src/env.d.ts', 'src/react-demo/**'],
+              exclude: ['src/**/__tests__/**', 'src/main.ts', 'src/App.vue', 'src/env.d.ts', 'src/react-demo/**', 'src/vue2/**'],
               insertTypesEntry: true,
               tsconfigPath: './tsconfig.json',
             }),
@@ -58,6 +61,13 @@ export default defineConfig(({ mode, command }) => {
               },
             ]
           : []),
+        // Vue 2 构建: 把 `vue2` (npm alias 到 vue@2.7) 真实路径映射给 Vue 2 SFC 用的 vue import
+        // 同时 plugin-vue2 内部用的 vue 也走这里
+        ...(isVue2Build
+          ? [
+              { find: /^vue$/, replacement: fileURLToPath(new URL('./node_modules/vue2/dist/vue.runtime.esm.js', import.meta.url)) },
+            ]
+          : []),
         { find: '@', replacement: fileURLToPath(new URL('./src', import.meta.url)) },
       ],
     },
@@ -67,6 +77,29 @@ export default defineConfig(({ mode, command }) => {
     },
     build: isDemo
       ? {
+          chunkSizeWarningLimit: 1500,
+        }
+      : isVue2Build
+      ? {
+          // Vue 2 子入口: 单独跑, 不清 outDir (已有 Vue 3/React 产物)
+          emptyOutDir: false,
+          copyPublicDir: false,
+          lib: {
+            entry: { vue2: fileURLToPath(new URL('./src/vue2/index.ts', import.meta.url)) } as Record<string, string>,
+            formats: ['es'],
+          },
+          rollupOptions: {
+            // 'vue2' 和 'vue' 都 external — 源码用 'vue2' (开发期 alias 解析到 vue@2.7), 但
+            // build 产物里通过 output.paths 把 'vue2' 重写成 'vue', 让消费方用 peer vue@2.7 解析
+            external: ['vue', 'vue2', 'react', 'react-dom', 'react/jsx-runtime', 'exceljs', 'echarts', 'jspdf', 'hyperformula'],
+            output: {
+              entryFileNames: '[name].js',
+              chunkFileNames: 'chunks/[name]-[hash].js',
+              assetFileNames: (info) =>
+                info.name && info.name.endsWith('.css') ? 'vue2.css' : 'assets/[name][extname]',
+              paths: { vue2: 'vue' },
+            },
+          },
           chunkSizeWarningLimit: 1500,
         }
       : {
