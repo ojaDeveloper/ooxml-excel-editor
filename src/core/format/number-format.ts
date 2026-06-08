@@ -554,7 +554,9 @@ function addThousands(intStr: string): string {
   const withSep = digits.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
   return (neg ? '-' : '') + withSep
 }
-function dateToSerial(date: Date, date1904: boolean): number {
+/** Date → Excel 序列号(导出/往返用). date1904=true 时 epoch=1904-01-01;
+ *  1900 系统时跳过 phantom 1900-02-29(序号 ≥ 60 加 1 补回 bug 偏移). */
+export function dateToSerial(date: Date, date1904: boolean): number {
   const MS = 86400 * 1000
   const epoch = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 31)
   let serial = (date.getTime() - epoch) / MS
