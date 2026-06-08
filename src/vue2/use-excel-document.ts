@@ -2,8 +2,9 @@
  * Vue 2 壳的文档加载 composable — 跟 Vue 3 / React 壳同逻辑, 共用 core 的 loader/finalize/worker.
  * 用 Vue 2.7 内置 Composition API (ref).
  */
-// 开发期 'vue2' alias = vue@2.7. build 时 rollup output paths 替换为 'vue'
-import { ref } from 'vue2'
+// Composition API 从 @vue/composition-api 拿 → 兼容 Vue 2.6.x + 2.7+
+//   dev 时 vite alias 重定向到 vue2 (vue@2.7 dist); build 时 rollup external
+import { ref } from '@vue/composition-api'
 import type { TransformModelFn, WorkbookModel } from '@/core/model/types'
 import type { ParseProgress } from '@/core/progress'
 import { loadArrayBuffer, type ExcelSource } from '@/core/loader'

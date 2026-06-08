@@ -4,11 +4,11 @@
 
 ## [1.3.0] - 2026-06-08
 
-**Vue 2 兼容子入口 + 三壳 UI 1:1 复刻 + 独立 dev scripts** — Vue 2.7+ / Vue 3 / React 三个壳视觉与交互完全一致 (Vue 3 SFC 是参考实现 Standard, Vue 2 / React 1:1 复刻).
+**Vue 2 兼容子入口 + 三壳 UI 1:1 复刻 + 独立 dev scripts** — Vue 2.6 / 2.7+ / Vue 3 / React 三个壳视觉与交互完全一致 (Vue 3 SFC 是参考实现 Standard, Vue 2 / React 1:1 复刻).
 
 ### 新增
 
-- **`ooxml-excel-editor/vue2` 子入口** (`src/vue2/ExcelViewer.ts`, ~1000 行 render function 版): Vue 2.7+ 兼容壳, 跟 Vue 3 壳 1:1 功能对齐
+- **`ooxml-excel-editor/vue2` 子入口** (`src/vue2/ExcelViewer.ts`, ~1000 行 render function 版): **Vue 2.6.x + 2.7+** 兼容壳, 跟 Vue 3 壳 1:1 功能对齐. 通过 `@vue/composition-api` package 同时支持 2.6 (装 plugin + `Vue.use`) 和 2.7+ (plugin 自检测 + noop)
   - 全部 28 项 props (src / workbook / jsonOptions / templateFile / fileName / theme / cellStyle / cellImageFit / imageLightbox / openLinks / plugins / toolbar / editable / cellReadOnly / readOnlyRanges / editableTargets / strictDimensions / readOnlyCellStyle / editor / recalc / formulaEngine / contextMenu / exportProgress / transformModel / templateName)
   - 全部 15+ events 跟 Vue 3 同名 (rendered / error / progress / cell-click / cell-dblclick / selection-change / sheet-change / hyperlink-click / cell-change / edit-start / edit-commit / dim-change / dirty-change / image-change / struct-change / permission-denied / before-context-menu / context-menu)
   - 完整命令式 API (80+ 方法) 跟 Vue 3 `viewerApi` / React `ExcelViewerHandle` 对齐

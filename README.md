@@ -11,7 +11,7 @@
 ```bash
 npm i ooxml-excel-editor vue exceljs                  # Vue 3 (默认入口)
 npm i ooxml-excel-editor react react-dom exceljs      # React 壳 (/react 子入口)
-npm i ooxml-excel-editor vue@2.7 exceljs              # Vue 2.7+ (/vue2 子入口, 1.3.0+)
+npm i ooxml-excel-editor vue@2.7 @vue/composition-api exceljs  # Vue 2.6/2.7+ (/vue2 子入口, 1.3.0+)
 ```
 
 **用**(Vue,容器要给高度;`src` 可传 `File` / `Blob` / `ArrayBuffer` / `Uint8Array` / URL 字符串):
@@ -65,8 +65,9 @@ npm i ooxml-excel-editor vue exceljs
 # React 项目
 npm i ooxml-excel-editor react react-dom exceljs
 
-# Vue 2.7+ 项目 (1.3.0+)
-npm i ooxml-excel-editor vue@2.7 exceljs
+# Vue 2.6.x 或 2.7+ 项目 (1.3.0+) — 必装 @vue/composition-api (兼容 2.6 + 2.7)
+npm i ooxml-excel-editor vue@2.7 @vue/composition-api exceljs
+# Vue 2.6.x 还需 main.js: Vue.use(require('@vue/composition-api').default)
 
 # 只解析 / 读数据 / 导出(不渲染 UI)
 npm i ooxml-excel-editor exceljs
@@ -83,7 +84,7 @@ npm i hyperformula
 |---|---|---|---|
 | `ooxml-excel-editor` | **Vue 3** 组件 `<ExcelViewer>` (参考实现 Standard) | `vue@3` + `exceljs` | ~19 KB + 共享 chunks |
 | `ooxml-excel-editor/react` | **React** 组件 `<ExcelViewer>` (1:1 复刻 Vue 3) | `react` + `react-dom` + `exceljs` | ~11 KB + 共享 chunks |
-| `ooxml-excel-editor/vue2` | **Vue 2.7+** 组件 `<ExcelViewer>` (1:1 复刻 Vue 3) | `vue@2.7` + `exceljs` | ~124 KB (内嵌 core) |
+| `ooxml-excel-editor/vue2` | **Vue 2.6 / 2.7+** 组件 `<ExcelViewer>` (1:1 复刻 Vue 3) | `vue@2.6+` + `@vue/composition-api` + `exceljs` | ~124 KB (内嵌 core) |
 | `ooxml-excel-editor/core` | 框架无关引擎(解析/渲染/控制器/导出/读数据) | `exceljs` | ~1 KB + 共享 chunks |
 
 `exceljs` 必需;`vue` / `react` / `vue@2` 按框架三选一(均为可选 peer);`echarts` / `jspdf` / `hyperformula` 为**可选** peer —— 未装分别只影响"图表渲染""PDF 导出""公式重算",其余正常,且**绝不打包进你的产物**(运行时才动态加载)。

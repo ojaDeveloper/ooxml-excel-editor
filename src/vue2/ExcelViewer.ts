@@ -15,6 +15,11 @@
  *     formula bar / sheet tabs / state overlay / findbar) — 这些是纯响应式 UI, 走 Vue patch
  *     没问题. 这跟 React 壳的"imperative DOM" 模式一致, 也契合 controller 框架无关的设计.
  */
+// 从 '@vue/composition-api' 拿 Composition API → 同时支持 Vue 2.6.x + 2.7+:
+//   - Vue 2.6.x:  消费方装 @vue/composition-api 并 Vue.use(VueCompositionAPI)
+//   - Vue 2.7+:   @vue/composition-api 装上后自动 re-export Vue 2.7 内置 API (plugin install 为 noop)
+// dev 时 vite alias 把 '@vue/composition-api' 重定向到 vue2 (vue@2.7 dist), 拿 2.7 内置 Composition API.
+// build 时 rollup external @vue/composition-api, 让消费者自己解析.
 import {
   defineComponent,
   h,
@@ -28,7 +33,7 @@ import {
   nextTick,
   type PropType,
   type VNode,
-} from 'vue2'
+} from '@vue/composition-api'
 import type { ExportConfig } from '@/components/export-types'
 import type { ResolvedToolbarItem } from '@/components/toolbar-types'
 import { TOOLBAR_ICONS, svgWrap } from '@/components/toolbar-icons'

@@ -1,18 +1,38 @@
 # Vue 2 兼容子入口(1.3.0)
 
-让 Vue 2.7+ 项目用本库,跟 Vue 3 / React 壳共享同一份 framework-agnostic core,**~100% 功能对齐**。
+让 **Vue 2.6.x / 2.7+** 项目用本库,跟 Vue 3 / React 壳共享同一份 framework-agnostic core,**~100% 功能对齐**。
 
 ---
 
 ## 1. 安装 + 引入
 
+### Vue 2.7+ (推荐)
+
 ```bash
-npm i ooxml-excel-editor vue@2.7
-# 可选 peer (按需): exceljs, echarts, hyperformula, jspdf
+npm i ooxml-excel-editor vue@2.7 exceljs
+npm i @vue/composition-api    # 必装 (即使 Vue 2.7 内置 Composition API)
+# 可选 peer (按需): echarts, hyperformula, jspdf
 ```
 
+Vue 2.7+ 内置 Composition API, `@vue/composition-api` 检测到后**自动 re-export 内置 API** (plugin install 为 noop), **无需 `Vue.use()` 注册**.
+
+### Vue 2.6.x
+
+```bash
+npm i ooxml-excel-editor vue@2.6 @vue/composition-api exceljs
+```
+
+```js
+// main.js — 必须显式注册 @vue/composition-api plugin
+import Vue from 'vue'
+import VueCompositionAPI from '@vue/composition-api'
+Vue.use(VueCompositionAPI)
+```
+
+---
+
 ```html
-<!-- 你的项目 (Vue 2.7+) -->
+<!-- 你的项目 (Vue 2.6.x 或 2.7+) -->
 <template>
   <ExcelViewer
     ref="viewer"
@@ -42,6 +62,14 @@ export default {
 }
 </script>
 ```
+
+### 为什么要装 `@vue/composition-api`?
+
+Vue 2 壳代码统一从 `@vue/composition-api` import Composition API (`ref` / `computed` / `watch` / `onMounted` / `defineComponent` / ...). 这样:
+- **Vue 2.6.x**: 通过 plugin 注入 Composition API (它本来没有)
+- **Vue 2.7+**: plugin 检测到内置 API → re-export 它, plugin install 是 noop
+
+一份代码同时支持 2.6 + 2.7,你只需正确装 + 2.6 用户加 `Vue.use(VueCompositionAPI)` 一行.
 
 ---
 
@@ -200,7 +228,8 @@ Vue 2 壳自带跟 Vue 3 同款的 UI:
 
 ```json
 "peerDependencies": {
-  "vue": "^2.7.0 || ^3.4.0",
+  "vue": "^2.6.0 || ^2.7.0 || ^3.4.0",
+  "@vue/composition-api": "^1.7.0",
   "react": "^17.0.0 || ^18.0.0 || ^19.0.0",
   "react-dom": "^17.0.0 || ^18.0.0 || ^19.0.0",
   "exceljs": "^4.4.0",
@@ -210,7 +239,9 @@ Vue 2 壳自带跟 Vue 3 同款的 UI:
 }
 ```
 
-Vue 2 用户**只需装** `vue@2.7+`,React / Vue 3 全 external 不影响。`exceljs` / `echarts` / `hyperformula` / `jspdf` 都是可选 peer (动态 `import()` 加载)。
+Vue 2 用户(2.6 或 2.7) 装两个: `vue@2.6` 或 `vue@2.7` + `@vue/composition-api`. **Vue 2.6 用户额外**需要在 main.js 调 `Vue.use(VueCompositionAPI)`. Vue 2.7+ 不需要 Vue.use (plugin 自检测 + noop).
+
+React / Vue 3 用户不装这些, 不影响。`exceljs` / `echarts` / `hyperformula` / `jspdf` 都是可选 peer (动态 `import()` 加载)。
 
 ---
 

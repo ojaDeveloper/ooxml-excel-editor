@@ -33,9 +33,10 @@ src/components(Vue 3 壳 ★参考实现)→ dist/index.js:ExcelViewer.vue + 子
 src/react(React 壳, 复刻 Vue 3)→ dist/react.js:ExcelViewer.tsx + ExportProgressOverlay.tsx
                                   + 复用 src/components/toolbar-icons.ts / toolbar-types.ts
                                   薄壳, useLayoutEffect 起同一 ViewerController, useReducer force 桥接
-src/vue2(Vue 2 壳, 复刻 Vue 3)→ dist/vue2.js:ExcelViewer.ts (render function, 不走 SFC)
+src/vue2(Vue 2.6 + 2.7+ 壳, 复刻 Vue 3)→ dist/vue2.js:ExcelViewer.ts (render function, 不走 SFC)
                                 + 复用 src/components/toolbar-icons.ts
                                 独立打包(内嵌 core, 因 Vue 2/3 SFC 编译器冲突)
+                                **Composition API 从 '@vue/composition-api' import** (同时兼容 2.6 plugin / 2.7 内置)
                                 canvas/overlays/scroller 用 createElement + appendChild (imperative DOM)
                                 避免 Vue 2 patch 重建 controller 持有的 DOM (vnode key 必须全设)
 src/demo-shared(三 demo 共享 CSS / 工具)→ demo-bar.css (绿色头) + demo-editor.ts

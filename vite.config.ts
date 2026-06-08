@@ -75,6 +75,9 @@ export default defineConfig(({ mode, command }) => {
         // 'vue2' alias 显式指到 compiler-included build (vue.esm.js)
         // lib build 时 rollup output.paths { vue2: 'vue' } 把 'vue2' 重写成 'vue'
         { find: /^vue2$/, replacement: fileURLToPath(new URL('./node_modules/vue2/dist/vue.esm.js', import.meta.url)) },
+        // '@vue/composition-api' dev 时重定向到 vue@2.7 dist (内置 Composition API),
+        // build 时 rollup external — 消费者: Vue 2.6 走 @vue/composition-api plugin, Vue 2.7+ noop wrapper
+        { find: /^@vue\/composition-api$/, replacement: fileURLToPath(new URL('./node_modules/vue2/dist/vue.esm.js', import.meta.url)) },
         { find: '@', replacement: fileURLToPath(new URL('./src', import.meta.url)) },
       ],
     },
@@ -93,12 +96,13 @@ export default defineConfig(({ mode, command }) => {
             formats: ['es'],
           },
           rollupOptions: {
-            external: ['vue', 'vue2', 'react', 'react-dom', 'react/jsx-runtime', 'exceljs', 'echarts', 'jspdf', 'hyperformula'],
+            external: ['vue', 'vue2', '@vue/composition-api', 'react', 'react-dom', 'react/jsx-runtime', 'exceljs', 'echarts', 'jspdf', 'hyperformula'],
             output: {
               entryFileNames: '[name].js',
               chunkFileNames: 'chunks/[name]-[hash].js',
               assetFileNames: (info) =>
                 info.name && info.name.endsWith('.css') ? 'vue2.css' : 'assets/[name][extname]',
+              // 'vue2' 别名 → 消费者的 'vue';@vue/composition-api 保持不变, 消费者自己解析
               paths: { vue2: 'vue' },
             },
           },
