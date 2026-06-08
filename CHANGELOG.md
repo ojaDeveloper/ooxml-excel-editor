@@ -53,21 +53,36 @@ webpack 4 解析 `ooxml-excel-editor/vue2` → 找包根 `vue2.js` → re-export
 - 1.3.2 第一版 文档说明 + 用户按需装: webpack 4 静态扫描 `await import()` 找不到模块发 warning
 - 1.3.2 第二版 改 `dependencies` 自动装: webpack 4 解析这些 lib **源码** 时仍报 named-export / class-fields 错误 (因为 lib 用 ES2020+ 语法)
 
-**终极修复**: rollupOptions.external **不再排除** 这 4 个 lib, 让 vite/rollup 把它们的代码**编进我们 chunks/**, 同时 `target: 'es2017'` 把 class-fields / `??` / `?.` 全降级. 消费方:
-- **完全不用装这些 lib** (从 `dependencies` 移除)
-- 消费方 webpack **永远不解析这些库的源码** — 看到的是 `./chunks/exceljs-xxx.js` 相对路径, 内容已经是我们 ES2017 嚼碎后的产物
-- 不再有任何 named-export / class-fields / `import.meta` / module worker / `??` 等老打包器报错
+**终极修复**: rollupOptions.external 区分两类:
 
-只有 vue / react / @vue/composition-api 保持 external (框架必须跟宿主同实例).
+**inline 编进 chunks/** (老打包器零解析):
+- `exceljs` — 私有依赖, 用户项目一般没用
+- `hyperformula` — class fields 语法 webpack 4 解析必炸, 必 inline
+- `jspdf` — 同样现代语法
+
+**external + dependencies (npm 自动装)**:
+- `echarts` — 用户项目大概率已有自己的 echarts (常见 viz lib), inline 会:
+  - 浪费 ~1 MB bundle 体积
+  - 跟用户 `echarts.registerTheme()` 注册的主题 dual instance, 用户主题在我们 inline 的实例上失效
+  现代 echarts 5.x CJS / UMD 入口 webpack 4 兼容良好, external 安全.
+
+target: `es2017` 把 class-fields / `??` / `?.` 全降级.
+
+消费方:
+- **完全不用手动装任何 lib** — `npm i ooxml-excel-editor` 自动装 echarts
+- webpack 不解析 exceljs / jspdf / hyperformula 源码 (已 inline 嚼碎)
+- echarts 跟消费方自己的 echarts 同实例 (theme 共享, 不 dual)
+- 不再有 named-export / class-fields / `import.meta` / module worker / `??` 等老打包器报错
 
 变化:
-- **dependencies** 全部移除: `echarts` / `exceljs` / `jspdf` / `hyperformula`
+- **dependencies** 仅保留 `echarts` (+ 小 lib `fast-xml-parser` / `fflate`)
+- **dependencies** 移除: `exceljs` / `jspdf` / `hyperformula` (已 inline)
 - **peerDependencies** 剩余: `vue` / `react` / `react-dom` / `@vue/composition-api`
-- **dist 体积**: 6.9 MB (从之前 ~500 KB), 含 4 个 lib 全 inline
-- **tgz 压缩后**: 1.76 MB
-- vite/rollup target: `es2017` (跟之前 `es2018` 区别: hyperformula 的 class fields 必降, ES2017 才彻底)
+- **dist 体积**: 5.4 MB (含 3 个 inline lib)
+- **tgz 压缩后**: 1.33 MB
+- vite/rollup target: `es2017`
 
-消费方 build 后 bundle (不用图表/PDF/编辑公式) **影响很小** — dynamic import 保留 code-split, 不调到 chunk 就不下载.
+消费方 build 后 bundle (不用 PDF/编辑公式) **影响很小** — dynamic import 保留 code-split, 不调到 chunk 就不下载.
 
 ### 总效果
 

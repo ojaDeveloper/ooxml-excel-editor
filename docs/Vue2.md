@@ -250,16 +250,30 @@ dist 已 `target: 'es2018'`. 没有 `??` (空值合并 ES2020) / `?.` (可选链
 
 1.3.2 起 dist 全部走 `worker-client.stub.ts` (主线程跑解析), **不**用 `new Worker(new URL(..., import.meta.url))`. webpack 4 解析 dist 不会 SyntaxError, 运行也不缺 worker chunk.
 
-### 4. echarts / jspdf / hyperformula / exceljs 直接 inline 进 dist (1.3.2+)
+### 4. exceljs / jspdf / hyperformula inline 进 dist + echarts 自动随包装 (1.3.2+)
 
-1.3.2 起这 4 个 lib 全部**编进我们的 dist chunks/** (vite/rollup 非 external + ES2017 降级 + 代码 inline). 消费方:
-- **完全不用装这些 lib** (从 `dependencies` 移除, npm i 不会装)
-- 消费方的 **webpack 永远不会去解析这些库的源码** — 它们已经是我们 ES2017 嚼碎后的产物 (`dist/chunks/*.js`), webpack 见到的是相对路径 `./chunks/xxx.js`, 不再去 `node_modules` 找 `echarts` / `jspdf` 等
-- 不再有 named-export / class-fields / `import.meta` / module worker / `??` 等老打包器报错
+1.3.2 区分两类 lib:
 
-代价: `dist/` 整体 ~6.9 MB (从 1.3.1 的 ~500 KB 大幅增加). 但 **dynamic import 仍保留 code-split**, 消费方 build 后只有调用到对应功能的 chunk 才会被加载, **runtime bundle 体积影响很小** (不用图表/PDF/编辑公式时这些 chunk 不下载到浏览器).
+**inline 编进 dist chunks/** (vite/rollup 非 external + ES2017 降级):
+- `exceljs` (1.4 MB inline) — 私有依赖, 用户项目大概率没用
+- `hyperformula` (961 KB inline) — class fields 语法 webpack 4 必炸, 必须 inline
+- `jspdf` (536 KB inline) — 可选 + 也用现代语法
 
-npm tgz 压缩后 ~1.76 MB.
+**仍 external + 写在 `dependencies`** (`npm i` 自动随包装):
+- `echarts` — 用户项目大概率已有自己的 echarts (主流 viz lib), inline 会:
+  - 浪费 ~1 MB bundle 体积
+  - 跟用户 `echarts.registerTheme()` 注册的主题 dual instance, 用户的主题在我们 inline 的实例上失效
+  现代 echarts (5.x) CJS / UMD 入口 webpack 4 兼容良好, 没有 named-export / class-fields 问题, external 安全.
+
+消费方:
+- **完全不用手动装任何 lib** — `npm i ooxml-excel-editor` 时 npm 自动装 echarts 一个 (从 `dependencies`)
+- 消费方 webpack 不解析 `exceljs` / `jspdf` / `hyperformula` 源码 (已 inline 嚼碎)
+- 消费方用自己 echarts 实例 (avoid dual instance)
+
+体积:
+- `dist/` 总 ~5.4 MB (含 inline exceljs / jspdf / hyperformula)
+- tgz 压缩 ~1.33 MB
+- dynamic import 保留 code-split, **消费方 build 后 runtime bundle** 只在调用对应功能时加载对应 chunk, 不用 PDF / 公式重算 时这些 chunk 不下载
 
 ### 完整 Vue 2.6.12 + vue-cli 4 用法
 

@@ -103,14 +103,12 @@ export default defineConfig(({ mode, command }) => {
             formats: ['es'],
           },
           rollupOptions: {
-            // ★ 关键: exceljs / echarts / jspdf / hyperformula 都不 external →
-            // rollup 把它们的源码 inline 编译进我们的 chunks/ 一起 ES2017 降级.
-            // 消费方既不用装这些 lib (dependencies 也清掉), 它们的 webpack 也不会
-            // 解析这些库的源码 (已经是我们嚼碎后的产物). 完全消除 named-export / class
-            // fields / import.meta 等老打包器报错.
-            // 仅 framework (vue / react / @vue/composition-api) 保持 external — 它们
-            // 必须跟宿主同实例, 不能 dual.
-            external: ['vue', 'vue2', '@vue/composition-api', 'react', 'react-dom', 'react/jsx-runtime'],
+            // ★ exceljs / jspdf / hyperformula 都 inline 进 chunks/ + ES2017 降级
+            // (它们用 class fields / ES2020+ 语法, webpack 4 解析源码会炸).
+            // echarts 仍 external — 它现代版 CJS / UMD 入口 webpack 4 兼容良好,
+            // 用户项目大概率已有自己的 echarts (避免 dual instance / theme 失效).
+            // framework (vue / react / @vue/composition-api) 必 external — 跟宿主同实例.
+            external: ['vue', 'vue2', '@vue/composition-api', 'react', 'react-dom', 'react/jsx-runtime', 'echarts'],
             output: {
               entryFileNames: '[name].js',
               chunkFileNames: 'chunks/[name]-[hash].js',
@@ -134,9 +132,9 @@ export default defineConfig(({ mode, command }) => {
             formats: ['es'],
           },
           rollupOptions: {
-            // ★ exceljs / echarts / jspdf / hyperformula inline 进 chunks/, 跨三壳共享.
-            // 仅 framework (vue / react) external — 必跟宿主同实例, 不能 dual.
-            external: ['vue', 'react', 'react-dom', 'react/jsx-runtime'],
+            // ★ exceljs / jspdf / hyperformula inline 进 chunks/ (老打包器不解析它们源码).
+            // echarts 仍 external (用户项目大概率已有, 避免 dual instance / theme 失效).
+            external: ['vue', 'react', 'react-dom', 'react/jsx-runtime', 'echarts'],
             output: {
               entryFileNames: '[name].js',
               chunkFileNames: 'chunks/[name]-[hash].js',
