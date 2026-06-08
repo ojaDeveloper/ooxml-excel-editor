@@ -1,0 +1,58 @@
+/**
+ * Vue 2 壳 CSS — 跟 Vue 3 `.excel-viewer / .render-area / .ov / .scroller / .editor-slot`
+ * 同构同名, 但前缀加 `ov-` 避免跟用户应用其他选择器冲突.
+ *
+ * 必须导入: `import 'ooxml-excel-editor/style.css'` 拿全套样式 (跟 Vue 3 共享主 style.css);
+ *           `import 'ooxml-excel-editor/vue2.css'` 拿这个 Vue 2 专属布局.
+ */
+.ooxml-excel-viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  position: relative;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.ooxml-excel-viewer .ov-render-area {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: hidden;
+}
+.ooxml-excel-viewer .ov-grid-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+}
+.ooxml-excel-viewer .ov {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.ooxml-excel-viewer .ov-plugin {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  pointer-events: none;
+}
+.ooxml-excel-viewer .ov-editor-slot {
+  position: absolute;
+  inset: 0;
+  z-index: 6;
+  overflow: visible;
+  pointer-events: none;
+}
+.ooxml-excel-viewer .ov-editor-slot > * {
+  pointer-events: auto;
+}
+.ooxml-excel-viewer .ov-scroller {
+  position: absolute;
+  inset: 0;
+  z-index: 7;
+  overflow: auto;
+  outline: none;
+}
+.ooxml-excel-viewer .ov-spacer {
+  position: relative;
+  pointer-events: none;
+}

@@ -21,6 +21,7 @@ import type { ExcelSource } from '@/core/loader'
 import type { WorkbookModel, MergeRange, TransformModelFn } from '@/core/model/types'
 import { ViewerController } from '@/core/viewer/controller'
 import { useExcelDocumentVue2 } from './use-excel-document'
+import './excel-viewer.css'
 
 export default defineComponent({
   name: 'OoxmlExcelViewer',
