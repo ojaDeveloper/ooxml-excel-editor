@@ -4,7 +4,8 @@ import { ExcelViewer, type ExcelViewerHandle } from '@/react'
 import { definePlugin } from '@/core/plugin'
 import type { ExcelSource } from '@/core/loader'
 import { demoSelectEditor } from '@/demo-shared/demo-editor'
-import './demo-bar.css'
+
+import '../demo-shared/demo-bar.css'
 
 // ---------------- demo 顶栏溢出工具(只用于本 demo;不污染组件) ----------------
 type DemoItem =
@@ -23,21 +24,21 @@ type DemoItem =
 function renderItem(it: DemoItem, onAfter?: () => void): JSX.Element {
   if (it.kind === 'btn') {
     return (
-      <button key={it.id} className="rxl-demo-btn" title={it.title} onClick={() => { it.onClick(); onAfter?.() }}>
+      <button key={it.id} className="sample-btn" title={it.title} onClick={() => { it.onClick(); onAfter?.() }}>
         {it.label}
       </button>
     )
   }
   if (it.kind === 'color') {
     return (
-      <label key={it.id} className="rxl-demo-lb" title={it.title}>
+      <label key={it.id} className="sample-label" title={it.title}>
         {it.label}
         <input type="color" value={it.getColor()} onChange={(e) => it.onColor(e.target.value)} />
       </label>
     )
   }
   return (
-    <label key={it.id} className="rxl-demo-lb" title={it.title}>
+    <label key={it.id} className="sample-label" title={it.title}>
       {it.label}
       <select value={it.value()} onChange={(e) => { it.onChange(e.target.value); onAfter?.() }}>
         {it.options.map((o) => (
@@ -74,14 +75,49 @@ const demoPlugin = definePlugin({
 
 function Demo() {
   const [src, setSrc] = useState<ExcelSource | undefined>(undefined)
+  const [jsonItems, setJsonItems] = useState<Array<Record<string, unknown>> | null>(null)
   const [fileName, setFileName] = useState('')
   const [editMode, setEditMode] = useState(false) // E0: 编辑模式闸门
   const [fit, setFit] = useState<'fill' | 'contain' | 'cover'>('contain') // WPS 内嵌图贴合方式(默认 contain 同 WPS)
+  const [highlightReadOnly, setHighlightReadOnly] = useState(false)
   const [, bumpSel] = useReducer((x: number) => x + 1, 0) // 选区/内容变 → 重渲(颜色回显)
   // 稳定引用:demo 因 bumpSel 频繁重渲,这些 prop 若每次新建数组会让壳的 effect 反复重跑(清掉选区)
   const readOnlyRanges = useMemo(() => [{ top: 1, left: 0, bottom: 1, right: 4 }], [])
   const plugins = useMemo(() => [demoPlugin], [])
   const ref = useRef<ExcelViewerHandle>(null)
+
+  // 跟 Vue 3 demo 同款的"演示功能" — 加载 JSON / PDF 水印 / 数据→JSON
+  function loadJsonSample() {
+    setSrc(undefined)
+    setFileName('订单数据')
+    setJsonItems([
+      { name: '笔记本电脑', price: 5999, qty: 1, amount: 5999, note: '商务款' },
+      { name: '机械键盘', price: 399, qty: 2, amount: 798, note: '青轴' },
+      { name: '显示器', price: 1299, qty: 2, amount: 2598, note: '27寸 2K' },
+      { name: '鼠标', price: 89, qty: 5, amount: 445, note: '无线' },
+      { name: '耳机', price: 599, qty: 3, amount: 1797, note: '降噪' },
+    ])
+  }
+  async function exportPdfWithWatermark() {
+    try {
+      await ref.current?.downloadPdf({
+        target: 'all',
+        beforeRenderPage: (ctx: any) => {
+          const { doc, pageIndex, pageCount, pageWidth, pageHeight, margin, sheetName } = ctx
+          doc.setFontSize(9); doc.setTextColor(120)
+          doc.text(`${sheetName}`, margin.left, pageHeight - 5)
+          doc.text(`第 ${pageIndex + 1} / ${pageCount} 页`, pageWidth - margin.right, pageHeight - 5, { align: 'right' })
+          doc.setFontSize(56); doc.setTextColor(230)
+          doc.text('PREVIEW', pageWidth / 2, pageHeight / 2, { align: 'center', angle: 30 })
+        },
+      })
+    } catch (e) { console.error('PDF 水印导出失败:', e) }
+  }
+  function showSheetJSON() {
+    const json = ref.current?.getSheetJSON({ headerRow: 1 }) ?? []
+    navigator.clipboard?.writeText(JSON.stringify(json, null, 2)).catch(() => {})
+    alert(`${json.length} 行已复制为 JSON · 首行: ${JSON.stringify(json[0] ?? {})}`.slice(0, 200))
+  }
 
   // 开发期把命令式句柄挂 window,供 e2e 取几何/读数据(与 Vue demo 的 __excelViewer 对齐)
   if (import.meta.env.DEV) {
@@ -90,9 +126,16 @@ function Demo() {
 
   // demo 演示按钮(放不下自动收进「更多」)
   const items: DemoItem[] = []
+  if (src || jsonItems) {
+    items.push(
+      { id: 'pdf-watermark', kind: 'btn', label: 'PDF(页码+水印)', title: '演示 beforeRenderPage 钩子', onClick: () => void exportPdfWithWatermark() },
+      { id: 'sheet-json', kind: 'btn', label: '数据→JSON', title: '演示数据读取 API getSheetJSON', onClick: showSheetJSON },
+    )
+  }
   if (src) {
     if (editMode) {
       items.push(
+        { id: 'highlight-readonly', kind: 'btn', label: highlightReadOnly ? '✓ 高亮只读' : '高亮只读', title: '把只读格套浅灰底', onClick: () => setHighlightReadOnly(!highlightReadOnly) },
         { id: 'bold', kind: 'btn', label: 'B 加粗选区', title: '给选区加粗(E5)', onClick: () => { const s = ref.current?.getSelection(); if (s) ref.current?.setStyle(s, { font: { bold: true } }) } },
         { id: 'merge', kind: 'btn', label: '合并', title: '合并选区(G1)', onClick: () => { const s = ref.current?.getSelection(); if (s) ref.current?.mergeCells(s) } },
         { id: 'unmerge', kind: 'btn', label: '拆分', title: '拆分选区(G1)', onClick: () => { const s = ref.current?.getSelection(); if (s) ref.current?.unmergeCells(s) } },
@@ -168,43 +211,54 @@ function Demo() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
       {/* demo 顶栏:固定区(标题/选 xlsx/加载示例/编辑模式)+ 演示按钮区(自动溢出收进「⋯ 更多」) */}
-      <div ref={barRef} className="rxl-demo-bar">
-        <div ref={fixedRef} className="rxl-demo-fixed">
-          <strong style={{ fontSize: 14 }}>React 版 ExcelViewer(共用 core)</strong>
+      <div ref={barRef} className="app-bar">
+        <div ref={fixedRef} className="app-bar-fixed">
+          <strong>OOXML Excel 预览器</strong>
+          <span className="sub">React · Canvas 高保真</span>
+          <label className="file-btn">
+            选择 .xlsx
+            <input
+              type="file"
+              accept=".xlsx,.xlsm"
+              hidden
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) { setJsonItems(null); setSrc(f); setFileName(f.name) }
+              }}
+            />
+          </label>
           <button
+            className="sample-btn"
             onClick={() => {
+              setJsonItems(null)
               setSrc(import.meta.env.BASE_URL + 'sample.xlsx')
               setFileName('sample.xlsx')
             }}
           >
             加载示例
           </button>
-          <input
-            type="file"
-            accept=".xlsx,.xlsm"
-            onChange={(e) => {
-              const f = e.target.files?.[0]
-              if (f) { setSrc(f); setFileName(f.name) }
-            }}
-          />
-          <span style={{ color: '#888', fontSize: 13 }}>{fileName}</span>
-          <label style={{ fontSize: 13 }} title="开启编辑模式(E0:闸门)">
-            <input type="checkbox" checked={editMode} onChange={(e) => setEditMode(e.target.checked)} /> 编辑模式
-          </label>
+          <button className="sample-btn" onClick={loadJsonSample} title="加载一个 JSON 数据源演示;然后用工具栏「模板」导入 .xlsx 看模板效果">
+            JSON 示例
+          </button>
+          {(src || jsonItems) && (
+            <label className="edit-toggle" title="开启编辑模式(E0:闸门)">
+              <input type="checkbox" checked={editMode} onChange={(e) => setEditMode(e.target.checked)} /> 编辑模式
+            </label>
+          )}
         </div>
-        <div className="rxl-demo-grow" />
+        <div className="grow" />
         {/* 隐藏测量行 */}
-        <div ref={measureRef} className="rxl-demo-measure" aria-hidden="true">
+        <div ref={measureRef} className="app-bar-measure" aria-hidden="true">
           {items.map((it) => renderItem(it))}
         </div>
         {visibleItems.map((it) => renderItem(it))}
         {overflowItems.length ? (
-          <div className="rxl-demo-more">
-            <button className={'rxl-demo-btn' + (moreOpen ? ' open' : '')} title="更多" onClick={() => setMoreOpen(!moreOpen)}>
+          <div className="more-wrap">
+            <button className={'sample-btn more-btn' + (moreOpen ? ' open' : '')} title="更多" onClick={() => setMoreOpen(!moreOpen)}>
               ⋯ 更多
             </button>
             {moreOpen ? (
-              <div className="rxl-demo-pop">
+              <div className="more-pop">
                 {overflowItems.map((it) => renderItem(it, () => setMoreOpen(false)))}
               </div>
             ) : null}
@@ -215,12 +269,14 @@ function Demo() {
         <ExcelViewer
           ref={ref}
           src={src}
+          workbook={jsonItems ?? undefined}
           fileName={fileName}
           plugins={plugins}
           editable={editMode}
           cellImageFit={fit}
           recalc={editMode}
           readOnlyRanges={readOnlyRanges}
+          readOnlyCellStyle={highlightReadOnly}
           editor={demoSelectEditor}
           toolbar={['find', 'filter', 'clear-filter', 'separator', 'copy', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export']}
           onSelectionChange={() => bumpSel()}

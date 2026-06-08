@@ -1,0 +1,132 @@
+/**
+ * 三个 demo 共用的顶栏样式 (Vue 3 demo src/App.vue / Vue 2 demo / React demo 都引用).
+ * 类名跟 Vue 3 SFC 内的 scoped CSS 类名完全一致, 这样三个 demo 视觉真 1:1.
+ *
+ * 顶栏: 绿色背景 (#21a366) + 白字 + 半透明按钮 (rgba(255,255,255,.18)).
+ */
+.app-bar {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 48px;
+  padding: 0 16px;
+  background: #21a366;
+  color: #fff;
+  overflow: visible;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.app-bar strong { font-size: 14px; font-weight: 600; }
+.app-bar .sub {
+  font-size: 12px;
+  opacity: 0.85;
+}
+.app-bar .grow { flex: 1 1 0; min-width: 0; }
+
+.app-bar-fixed {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: 0 0 auto;
+}
+
+.app-bar .file-btn,
+.app-bar .sample-btn {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  padding: 6px 14px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 13px;
+  white-space: nowrap;
+  font-family: inherit;
+  line-height: 1.4;
+}
+.app-bar .file-btn:hover,
+.app-bar .sample-btn:hover {
+  background: rgba(255, 255, 255, 0.3);
+}
+.app-bar .sample-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.app-bar .sample-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  white-space: nowrap;
+  color: #fff;
+}
+.app-bar .sample-label select {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  border-radius: 5px;
+  padding: 4px 6px;
+  font-size: 13px;
+  outline: none;
+}
+.app-bar .sample-label select option { color: #333; }
+.app-bar .sample-label input[type=color],
+.app-bar .sample-label input[type=checkbox] {
+  vertical-align: middle;
+}
+
+.app-bar .edit-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  cursor: pointer;
+  color: #fff;
+}
+
+/* 隐藏测量行 (React demo 用来量每项实际宽度) */
+.app-bar .app-bar-measure {
+  position: absolute;
+  left: 0; top: 0;
+  visibility: hidden;
+  pointer-events: none;
+  height: 0;
+  overflow: hidden;
+  display: flex;
+  gap: 6px;
+}
+
+/* 「更多」popover (demo 顶栏溢出按钮) */
+.app-bar .more-wrap { position: relative; }
+.app-bar .more-btn { display: inline-flex; align-items: center; gap: 4px; }
+.app-bar .more-btn.open { background: rgba(255, 255, 255, 0.32); }
+.app-bar .more-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 30;
+  min-width: 200px;
+  background: #fff;
+  color: #1f2329;
+  border: 1px solid #d8dbde;
+  border-radius: 6px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.18);
+  padding: 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.app-bar .more-row {
+  text-align: left;
+  background: none;
+  border: none;
+  font-size: 13px;
+  padding: 7px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #333;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.app-bar .more-row:hover { background: #eef3fe; }
