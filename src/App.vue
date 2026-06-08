@@ -144,6 +144,8 @@ function clearFill() {
 // 默认 undefined = 白名单未启用(老行为:editable=true 时全可编辑);
 // applied = [] 或 [...targets] = 白名单生效(只 targets 可编辑)
 const editableTargetsApplied = ref<EditableTarget[] | undefined>(undefined)
+// Phase C 2026-06-08: 高亮只读 toggle - 把只读格套浅灰底, 让用户一眼区分白名单内外
+const highlightReadOnly = ref(false)
 const editTargetsDialogOpen = ref(false)
 // 弹窗里的临时选区: 用 "r:c" 字符串集合记录(可独立勾选不相邻格)
 const editTargetsDraft = ref<Set<string>>(new Set())
@@ -341,6 +343,10 @@ const demoBarItems = computed<DemoItem[]>(() => {
         label: editableTargetsApplied.value ? `可编辑 (${editableTargetsApplied.value.length})` : '设置可编辑',
         title: '白名单模式: 弹窗里点选要可编辑的格 / 行 / 列, 应用后只这些可编辑 (其它一律只读)',
         onClick: openEditTargetsDialog },
+      { id: 'highlight-readonly', type: 'btn',
+        label: highlightReadOnly.value ? '✓ 高亮只读' : '高亮只读',
+        title: '把只读格套浅灰底 (内置 readOnlyCellStyle=true). 跟「设置可编辑」白名单配合, 一眼看出哪些格可编辑',
+        onClick: () => (highlightReadOnly.value = !highlightReadOnly.value) },
       { id: 'bold', type: 'btn', label: 'B 加粗选区', title: '给选区加粗(E5)', onClick: boldSelection },
       { id: 'merge', type: 'btn', label: '合并', title: '合并选区(G1)', onClick: mergeSelection },
       { id: 'unmerge', type: 'btn', label: '拆分', title: '拆分选区(G1)', onClick: unmergeSelection },
@@ -495,6 +501,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         :recalc="editMode"
         :read-only-ranges="[{ top: 1, left: 0, bottom: 1, right: 4 }]"
         :editable-targets="editableTargetsApplied"
+        :read-only-cell-style="highlightReadOnly"
         :editor="demoSelectEditor"
         :toolbar="['find', 'filter', 'clear-filter', 'separator', 'copy', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export']"
         @selection-change="(s) => { lastEvent = `选区 ${s.range.top + 1},${s.range.left + 1} → ${s.range.bottom + 1},${s.range.right + 1}`; selTick++ }"

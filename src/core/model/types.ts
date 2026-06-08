@@ -336,5 +336,17 @@ export interface CellStyleOverride {
   indent?: number
   numFmt?: string
 }
-/** 渲染钩子: 按单元格覆盖样式(返回部分样式,与解析样式合并) */
-export type CellStyleFn = (cell: CellModel, pos: { row: number; col: number }) => CellStyleOverride | void
+/**
+ * 渲染钩子上下文 (Phase C, 2026-06-08).
+ * 给 `cellStyle` 钩子的第 3 入参, 让插件能感知该格当前是否可编辑 →
+ * 给只读格定制样式不再需要在 setup 里间接调 viewer.isCellEditable.
+ */
+export interface CellStyleCtx {
+  /** 该格此刻是否可编辑(综合 editable + editableTargets + readOnlyRanges + cellReadOnly) */
+  editable: boolean
+}
+/**
+ * 渲染钩子: 按单元格覆盖样式(返回部分样式,与解析样式合并).
+ * Phase C 2026-06-08: 加可选第 3 入参 `ctx: CellStyleCtx`, 含 `editable`. 旧 `(cell, pos) => ...` 签名兼容.
+ */
+export type CellStyleFn = (cell: CellModel, pos: { row: number; col: number }, ctx?: CellStyleCtx) => CellStyleOverride | void

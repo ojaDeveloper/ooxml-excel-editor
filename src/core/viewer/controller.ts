@@ -284,6 +284,7 @@ export class ViewerController {
     this.renderer = new CanvasRenderer(this.els.canvas, sheet, workbook, zoom, {
       ...opts,
       onNeedsRedraw: () => this.scheduleRender(), // WPS 内嵌图异步解码完触发重绘
+      isEditable: (r, c) => this.isCellEditable(r, c), // Phase C 2026-06-08: 让渲染层感知 editable
     })
     this.hooks.onRenderer(this.renderer)
     this.view.zoom = zoom
@@ -1161,7 +1162,12 @@ export class ViewerController {
       sc.style.cursor = ''
       return
     }
-    sc.style.cursor = r.cellHyperlink(cell.row, cell.col) ? 'pointer' : 'cell'
+    // Phase C 2026-06-08: editable=true 但该格只读 → not-allowed; 否则按超链接/默认
+    if (this.editCfg.editable && !this.isCellEditable(cell.row, cell.col)) {
+      sc.style.cursor = r.cellHyperlink(cell.row, cell.col) ? 'pointer' : 'not-allowed'
+    } else {
+      sc.style.cursor = r.cellHyperlink(cell.row, cell.col) ? 'pointer' : 'cell'
+    }
     const tx = p.x + 14
     const ty = p.y + 18
     const comment = r.commentAt(cell.row, cell.col)

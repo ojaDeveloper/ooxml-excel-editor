@@ -3,7 +3,7 @@
  * 渲染顺序(每个 pane 内): 网格线 → 填充/条件背景 → 数据条 → 边框 → 文本/图标 → 筛选按钮。
  * 表头(行号/列字母)最后绘制，覆盖在最上层。
  */
-import type { BorderEdge, CellModel, CellStyle, CellStyleFn, MergeRange, SheetModel, Sparkline, WorkbookModel } from '../model/types'
+import type { BorderEdge, CellModel, CellStyle, CellStyleFn, CellStyleOverride, MergeRange, SheetModel, Sparkline, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
 import { cellDisplayText } from '../model/data-access'
 import { mergeStyleOverride } from '../model/mutations'
@@ -39,6 +39,21 @@ export interface RendererOptions {
   onNeedsRedraw?: () => void
   /** WPS 单元格内嵌图贴合方式(默认 contain,与 WPS 渲染一致) */
   cellImageFit?: CellImageFit
+  /**
+   * 只读单元格视觉钩子 (Phase C, 2026-06-08):
+   *   - false (默认) = 无视觉差异 (老行为不变)
+   *   - true = 套内置默认 (灰底 #f5f7fa)
+   *   - CellStyleOverride 对象 = 固定样式给所有只读格
+   *   - CellStyleFn 函数 = 按格自定义
+   * 仅在 cellStyle 钩子之后, 该格 editable=false 时套用.
+   */
+  readOnlyCellStyle?: boolean | CellStyleOverride | CellStyleFn
+  /**
+   * 查询某格是否可编辑 (Phase C, 2026-06-08):
+   * 让渲染器把 ctx.editable 喂给 cellStyle 钩子 + 决定是否套 readOnlyCellStyle.
+   * controller 注入, 默认 () => true (不知道权限 → 当全可编辑, 老行为不变).
+   */
+  isEditable?: (row: number, col: number) => boolean
 }
 
 /** 导出为离屏 canvas 的选项 */
@@ -114,6 +129,10 @@ export class CanvasRenderer {
   private cellStyleHook?: CellStyleFn
   private onNeedsRedraw?: () => void
   private cellImageFit: CellImageFit
+  /** Phase C 2026-06-08: 只读视觉钩子, 渲染时按格套用 */
+  private readOnlyStyleHook?: boolean | CellStyleOverride | CellStyleFn
+  /** Phase C 2026-06-08: 查询该格是否可编辑 (controller 注入). 默认全可编辑 (老行为) */
+  private isEditableFn: (row: number, col: number) => boolean = () => true
   /** 虚拟外推行/列数(滚动出空行用;0 = 仅按 dimension)。透传给 GridMetrics,不影响导出。 */
   private virtualRows = 0
   private virtualCols = 0
@@ -131,6 +150,8 @@ export class CanvasRenderer {
     this.cellStyleHook = opts?.cellStyle
     this.onNeedsRedraw = opts?.onNeedsRedraw
     this.cellImageFit = opts?.cellImageFit ?? 'contain' // 默认 contain:与 WPS DISPIMG 渲染一致
+    this.readOnlyStyleHook = opts?.readOnlyCellStyle
+    if (opts?.isEditable) this.isEditableFn = opts.isEditable
     const ctx = canvas.getContext('2d')
     if (!ctx) throw new Error('无法获取 canvas 2d context')
     this.ctx = ctx
@@ -1374,9 +1395,28 @@ export class CanvasRenderer {
 
   private styleOf(cell: CellModel): CellStyle {
     const base = this.sheet.styles[cell.styleId]
-    if (!this.cellStyleHook) return base
-    const over = this.cellStyleHook(cell, { row: cell.row, col: cell.col })
-    return over ? mergeStyleOverride(base, over) : base
+    const editable = this.isEditableFn(cell.row, cell.col)
+    let out: CellStyle = base
+    // ① cellStyle 钩子 (传入 ctx.editable;旧 (cell, pos) => ... 签名兼容,第 3 入参可选)
+    if (this.cellStyleHook) {
+      const over = this.cellStyleHook(cell, { row: cell.row, col: cell.col }, { editable })
+      if (over) out = mergeStyleOverride(out, over)
+    }
+    // ② 只读视觉钩子 (Phase C 2026-06-08): 仅在该格 !editable 且配了 readOnlyCellStyle 时套
+    if (!editable && this.readOnlyStyleHook) {
+      const ro = this.readOnlyStyleHook
+      let roOver: CellStyleOverride | void = undefined
+      if (ro === true) {
+        // 内置默认: 浅灰底, 跟工具栏背景一致, 不抢眼
+        roOver = { fill: { type: 'solid', fgColor: '#f5f7fa' } }
+      } else if (typeof ro === 'function') {
+        roOver = ro(cell, { row: cell.row, col: cell.col }, { editable })
+      } else if (ro && typeof ro === 'object') {
+        roOver = ro
+      }
+      if (roOver) out = mergeStyleOverride(out, roOver)
+    }
+    return out
   }
 }
 

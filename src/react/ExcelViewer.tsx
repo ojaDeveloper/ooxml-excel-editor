@@ -126,6 +126,12 @@ export interface ExcelViewerProps {
    * editableTargets 启用了 → 该列/行至少有 1 格在白名单内才能改尺寸.
    */
   strictDimensions?: boolean
+  /**
+   * **只读单元格视觉钩子** (Phase C, 2026-06-08):
+   * `false`(默认) 无视觉差异;`true` 内置浅灰底 `#f5f7fa`;`CellStyleOverride` 固定样式;`CellStyleFn` 按格自定义.
+   * 跟 editableTargets 配合 → 白名单外的格自动套此视觉.
+   */
+  readOnlyCellStyle?: boolean | CellStyleOverride | CellStyleFn
   /** 自定义单元格编辑器(按格返回工厂;覆盖插件 editor)。需 editable 开启 */
   editor?: EditorResolver
   /** 公式重算(E4):默认 false 沿用缓存值。开启后编辑公式/被引用格 → 依赖格自动重算。需 editable */
@@ -318,16 +324,16 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     const fns: CellStyleFn[] = ps.map((p) => p.cellStyle).filter(Boolean) as CellStyleFn[]
     if (propsRef.current.cellStyle) fns.push(propsRef.current.cellStyle)
     const cellStyle: CellStyleFn | undefined = fns.length
-      ? (cell, pos) => {
+      ? (cell, pos, ctx) => {
           let acc: ReturnType<CellStyleFn> | undefined
           for (const fn of fns) {
-            const o = fn(cell, pos)
+            const o = fn(cell, pos, ctx)
             if (o) acc = { ...(acc || {}), ...o }
           }
           return acc
         }
       : undefined
-    return { theme, cellStyle, cellImageFit: propsRef.current.cellImageFit }
+    return { theme, cellStyle, cellImageFit: propsRef.current.cellImageFit, readOnlyCellStyle: propsRef.current.readOnlyCellStyle }
   }
   function effectiveTransform(wb: WorkbookModel): WorkbookModel {
     let m = wb

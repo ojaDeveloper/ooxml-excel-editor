@@ -10,6 +10,7 @@ import { parseInWorker } from '@/composables/worker-client'
 import type {
   CellModel,
   CellStyleFn,
+  CellStyleOverride,
   MergeRange,
   SheetModel,
   TransformModelFn,
@@ -105,6 +106,16 @@ const props = withDefaults(
      * `editable` 控制(老行为). 设 `true` + `editableTargets` 启用了 → 该列/行至少有 1 格在白名单内才能改尺寸.
      */
     strictDimensions?: boolean
+    /**
+     * **只读单元格视觉钩子** (Phase C, 2026-06-08):
+     * - `false` (默认) = 无视觉差异 (老行为不变)
+     * - `true` = 套内置默认 (浅灰底 `#f5f7fa`,跟工具栏一致)
+     * - `CellStyleOverride` 对象 = 固定样式给所有只读格 (如黄底高亮)
+     * - `CellStyleFn` 函数 = 按格自定义
+     *
+     * 跟 `editableTargets` 配合: 白名单未覆盖的格自动套此视觉, 用户一眼看出哪些可编辑.
+     */
+    readOnlyCellStyle?: boolean | CellStyleOverride | CellStyleFn
     /** 自定义单元格编辑器(按格返回工厂;覆盖插件 editor)。需 editable 开启 */
     editor?: EditorResolver
     /** 公式重算(E4):默认 false 沿用缓存值。开启后编辑公式/被引用格 → 依赖格自动重算。需 editable */
@@ -140,10 +151,10 @@ const effectiveTheme = computed(() =>
   Object.assign({}, ...normalizedPlugins.value.map((p) => p.theme || {}), props.theme || {}),
 )
 const hasCellStyleHook = computed(() => !!props.cellStyle || normalizedPlugins.value.some((p) => p.cellStyle))
-function combinedCellStyle(cell: CellModel, pos: { row: number; col: number }) {
+function combinedCellStyle(cell: CellModel, pos: { row: number; col: number }, ctx?: import('@/core/model/types').CellStyleCtx) {
   let acc: Record<string, unknown> | undefined
   const apply = (fn?: CellStyleFn) => {
-    const o = fn?.(cell, pos)
+    const o = fn?.(cell, pos, ctx) // Phase C 2026-06-08: 透传 ctx.editable 给插件 / props cellStyle
     if (o) acc = { ...(acc || {}), ...o }
   }
   for (const p of normalizedPlugins.value) apply(p.cellStyle)
@@ -365,6 +376,7 @@ function rebuildRenderer() {
     theme: effectiveTheme.value,
     cellStyle: hasCellStyleHook.value ? combinedCellStyle : undefined,
     cellImageFit: props.cellImageFit,
+    readOnlyCellStyle: props.readOnlyCellStyle, // Phase C 2026-06-08
   })
   controller.setSourceBuffer(sourceBuffer.value) // 注入原件字节(overlay 高保真导出)
 }
