@@ -50,7 +50,14 @@ new Vue({
     inst._demoRo?.disconnect()
     if (inst._onDocClick) document.removeEventListener('mousedown', inst._onDocClick)
   },
-  updated() { this.$nextTick(() => this.demoRemeasure()) },
+  watch: {
+    // 内容/编辑态变 → 重新测量 (用 watch 而非 updated, 避免 demoRemeasure 改 reactive 触发的死循环)
+    editMode() { this.$nextTick(() => this.demoRemeasure()) },
+    src() { this.$nextTick(() => this.demoRemeasure()) },
+    jsonItems() { this.$nextTick(() => this.demoRemeasure()) },
+    highlightReadOnly() { this.$nextTick(() => this.demoRemeasure()) },
+    appliedCount() { this.$nextTick(() => this.demoRemeasure()) },
+  },
   computed: {
     /** 顶栏右侧演示按钮列表 (跟 Vue 3 demo src/App.vue:328-369 同款) */
     demoBarItems(): Array<{ id: string; kind: 'btn' | 'select' | 'color'; label: string; title?: string; onClick?: () => void; getColor?: () => string; onColor?: (e: Event) => void; model?: string; options?: { value: string; label: string }[]; onSelect?: (v: string) => void }> {
