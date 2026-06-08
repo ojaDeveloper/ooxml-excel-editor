@@ -130,3 +130,96 @@
   gap: 6px;
 }
 .app-bar .more-row:hover { background: #eef3fe; }
+
+/* ===== 「设置可编辑单元格」白名单 dialog (跟 Vue 3 demo src/App.vue 同款) ===== */
+.edit-targets-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+.edit-targets-dialog {
+  background: #fff;
+  border-radius: 10px;
+  width: min(640px, calc(100vw - 32px));
+  max-height: calc(100vh - 64px);
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
+  overflow: hidden;
+}
+.edit-targets-dialog header {
+  padding: 14px 18px 8px;
+  border-bottom: 1px solid #eef0f3;
+}
+.edit-targets-dialog h3 { margin: 0 0 6px; font-size: 15px; color: #1f2329; font-weight: 600; }
+.edit-targets-dialog .hint { margin: 0; font-size: 12px; color: #707481; line-height: 1.6; }
+.edit-targets-grid {
+  padding: 12px 18px;
+  overflow: auto;
+  flex: 1 1 auto;
+}
+.edit-targets-grid table { border-collapse: collapse; font-size: 12px; }
+.edit-targets-grid th,
+.edit-targets-grid td {
+  border: 1px solid #dce0e6;
+  padding: 4px 6px;
+  min-width: 44px;
+  height: 26px;
+  text-align: center;
+  cursor: pointer;
+  color: #1f2329;
+  background: #fff;
+  user-select: none;
+}
+.edit-targets-grid thead th,
+.edit-targets-grid tbody th {
+  background: #f5f7fa;
+  color: #707481;
+  font-weight: 600;
+}
+.edit-targets-grid tbody td:hover,
+.edit-targets-grid thead th:hover,
+.edit-targets-grid tbody th:hover { background: #eef3fe; }
+.edit-targets-grid tbody td.picked,
+.edit-targets-grid thead th.picked,
+.edit-targets-grid tbody th.picked {
+  background: #d6f0e0;
+  color: #146c2e;
+  font-weight: 600;
+}
+.edit-targets-grid tbody td.row-col-hit {
+  background: linear-gradient(135deg, #eef9f1 25%, transparent 25%, transparent 50%, #eef9f1 50%, #eef9f1 75%, transparent 75%);
+  background-size: 8px 8px;
+}
+.edit-targets-grid .corner { background: #ebeef2 !important; cursor: default; }
+.edit-targets-dialog footer {
+  padding: 10px 18px;
+  border-top: 1px solid #eef0f3;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: #fafbfc;
+}
+.edit-targets-dialog footer .count-hint {
+  flex: 1 1 auto;
+  font-size: 12px;
+  color: #707481;
+}
+.dlg-btn {
+  border: 1px solid #d8dbde;
+  background: #fff;
+  color: #1f2329;
+  padding: 6px 14px;
+  border-radius: 5px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.dlg-btn:hover { background: #f5f7fa; }
+.dlg-btn.primary { background: #21a366; border-color: #21a366; color: #fff; }
+.dlg-btn.primary:hover { background: #1a8c56; }
+.dlg-btn.ghost { background: transparent; }

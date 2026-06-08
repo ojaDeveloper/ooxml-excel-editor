@@ -20,9 +20,22 @@ new Vue({
       highlightReadOnly: false,
       cellImageFit: 'contain' as 'contain' | 'fill' | 'cover',
       lastEvent: '',
-      // 跟 Vue 3 demo (src/App.vue:513) 同款完整工具栏配置
       toolbarItems: ['find', 'filter', 'clear-filter', 'separator', 'copy', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export'],
+      // 设置可编辑 dialog (跟 Vue 3 demo src/App.vue 同款 EditableTargets 白名单)
+      editableTargetsApplied: undefined as any,
+      editTargetsDialogOpen: false,
+      editTargetsCells: {} as Record<string, true>,  // "r:c" key set (用 obj 模拟 Vue 2 reactivity)
+      editTargetsRows: {} as Record<number, true>,
+      editTargetsCols: {} as Record<number, true>,
     }
+  },
+  computed: {
+    editableTargetsCount(): number {
+      return Object.keys(this.editTargetsCells).length + Object.keys(this.editTargetsRows).length + Object.keys(this.editTargetsCols).length
+    },
+    appliedCount(): number {
+      return (this.editableTargetsApplied as any[] | undefined)?.length ?? 0
+    },
   },
   methods: {
     onFileInput(e: Event) {
@@ -94,6 +107,63 @@ new Vue({
     insRow() { const s = this.v()?.getSelection(); if (s) this.v()?.insertRows(s.top, 1) },
     delRow() { const s = this.v()?.getSelection(); if (s) this.v()?.deleteRows(s.top, s.bottom - s.top + 1) },
     toggleHighlightReadOnly() { this.highlightReadOnly = !this.highlightReadOnly },
+    // ---- 设置可编辑 dialog (白名单 API) ----
+    openEditTargetsDialog() {
+      this.editTargetsCells = {}
+      this.editTargetsRows = {}
+      this.editTargetsCols = {}
+      const applied = this.editableTargetsApplied as any[] | undefined
+      for (const t of applied ?? []) {
+        if ('top' in t) continue
+        if ('row' in t && 'col' in t && typeof t.col === 'number') this.$set(this.editTargetsCells, `${t.row}:${t.col}`, true)
+        else if ('row' in t && typeof t.row === 'number') this.$set(this.editTargetsRows, t.row, true)
+        else if ('col' in t && typeof t.col === 'number') this.$set(this.editTargetsCols, t.col, true)
+      }
+      this.editTargetsDialogOpen = true
+    },
+    toggleEditTargetCell(r: number, c: number) {
+      const k = `${r}:${c}`
+      if (this.editTargetsCells[k]) this.$delete(this.editTargetsCells, k)
+      else this.$set(this.editTargetsCells, k, true)
+    },
+    toggleEditTargetRow(r: number) {
+      if (this.editTargetsRows[r]) this.$delete(this.editTargetsRows, r)
+      else this.$set(this.editTargetsRows, r, true)
+    },
+    toggleEditTargetCol(c: number) {
+      if (this.editTargetsCols[c]) this.$delete(this.editTargetsCols, c)
+      else this.$set(this.editTargetsCols, c, true)
+    },
+    isCellInDraft(r: number, c: number): boolean {
+      return !!this.editTargetsCells[`${r}:${c}`] || !!this.editTargetsRows[r] || !!this.editTargetsCols[c]
+    },
+    previewCellText(r: number, c: number): string {
+      const v = (this.v() as any)?.getCellText(r, c) ?? ''
+      return v.length > 6 ? v.slice(0, 6) + '…' : v
+    },
+    colLetter(c: number): string {
+      let s = ''; let n = c
+      while (true) { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1; if (n < 0) break }
+      return s
+    },
+    applyEditTargets() {
+      const arr: any[] = []
+      for (const r of Object.keys(this.editTargetsRows)) arr.push({ row: Number(r) })
+      for (const c of Object.keys(this.editTargetsCols)) arr.push({ col: Number(c) })
+      for (const k of Object.keys(this.editTargetsCells)) {
+        const [r, c] = k.split(':').map(Number)
+        if (this.editTargetsRows[r] || this.editTargetsCols[c]) continue
+        arr.push({ row: r, col: c })
+      }
+      this.editableTargetsApplied = arr
+      this.editTargetsDialogOpen = false
+      this.lastEvent = `[白名单] ${arr.length} 项 target 已应用; 其它格只读`
+    },
+    clearEditTargets() {
+      this.editableTargetsApplied = undefined
+      this.editTargetsDialogOpen = false
+      this.lastEvent = '[白名单] 已关闭, 恢复默认 (全可编辑)'
+    },
     onRendered() { this.lastEvent = '✓ 渲染完成' },
     onError(msg: string) { this.lastEvent = '⚠ 错误: ' + msg },
     onCellClick(p: { row: number; col: number; text: string }) { this.lastEvent = `点击 R${p.row + 1}C${p.col + 1}: ${p.text}` },
@@ -127,6 +197,7 @@ new Vue({
         </div>
         <div class="grow"></div>
         <template v-if="(src || jsonItems) && editMode">
+          <button class="sample-btn" @click="openEditTargetsDialog" title="白名单模式: 点选要可编辑的格 / 行 / 列, 应用后只这些可编辑">{{ appliedCount ? '可编辑 (' + appliedCount + ')' : '设置可编辑' }}</button>
           <button class="sample-btn" @click="toggleHighlightReadOnly" :title="highlightReadOnly ? '关闭只读高亮' : '把只读格套浅灰底'">{{ highlightReadOnly ? '✓ 高亮只读' : '高亮只读' }}</button>
           <button class="sample-btn" @click="boldSel" title="给选区加粗">B 加粗选区</button>
           <button class="sample-btn" @click="mergeSel" title="合并选区">合并</button>
@@ -164,6 +235,7 @@ new Vue({
           :cell-image-fit="cellImageFit"
           :editable="editMode"
           :recalc="editMode"
+          :editable-targets="editableTargetsApplied"
           :read-only-cell-style="highlightReadOnly"
           :toolbar="toolbarItems"
           @rendered="onRendered"
@@ -176,6 +248,49 @@ new Vue({
         />
         <div v-if="lastEvent" style="position:absolute;left:12px;bottom:12px;background:rgba(0,0,0,.78);color:#fff;font-size:12px;padding:5px 10px;border-radius:5px;pointer-events:none;z-index:9">{{ lastEvent }}</div>
       </main>
+      <div v-if="editTargetsDialogOpen" class="edit-targets-overlay" @click.self="editTargetsDialogOpen = false">
+        <div class="edit-targets-dialog">
+          <header>
+            <h3>设置可编辑单元格 (白名单)</h3>
+            <p class="hint">
+              点击单元格 = 该格可编辑;点击列标题 (A/B/C…) = 整列可编辑;点击行号 = 整行可编辑.
+              应用后,只有勾选的位置可编辑,其它全部只读. 关闭白名单 = 恢复默认 (整表可编辑).
+            </p>
+          </header>
+          <div class="edit-targets-grid">
+            <table>
+              <thead>
+                <tr>
+                  <th class="corner">#</th>
+                  <th v-for="c in 8" :key="'h' + c"
+                      :class="{ picked: !!editTargetsCols[c - 1] }"
+                      @click="toggleEditTargetCol(c - 1)"
+                      :title="'整列 ' + colLetter(c - 1) + ' 可编辑'">{{ colLetter(c - 1) }}</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="r in 12" :key="'r' + r">
+                  <th :class="{ picked: !!editTargetsRows[r - 1] }"
+                      @click="toggleEditTargetRow(r - 1)"
+                      :title="'整行 ' + r + ' 可编辑'">{{ r }}</th>
+                  <td v-for="c in 8" :key="'c' + r + ',' + c"
+                      :class="{ picked: isCellInDraft(r - 1, c - 1), 'row-col-hit': !!editTargetsRows[r - 1] || !!editTargetsCols[c - 1] }"
+                      @click="toggleEditTargetCell(r - 1, c - 1)"
+                      :title="'R' + r + 'C' + c">{{ previewCellText(r - 1, c - 1) || '·' }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <footer>
+            <span class="count-hint">
+              已选: {{ Object.keys(editTargetsCells).length }} 单格 / {{ Object.keys(editTargetsRows).length }} 整行 / {{ Object.keys(editTargetsCols).length }} 整列
+            </span>
+            <button class="dlg-btn ghost" @click="editTargetsDialogOpen = false">取消</button>
+            <button class="dlg-btn ghost" @click="clearEditTargets" title="移除白名单, 恢复默认 (全可编辑)">关闭白名单</button>
+            <button class="dlg-btn primary" @click="applyEditTargets">应用</button>
+          </footer>
+        </div>
+      </div>
     </div>
   `,
 })

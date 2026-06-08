@@ -80,7 +80,63 @@ function Demo() {
   const [editMode, setEditMode] = useState(false) // E0: 编辑模式闸门
   const [fit, setFit] = useState<'fill' | 'contain' | 'cover'>('contain') // WPS 内嵌图贴合方式(默认 contain 同 WPS)
   const [highlightReadOnly, setHighlightReadOnly] = useState(false)
+  const [editableTargetsApplied, setEditableTargetsApplied] = useState<Array<{ row: number } | { col: number } | { row: number; col: number }> | undefined>(undefined)
+  const [editTargetsDialogOpen, setEditTargetsDialogOpen] = useState(false)
+  const [editTargetsCells, setEditTargetsCells] = useState<Set<string>>(new Set())
+  const [editTargetsRows, setEditTargetsRows] = useState<Set<number>>(new Set())
+  const [editTargetsCols, setEditTargetsCols] = useState<Set<number>>(new Set())
   const [, bumpSel] = useReducer((x: number) => x + 1, 0) // 选区/内容变 → 重渲(颜色回显)
+
+  function openEditTargetsDialog() {
+    const cells = new Set<string>()
+    const rows = new Set<number>()
+    const cols = new Set<number>()
+    for (const t of editableTargetsApplied ?? []) {
+      const tr = (t as { row?: number }).row
+      const tc = (t as { col?: number }).col
+      if (typeof tr === 'number' && typeof tc === 'number') cells.add(`${tr}:${tc}`)
+      else if (typeof tr === 'number') rows.add(tr)
+      else if (typeof tc === 'number') cols.add(tc)
+    }
+    setEditTargetsCells(cells); setEditTargetsRows(rows); setEditTargetsCols(cols)
+    setEditTargetsDialogOpen(true)
+  }
+  function toggleEditTargetCell(r: number, c: number) {
+    const k = `${r}:${c}`
+    setEditTargetsCells((prev) => { const next = new Set(prev); if (next.has(k)) next.delete(k); else next.add(k); return next })
+  }
+  function toggleEditTargetRow(r: number) {
+    setEditTargetsRows((prev) => { const next = new Set(prev); if (next.has(r)) next.delete(r); else next.add(r); return next })
+  }
+  function toggleEditTargetCol(c: number) {
+    setEditTargetsCols((prev) => { const next = new Set(prev); if (next.has(c)) next.delete(c); else next.add(c); return next })
+  }
+  const isCellInDraft = (r: number, c: number) => editTargetsCells.has(`${r}:${c}`) || editTargetsRows.has(r) || editTargetsCols.has(c)
+  function applyEditTargets() {
+    const arr: Array<{ row: number } | { col: number } | { row: number; col: number }> = []
+    for (const r of editTargetsRows) arr.push({ row: r })
+    for (const c of editTargetsCols) arr.push({ col: c })
+    for (const k of editTargetsCells) {
+      const [r, c] = k.split(':').map(Number)
+      if (editTargetsRows.has(r) || editTargetsCols.has(c)) continue
+      arr.push({ row: r, col: c })
+    }
+    setEditableTargetsApplied(arr)
+    setEditTargetsDialogOpen(false)
+  }
+  function clearEditTargets() {
+    setEditableTargetsApplied(undefined)
+    setEditTargetsDialogOpen(false)
+  }
+  const colLetter = (c: number) => {
+    let s = ''; let n = c
+    while (true) { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1; if (n < 0) break }
+    return s
+  }
+  const previewCellText = (r: number, c: number) => {
+    const v = ref.current?.getCellText(r, c) ?? ''
+    return v.length > 6 ? v.slice(0, 6) + '…' : v
+  }
   // 稳定引用:demo 因 bumpSel 频繁重渲,这些 prop 若每次新建数组会让壳的 effect 反复重跑(清掉选区)
   const readOnlyRanges = useMemo(() => [{ top: 1, left: 0, bottom: 1, right: 4 }], [])
   const plugins = useMemo(() => [demoPlugin], [])
@@ -135,6 +191,7 @@ function Demo() {
   if (src) {
     if (editMode) {
       items.push(
+        { id: 'edit-targets', kind: 'btn', label: editableTargetsApplied ? `可编辑 (${editableTargetsApplied.length})` : '设置可编辑', title: '白名单模式: 点选要可编辑的格 / 行 / 列, 应用后只这些可编辑', onClick: openEditTargetsDialog },
         { id: 'highlight-readonly', kind: 'btn', label: highlightReadOnly ? '✓ 高亮只读' : '高亮只读', title: '把只读格套浅灰底', onClick: () => setHighlightReadOnly(!highlightReadOnly) },
         { id: 'bold', kind: 'btn', label: 'B 加粗选区', title: '给选区加粗(E5)', onClick: () => { const s = ref.current?.getSelection(); if (s) ref.current?.setStyle(s, { font: { bold: true } }) } },
         { id: 'merge', kind: 'btn', label: '合并', title: '合并选区(G1)', onClick: () => { const s = ref.current?.getSelection(); if (s) ref.current?.mergeCells(s) } },
@@ -276,6 +333,7 @@ function Demo() {
           cellImageFit={fit}
           recalc={editMode}
           readOnlyRanges={readOnlyRanges}
+          editableTargets={editableTargetsApplied}
           readOnlyCellStyle={highlightReadOnly}
           editor={demoSelectEditor}
           toolbar={['find', 'filter', 'clear-filter', 'separator', 'copy', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export']}
@@ -302,6 +360,61 @@ function Demo() {
           }}
         />
       </div>
+      {editTargetsDialogOpen && (
+        <div className="edit-targets-overlay" onClick={(e) => { if (e.target === e.currentTarget) setEditTargetsDialogOpen(false) }}>
+          <div className="edit-targets-dialog">
+            <header>
+              <h3>设置可编辑单元格 (白名单)</h3>
+              <p className="hint">
+                点击单元格 = 该格可编辑;点击列标题 (A/B/C…) = 整列可编辑;点击行号 = 整行可编辑.
+                应用后,只有勾选的位置可编辑,其它全部只读. 关闭白名单 = 恢复默认 (整表可编辑).
+              </p>
+            </header>
+            <div className="edit-targets-grid">
+              <table>
+                <thead>
+                  <tr>
+                    <th className="corner">#</th>
+                    {Array.from({ length: 8 }).map((_, c) => (
+                      <th key={c}
+                          className={editTargetsCols.has(c) ? 'picked' : ''}
+                          onClick={() => toggleEditTargetCol(c)}
+                          title={`整列 ${colLetter(c)} 可编辑`}>{colLetter(c)}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {Array.from({ length: 12 }).map((_, r) => (
+                    <tr key={r}>
+                      <th className={editTargetsRows.has(r) ? 'picked' : ''}
+                          onClick={() => toggleEditTargetRow(r)}
+                          title={`整行 ${r + 1} 可编辑`}>{r + 1}</th>
+                      {Array.from({ length: 8 }).map((_, c) => {
+                        const cls: string[] = []
+                        if (isCellInDraft(r, c)) cls.push('picked')
+                        if (editTargetsRows.has(r) || editTargetsCols.has(c)) cls.push('row-col-hit')
+                        return (
+                          <td key={c} className={cls.join(' ')}
+                              onClick={() => toggleEditTargetCell(r, c)}
+                              title={`R${r + 1}C${c + 1}`}>{previewCellText(r, c) || '·'}</td>
+                        )
+                      })}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <footer>
+              <span className="count-hint">
+                已选: {editTargetsCells.size} 单格 / {editTargetsRows.size} 整行 / {editTargetsCols.size} 整列
+              </span>
+              <button className="dlg-btn ghost" onClick={() => setEditTargetsDialogOpen(false)}>取消</button>
+              <button className="dlg-btn ghost" onClick={clearEditTargets} title="移除白名单, 恢复默认 (全可编辑)">关闭白名单</button>
+              <button className="dlg-btn primary" onClick={applyEditTargets}>应用</button>
+            </footer>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
