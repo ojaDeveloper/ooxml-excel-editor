@@ -636,6 +636,7 @@ npm run build:demo     # 构建 demo 站点
 - [CONTRIBUTING.md](./CONTRIBUTING.md) —— 本地跑通、改动流程、不可破坏的硬约束
 - [CHANGELOG.md](./CHANGELOG.md) / [RELEASING.md](./RELEASING.md) —— 变更记录 / 发布清单
 - [docs/编辑权限与只读边界.md](./docs/编辑权限与只读边界.md) —— **EditableTarget 白名单 / DimTarget 尺寸多形态 / readOnlyCellStyle 视觉钩子 / permission-denied 事件** 体系化说明(1.2.0)
+- [docs/Vue2.md](./docs/Vue2.md) —— **Vue 2 兼容子入口**完整文档(1.3.0;`ooxml-excel-editor/vue2` 跟 Vue 3 / React 壳 ~100% 功能对齐)
 
 > **React props/events** 与 Vue 对齐(事件用 camelCase 回调:`onRendered`/`onError`/`onCellClick`/`onSelectionChange`/`onSheetChange`/`onHyperlinkClick`),命令式句柄 `ExcelViewerHandle` 与 Vue 组件 ref 同名方法一致。上面「扩展 API」中的**插件 `definePlugin`** 目前服务 Vue 壳;React 壳已可用全部 props/命令式 API/事件,插件 overlay 跨框架化在路线图中。
 

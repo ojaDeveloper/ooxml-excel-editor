@@ -9,15 +9,20 @@
 
 ## 包 / 入口
 
-单包,三个子入口,**共享同一份 `dist/core.js`**(引擎只打一份):
+单包,四个子入口,**共享同一份 `dist/core.js`**(引擎只打一份)+ Vue 2 独立 build:
 
 | import 路径 | 产物 | 内容 | peer |
 |---|---|---|---|
-| `ooxml-excel-editor` | `dist/index.js` | Vue 3 壳 `<ExcelViewer>` | `vue` + `exceljs` |
+| `ooxml-excel-editor` | `dist/index.js` | Vue 3 壳 `<ExcelViewer>` | `vue@3` + `exceljs` |
 | `ooxml-excel-editor/react` | `dist/react.js` | React 壳 `<ExcelViewer>` | `react`+`react-dom`+`exceljs` |
+| `ooxml-excel-editor/vue2` | `dist/vue2.js` | Vue 2.7 壳 `<ExcelViewer>` (1.3.0) | `vue@2.7` + `exceljs` |
 | `ooxml-excel-editor/core` | `dist/core.js` | 框架无关引擎 | `exceljs` |
 
-`index.js` / `react.js` 都 `import './core.js'`。`vue`/`react`/`react-dom`/`exceljs`/`echarts`/`jspdf` 全 external,不打进产物。生态变大时可平滑拆成真正的 workspace 三包,**无需改源码结构**(壳早已只依赖 `core/` 的公共导出)。
+`index.js` / `react.js` 都 `import './core.js'`(共享 chunk)。`vue@3`/`react`/`react-dom`/`exceljs`/`echarts`/`jspdf` 全 external,不打进产物。
+
+**Vue 2 入口** 用独立 build pass (`vite build --mode lib-vue2`), 因为 vue@3 + vue@2 同时存在导致 `@vitejs/plugin-vue` / `plugin-vue2` 的 `@vue/compiler-sfc` 解析冲突 — 单 entry 隔离才能跑通。代价: `vue2.js` 396 KB 含内嵌 core, 不像主入口那样共享 `chunks/`。架构上仍跟其他壳同构 — `ViewerController + hooks` 模式, Vue 2.7 内置 Composition API + render function (`.ts`, 不走 SFC)。详见 [docs/Vue2.md](./docs/Vue2.md).
+
+生态变大时可平滑拆成真正的 workspace 三包,**无需改源码结构**(壳早已只依赖 `core/` 的公共导出)。
 
 ## core 分层(`src/core/`)
 

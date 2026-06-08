@@ -2,26 +2,51 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [1.3.0-alpha.0] - 2026-06-08 (开发中 / 预发版)
+## [1.3.0-alpha.1] - 2026-06-08 (开发中 / 预发版)
 
-**Vue 2 兼容子入口 MVP** — 老 Vue 2 项目想用本库. 架构上零障碍 (core 早已 framework-agnostic),
-新加 `ooxml-excel-editor/vue2` 子入口, 复用同一份 `dist/core.js`. 跟 React 壳同套路.
+**Vue 2 兼容子入口 — 一口气完整移植** — 跟 Vue 3 / React 壳 ~100% 功能对齐.
 
-### 新增
-- **★ Vue 2 壳 (MVP)** — `import ExcelViewer from 'ooxml-excel-editor/vue2'`. 加载 + 渲染 + 基础事件 (rendered / error / cell-click / cell-dblclick / selection-change / hyperlink-click / cell-change) + 完整命令式 API (load / getWorkbook / setSelection / rectOf / downloadXlsx / downloadPdf / downloadImage / exportCsv / undo / redo / editCell / getCellValue / getCellText 等). **MVP 不带**内置工具栏 / 公式栏 / 查找 / 筛选 / 标签 / 导出对话框 / 右键菜单 — 后续 1.3.0 正式版逐步补 (跟 Vue 3 / React 壳同构).
-- **架构**: `src/vue2/ExcelViewer.ts` 用 Vue 2.7+ 内置 Composition API + render function (`h`) — 不依赖 SFC 编译器 (避开 vue@3/vue@2 SFC 双编译器冲突), 跟 React 壳 (.tsx + hook) 写法接近.
-- **构建**: `npm run build` 现在串两次 — 主 build (Vue 3 + React + core) + `vite build --mode lib-vue2` (产 `dist/vue2.js`). `package.json exports` 加 `./vue2` 子路径. `peerDependencies.vue` 升级为 `^2.7.0 || ^3.4.0` (两版兼容).
-- **dev**: vite dev server 同时支持 vue3-demo (主) 和 `vue2-demo/index.html` (Vue 2 demo, 用 `vue2` alias 加载 vue@2.7).
-- **devDependency** 加 `vue2: npm:vue@^2.7.16` (alias) + `@vitejs/plugin-vue2` (虽然 MVP 走 render function 没用到, 留着备用 — 未来子组件可能用 SFC).
+### 完整移植内容(alpha.1, 在 alpha.0 MVP 基础上 + 全部 features)
 
-### 已知限制 (MVP → 1.3.0 待办)
-- `dist/vue2.js` 374 KB (含内嵌 core), 不像 `index.js` / `react.js` 那样共享 `dist/core.js` chunk. 后续优化.
-- 暂无内置子组件 (toolbar / find / filter / sheet-tabs / formula-bar / export-dialog / progress-overlay / 右键菜单).
-- 暂无 Vue 2 e2e 覆盖 (需要 Playwright 多入口配置).
-- `dist/vue2.d.ts` 类型声明文件未生成 (vue-tsc 不认 Vue 2 SFC; 但本 MVP 是 .ts 不是 .vue, 后续可加).
+**主 shell** (`src/vue2/ExcelViewer.ts`, ~600 行):
+- **全部 28 项 props** 跟 Vue 3 壳对齐: src / workbook / jsonOptions / templateFile / templateName /
+  fileName / theme / transformModel / cellStyle / cellImageFit / imageLightbox / openLinks / plugins /
+  toolbar / editable / cellReadOnly / readOnlyRanges / editableTargets / strictDimensions / readOnlyCellStyle /
+  editor / recalc / formulaEngine / contextMenu
+- **全部 15+ events**: rendered / error / progress / cell-click / cell-dblclick / selection-change /
+  sheet-change / hyperlink-click / cell-change / edit-start / edit-commit / dim-change / dirty-change /
+  image-change / struct-change / permission-denied / before-context-menu / context-menu
+- **完整命令式 API** (80+ 方法) 跟 Vue 3 viewerApi / React ExcelViewerHandle 对齐
+- **插件系统**: events / cellStyle / theme / overlay / toolbar / setup / contextMenu / editor 钩子全套
+- **内置 UI**: 顶部工具栏(文件名+模板名+表数+缩放+导出 PNG/PDF/XLSX 按钮) /
+  Action 工具栏(查找+筛选+清除筛选+复制+冻结+插件 toolbar items) / 公式栏(textarea+auto-resize,
+  跟 1.2.1 WPS 撑高一致) / sheet 标签(多表切换) / 查找条(Ctrl+F)
+- **样式 overlay 钩子**: PluginOverlayHost 跟 Vue 3 共用
 
-发版策略: 当前 `1.3.0-alpha.0` 是**预发版**, npm publish 时用 `--tag alpha` (`npm publish --tag alpha`),
-不影响 `latest` (仍是 1.2.1). 子组件 + e2e + docs 完成后发 `1.3.0` 正式版.
+**CSS** (`src/vue2/excel-viewer.css`, ~200 行):
+- 跟 Vue 3 `style.css` 互补: 用 `.ov-*` 前缀避免选择器冲突
+- 完整布局: 顶栏 / Action 工具栏 / 公式栏 / 渲染区 / 编辑器叠加层 / 查找条 / sheet 标签
+
+**docs**:
+- 新 [docs/Vue2.md](docs/Vue2.md) — 完整使用文档(架构 / props / events / API / 限制 / 升级路线)
+- README 顶部加入 Vue 2 子入口章节链接
+
+### 已知限制(1.3.0 正式版 待办)
+- `dist/vue2.js` 396 KB(含内嵌 core)— Vue 2 build pass 独立, 不共享 `chunks/` chunk。后续探索 rollup 多入口共享 chunk(目前 plugin-vue / plugin-vue2 共存有 SFC compiler 冲突, 单 entry 隔离)
+- 暂无 `dist/vue2.d.ts` 类型声明(vue-tsc 不认 Vue 2 SFC; 本入口是 .ts 后续可补)
+- 暂无 Vue 2 e2e 覆盖(Playwright 多入口配置待补)
+- slot 还没暴露 (header / toolbar / statusbar / overlay / export-progress)— Vue 2 作用域插槽语法跟 Vue 3 不同, 后续补
+- 没内置 ExportDialog UI(用方调命令式 `downloadXlsx()` 等即可, 或自渲对话框)
+
+### 发版
+- 当前 `1.3.0-alpha.1` 预发版, npm publish 用 `--tag alpha` 不影响 latest(仍 1.2.1)
+- 1.3.0 正式版前补: dist/vue2.d.ts / 共享 chunk / e2e / 插槽 / 文档完善
+
+---
+
+## [1.3.0-alpha.0] - 2026-06-08 (Vue 2 MVP, 已被 alpha.1 替代)
+
+最小 Vue 2 子入口, MVP 范围(加载渲染 + 基础事件 + 命令式 API). 详见 alpha.1.
 
 ---
 

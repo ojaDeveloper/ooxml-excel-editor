@@ -1,17 +1,159 @@
 /**
  * Vue 2 壳 CSS — 跟 Vue 3 `.excel-viewer / .render-area / .ov / .scroller / .editor-slot`
- * 同构同名, 但前缀加 `ov-` 避免跟用户应用其他选择器冲突.
+ * 同构, 前缀 `ov-` 避免跟用户应用其他选择器冲突.
  *
- * 必须导入: `import 'ooxml-excel-editor/style.css'` 拿全套样式 (跟 Vue 3 共享主 style.css);
+ * 用户那边: `import 'ooxml-excel-editor/style.css'` 拿渲染层共享样式 +
  *           `import 'ooxml-excel-editor/vue2.css'` 拿这个 Vue 2 专属布局.
  */
+
+/* ============ 主容器 ============ */
 .ooxml-excel-viewer {
   display: flex;
   flex-direction: column;
   height: 100%;
   position: relative;
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --green: #21a366;
+  background: #fff;
 }
+
+/* ============ 顶部工具栏 ============ */
+.ooxml-excel-viewer .ov-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 12px;
+  background: #f5f7fa;
+  border-bottom: 1px solid #e2e4e7;
+  font-size: 13px;
+  flex: 0 0 auto;
+}
+.ooxml-excel-viewer .ov-toolbar .file {
+  font-weight: 600;
+  color: #1f2329;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 60%;
+}
+.ooxml-excel-viewer .ov-toolbar .tpl,
+.ooxml-excel-viewer .ov-toolbar .sheets {
+  font-weight: 400;
+  color: #707481;
+  font-size: 12px;
+}
+.ooxml-excel-viewer .ov-toolbar .spacer {
+  flex: 1 1 auto;
+}
+.ooxml-excel-viewer .ov-toolbar .btn,
+.ooxml-excel-viewer .ov-toolbar select {
+  background: #fff;
+  border: 1px solid #d8dbde;
+  color: #1f2329;
+  padding: 4px 10px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ooxml-excel-viewer .ov-toolbar .btn:hover {
+  background: #eef3fe;
+}
+
+/* ============ Action 工具栏 ============ */
+.ooxml-excel-viewer .ov-action-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 12px;
+  background: #fff;
+  border-bottom: 1px solid #eef0f3;
+  flex: 0 0 auto;
+}
+.ooxml-excel-viewer .ov-action-toolbar .tool {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #1f2329;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  cursor: pointer;
+}
+.ooxml-excel-viewer .ov-action-toolbar .tool:hover:not(:disabled) {
+  background: #eef3fe;
+}
+.ooxml-excel-viewer .ov-action-toolbar .tool.active {
+  background: #d6f0e0;
+  color: #146c2e;
+  font-weight: 600;
+}
+.ooxml-excel-viewer .ov-action-toolbar .tool:disabled {
+  color: #bbb;
+  cursor: not-allowed;
+}
+
+/* ============ 公式栏 (Phase 1.2.1 自动撑高) ============ */
+.ooxml-excel-viewer .ov-formula-bar {
+  display: flex;
+  align-items: stretch;
+  min-height: 28px;
+  flex: 0 0 auto;
+  border-bottom: 1px solid #e2e4e7;
+  background: #fff;
+  font-size: 13px;
+}
+.ooxml-excel-viewer .ov-formula-bar .addr {
+  width: 72px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid #e2e4e7;
+  color: #444;
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+.ooxml-excel-viewer .ov-formula-bar .fx {
+  width: 34px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #999;
+  font-style: italic;
+  flex: 0 0 auto;
+}
+.ooxml-excel-viewer .ov-formula-bar .content {
+  flex: 1;
+  padding: 6px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #222;
+  font-family: Consolas, 'Courier New', monospace;
+  display: flex;
+  align-items: center;
+  line-height: 1.4;
+}
+.ooxml-excel-viewer .ov-formula-bar textarea.content {
+  white-space: pre-wrap;
+  overflow: auto;
+  text-overflow: clip;
+  resize: none;
+  border: none;
+  outline: none;
+  background: transparent;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 13px;
+  display: block;
+  min-height: 22px;
+  max-height: 108px;
+  line-height: 1.4;
+}
+.ooxml-excel-viewer .ov-formula-bar .content-input:focus {
+  background: #f5fbf7;
+  box-shadow: inset 0 0 0 1px #21a366;
+}
+
+/* ============ 渲染区 + canvas + 叠加层 ============ */
 .ooxml-excel-viewer .ov-render-area {
   position: relative;
   flex: 1 1 auto;
@@ -30,10 +172,7 @@
   overflow: hidden;
 }
 .ooxml-excel-viewer .ov-plugin {
-  position: absolute;
-  inset: 0;
   z-index: 5;
-  pointer-events: none;
 }
 .ooxml-excel-viewer .ov-editor-slot {
   position: absolute;
@@ -55,4 +194,76 @@
 .ooxml-excel-viewer .ov-spacer {
   position: relative;
   pointer-events: none;
+}
+
+/* ============ 查找条 ============ */
+.ooxml-excel-viewer .ov-findbar {
+  position: absolute;
+  top: 8px;
+  right: 16px;
+  z-index: 10;
+  background: #fff;
+  border: 1px solid #d8dbde;
+  border-radius: 6px;
+  padding: 4px 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+.ooxml-excel-viewer .ov-findbar input {
+  border: none;
+  outline: none;
+  width: 180px;
+  font-size: 13px;
+}
+.ooxml-excel-viewer .ov-findbar .count {
+  color: #707481;
+  font-size: 12px;
+  min-width: 60px;
+  text-align: center;
+}
+.ooxml-excel-viewer .ov-findbar button {
+  background: transparent;
+  border: 1px solid transparent;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 13px;
+}
+.ooxml-excel-viewer .ov-findbar button:hover {
+  background: #eef3fe;
+}
+
+/* ============ Sheet 标签 (多表切换) ============ */
+.ooxml-excel-viewer .ov-sheet-tabs {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+  padding: 4px 8px;
+  background: #f5f7fa;
+  border-top: 1px solid #e2e4e7;
+  flex: 0 0 auto;
+  overflow-x: auto;
+}
+.ooxml-excel-viewer .ov-sheet-tabs .tab {
+  background: transparent;
+  border: 1px solid transparent;
+  color: #707481;
+  padding: 4px 12px;
+  border-radius: 4px 4px 0 0;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.ooxml-excel-viewer .ov-sheet-tabs .tab:hover {
+  background: #eef3fe;
+}
+.ooxml-excel-viewer .ov-sheet-tabs .tab.active {
+  background: #fff;
+  color: #21a366;
+  font-weight: 600;
+  border-color: #e2e4e7;
+  border-bottom-color: #fff;
 }
