@@ -61,13 +61,12 @@ export default defineConfig(({ mode, command }) => {
               },
             ]
           : []),
-        // Vue 2 构建: 把 `vue2` (npm alias 到 vue@2.7) 真实路径映射给 Vue 2 SFC 用的 vue import
-        // 同时 plugin-vue2 内部用的 vue 也走这里
-        ...(isVue2Build
-          ? [
-              { find: /^vue$/, replacement: fileURLToPath(new URL('./node_modules/vue2/dist/vue.runtime.esm.js', import.meta.url)) },
-            ]
-          : []),
+        // 'vue2' alias 显式指到 compiler-included build (vue.esm.js) — dev / build 都生效.
+        // 为什么不用默认 module 入口 (vue.runtime.esm.js): demo 里 new Vue({ template: '...' })
+        // 需要运行时模板编译器. lib 代码用 h() render function 不用编译器, 多带的编译器会被
+        // tree-shake 掉. lib build 时 rollup output.paths { vue2: 'vue' } 把 'vue2' 替换成
+        // 'vue', 用户提供自己的 vue@2 peer (用户那边 runtime-only 还是 with-compiler 由用户决定).
+        { find: /^vue2$/, replacement: fileURLToPath(new URL('./node_modules/vue2/dist/vue.esm.js', import.meta.url)) },
         { find: '@', replacement: fileURLToPath(new URL('./src', import.meta.url)) },
       ],
     },
