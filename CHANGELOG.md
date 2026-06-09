@@ -2,13 +2,15 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
-## [1.3.2] - 2026-06-08
+## [1.3.3] - 2026-06-09
 
-**修 webpack 4 / vue-cli 4 / CJS 环境兼容** — 用户反馈 Vue 2.6.12 + @vue/cli 4 (webpack 4) 项目消费 1.3.1 时报多个错. 此版本系统修复 4 个老打包器兼容问题, **任何环境(Vite / webpack 5 / webpack 4 / Snowpack / Parcel)都能消费**.
+**Vue 2.6 真实兼容修复合集** — 1.3.2 上线后消费方 Vue 2.6.12 + vue-cli 4 (webpack 4) 项目验证暴露两个 Vue 2.6 特有 bug (函数 ref 不支持 / `ctx.expose` shim 语义不同), 1.3.3 一并修掉. **现在 Vue 2.6 / 2.7 / Vue 3 三个版本都真正可用**.
 
-### 修复 (1.3.2 二次/三次迭代, 同版本号未发布前补丁)
+> 1.3.2 已发布到 npm, 但 Vue 2.6 仍不可用 — 1.3.3 是必须升的真兼容补丁.
 
-#### Vue 2.6 上 `$refs.viewer.*` 命令式 API 全拿不到 (三次迭代)
+### 修复
+
+#### Vue 2.6 上 `$refs.viewer.*` 命令式 API 全拿不到
 
 **根因**: 之前用 `expose?.(viewerApi)` 暴露 60+ 命令式方法 (load / getSelection / setStyle / downloadXlsx / beginEdit / commitActiveCellValue / undo / ...). Vue 3 / Vue 2.7 原生 expose 走标准路径 OK, **但 Vue 2.6 + @vue/composition-api 1.7.x shim 下 `ctx.expose` 的语义是"暴露 setup 返回值的指定 key"** —— 本组件 setup 返回的是 render function (没有可暴露的 key), shim 下 expose() 是 no-op. 消费方 `this.$refs.viewer.downloadXlsx(...)` 全部 `undefined is not a function`.
 
