@@ -69,8 +69,8 @@ export type PluginEvent =
  * 一次操作只 emit 一次 (避免 N 张图 spam N 次).
  */
 export interface PermissionDeniedPayload {
-  /** 触发的操作类型 */
-  reason: 'paste' | 'merge' | 'unmerge' | 'image-place' | 'image-convert' | 'dimension' | 'other'
+  /** 触发的操作类型('copy' = 复制图片超字节预算,已降级为无图复制,非真正"拒绝") */
+  reason: 'paste' | 'merge' | 'unmerge' | 'image-place' | 'image-convert' | 'dimension' | 'copy' | 'other'
   /** 被拒的目标格 (粘贴 / 合并 / 图片转换 等场景下的具体位置;'dimension' 时可空) */
   cells: Array<{ row: number; col: number }>
   /** 'dimension' 场景下被拒的列 / 行 index 列表 */

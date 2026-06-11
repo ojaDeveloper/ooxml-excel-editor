@@ -2,6 +2,27 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.5.0] - 2026-06-11
+
+### 新增 — 应用内复制粘贴 1:1 保真(走剪贴板嵌入快照)
+
+**问题**:复制粘贴走系统剪贴板的 HTML/TSV 交换(为了能贴进 Excel/WPS),而复制端只 emit `<td style=CSS>格式化文本`,导致:① 合并单元格被拍平;② 图片(DISPIMG / 浮动图)整个丢失;③ 数字按格式化文本复制(`¥237` → 文本"¥237",丢原始值);④ 边框/数字格式/行高列宽不带。
+
+**方案(全走剪贴板,跨实例 1:1)**:复制时把**完整模型快照**序列化(base64 UTF-8 JSON)嵌进剪贴板 HTML 的 `data-ooxml-clip` 属性;粘贴时 `pasteRichHtml` 优先识别该快照走 1:1 还原,否则回退原有外部 HTML 近似解析。因为快照随剪贴板走、不依赖内存,**Vue3 / Vue2 / React 三壳之间、跨标签页互相复制结果都一致**。外部应用(Excel/WPS/Word)忽略该属性,只读可见 `<table>`(同时增强:补 `colspan/rowspan` + `<img data:>`,所以贴进 Excel 也能带上合并和图片)。
+
+- 新增 [src/core/edit/clipboard-snapshot.ts](src/core/edit/clipboard-snapshot.ts):`ClipSnapshot` 序列化/反序列化(每格 原始值/类型/公式/超链/批注/富文本/dispImgId + **完整 CellStyle**;合并;浮动图 base64;DISPIMG 字节;**行高/列宽/手动行高标记**),UTF-8 安全 base64。
+- 新增 `EditController.pasteSnapshot`(覆盖式 1:1 落格:intern 样式到目标表、登记 DISPIMG 字节、平移合并/图片/行高列宽;整体单次撤销 + 前后快照 cell-change + 只读 permission-denied),`mutations.setCellModel`。
+- `copySelection` 增强 HTML(合并 colspan/rowspan + 图片 `<img data:>`)+ 嵌入快照;`pasteRichHtml` 先试快照再回退。
+- 不改三壳(纯 core);`Ctrl+C`/`Ctrl+V`/右键菜单复制粘贴全部受益。
+
+**大图护栏(三项)**:
+- **不双重 base64**:图片字节不再既进快照又进可见 `<img>`,改为只在可见 `<img data-clip-img="key">` 存一份(`key`=DISPIMG `c:id` / 浮动 `f:序号`),快照只引用;粘贴时 `parseSnapshotHtml` 从 `<img>` 回填字节(`reattachImages`)。剪贴板体积从约 3× 原始图字节降到约 1.4×,有效上限翻倍。(`serializeSnapshot(..., { withImageBytes: false })`)
+- **字节预算 + 优雅降级**:复制区图片总字节超 `CLIP_IMAGE_BUDGET_BYTES`(6 MB)→ 自动**降级为"无图 1:1 复制"**(样式/数字/边框/合并/行高列宽仍 1:1,只跳过图片,DISPIMG 格中性化为空格),避免剪贴板超限导致整次复制静默失败。(`withoutImages`)
+- **降级通知**:降级时经现有 `permission-denied` 通道发事件(`reason: 'copy'` + 中文 message:"复制内容含图过多…已按无图复制"),壳/插件可 toast,不再静默。
+- **贴进 WPS/Excel 图片不再巨大**:可见 `<img>` 改为带 `width`/`height` **属性**(按单元格大小:DISPIMG 用所在格列宽×行高,浮动图用其 EMU 尺寸),WPS/Excel 认属性不认 CSS `max-width` —— 之前只给 CSS 导致按原图像素(常几百上千 px)贴入显得巨大。
+
+- 测试:`src/core/edit/__tests__/clipboard-snapshot.test.ts`(6:序列化往返 + `pasteSnapshot` 1:1 + undo + 瘦身回填 1:1 + 降级中性化 + 脏数据回退);`e2e/copy-paste-fidelity.e2e.ts`(真系统剪贴板 Ctrl+C→Ctrl+V,数字仍是数字不退化文本)。
+
 ## [1.4.0] - 2026-06-11
 
 **透视表(Pivot Table)完整闭环** — WPS 式创建入口 → 右侧字段面板 → 编程 API → **导出真实 OOXML 透视表零件**,并支持**活刷新 / 折叠展开 / 多选筛选**。整个功能由 **`pivotTable` 配置开启,默认关闭**(三 demo 已开启)。另含 `scrollToCell` 导航 API 与工具栏 `sort` 内置项。

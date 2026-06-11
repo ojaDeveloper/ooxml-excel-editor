@@ -13,7 +13,7 @@
 import type { CellModel, CellStyle, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, PivotFilterRule, PivotSummary, PivotTableLayout, PivotTableModel, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
 import { setCellValue, setImageRect, cloneImageAnchor } from '../model/mutations'
-import { pxToEmu } from '../layout/units'
+import { pxToEmu, emuToPx } from '../layout/units'
 import { deleteIntersectsMerge } from '../model/structure'
 import { anchorRect } from '../overlay/anchor'
 import type { EditConfig } from '../edit/types'
@@ -30,6 +30,7 @@ import { CellEditorHost } from '../edit/editor-host'
 import { ContextMenuHost, type MenuItem } from '../edit/context-menu'
 import { PivotDialogHost, PivotFieldPanelHost, type PivotFieldOption, type PivotOutputChoice } from './pivot-dialog-host'
 import { parseClipboardHtml } from '../edit/clipboard-html'
+import { serializeSnapshot, encodeSnapshot, parseSnapshotHtml, withoutImages, bytesToB64, CLIP_IMAGE_BUDGET_BYTES } from '../edit/clipboard-snapshot'
 import { LightboxHost } from './lightbox-host'
 import type { CellEditorContext, EditorCommitValue, EditorResolver } from '../edit/editor-context'
 import { defaultCellEditor } from '../edit/default-editor'
@@ -1375,26 +1376,96 @@ export class ViewerController {
   async copySelection(): Promise<void> {
     const r = this.renderer
     const s = this.getSelection()
-    if (!r || !s) return
+    const sheet = this.sheet
+    const wb = this.workbook
+    if (!r || !s || !sheet || !wb) return
     // 防超大选区卡死: 复制范围软上限
     const rowEnd = Math.min(s.bottom, s.top + 4999)
     const colEnd = Math.min(s.right, s.left + 255)
+    const range = { top: s.top, left: s.left, bottom: rowEnd, right: colEnd }
+
+    // 合并区(完全落在复制区内):左上格出 colspan/rowspan,其余被覆盖格不出 <td>
+    const covered = new Set<string>()
+    const spanAt = new Map<string, { rs: number; cs: number }>()
+    for (const m of sheet.merges) {
+      if (m.top < range.top || m.left < range.left || m.bottom > range.bottom || m.right > range.right) continue
+      spanAt.set(cellKey(m.top, m.left), { rs: m.bottom - m.top + 1, cs: m.right - m.left + 1 })
+      for (let rr = m.top; rr <= m.bottom; rr++) for (let cc = m.left; cc <= m.right; cc++) if (rr !== m.top || cc !== m.left) covered.add(cellKey(rr, cc))
+    }
+    // 先轻量统计图片总字节(不编码),判断是否超预算 → 降级为"无图 1:1 复制"
+    let imageBytes = 0
+    for (let row = range.top; row <= range.bottom; row++) {
+      for (let col = range.left; col <= range.right; col++) {
+        const id = sheet.cells.get(cellKey(row, col))?.dispImgId
+        const ci = id ? wb.cellImages?.get(id) : undefined
+        if (ci?.bytes) imageBytes += ci.bytes.length
+      }
+    }
+    for (const im of sheet.images) {
+      if (im.from.row >= range.top && im.from.row <= range.bottom && im.from.col >= range.left && im.from.col <= range.right && im.bytes) imageBytes += im.bytes.length
+    }
+    const dropImages = imageBytes > CLIP_IMAGE_BUDGET_BYTES
+    if (dropImages) {
+      this.hooks.onEditEvent('permission-denied', {
+        reason: 'copy',
+        cells: [],
+        message: `复制内容含图过多(约 ${Math.round(imageBytes / 1024 / 1024)} MB),已按无图复制以避免剪贴板超限`,
+      })
+    }
+
+    // 图片按格归位(降级时跳过)。key 与快照引用对齐:DISPIMG → c:id,浮动 → f:序号(同 serializeSnapshot 顺序)
+    // 带上 w/h(逻辑 px):WPS/Excel 解析剪贴板 HTML 用 <img width/height> 属性,不认 CSS max-width —— 不给就按原图
+    // 像素尺寸贴入(产品图常几百上千 px → 贴进去巨大)。DISPIMG 按所在格大小,浮动图按其 EMU 尺寸。
+    const colPx = (col: number) => Math.round(sheet.columns.get(col)?.width ?? sheet.defaultColWidth)
+    const rowPx = (row: number) => Math.round(sheet.rows.get(row)?.height ?? sheet.defaultRowHeight)
+    const imgAt = new Map<string, Array<{ key: string; url: string; w: number; h: number }>>()
+    if (!dropImages) {
+      const push = (k: string, key: string, url: string, w: number, h: number) => {
+        const a = imgAt.get(k) ?? []
+        a.push({ key, url, w, h })
+        imgAt.set(k, a)
+      }
+      for (let row = range.top; row <= range.bottom; row++) {
+        for (let col = range.left; col <= range.right; col++) {
+          const id = sheet.cells.get(cellKey(row, col))?.dispImgId
+          const ci = id ? wb.cellImages?.get(id) : undefined
+          if (id && ci?.bytes && ci.mime) push(cellKey(row, col), `c:${id}`, `data:${ci.mime};base64,${bytesToB64(ci.bytes)}`, colPx(col), rowPx(row))
+        }
+      }
+      let fi = 0
+      for (const im of sheet.images) {
+        if (im.from.row < range.top || im.from.row > range.bottom || im.from.col < range.left || im.from.col > range.right || !im.bytes || !im.mime) continue
+        const w = im.extWidthEmu ? Math.round(emuToPx(im.extWidthEmu)) : colPx(im.from.col)
+        const h = im.extHeightEmu ? Math.round(emuToPx(im.extHeightEmu)) : rowPx(im.from.row)
+        push(cellKey(im.from.row, im.from.col), `f:${fi}`, `data:${im.mime};base64,${bytesToB64(im.bytes)}`, w, h)
+        fi++
+      }
+    }
+
     const lines: string[] = []
     const htmlRows: string[] = []
-    for (let row = s.top; row <= rowEnd; row++) {
+    for (let row = range.top; row <= range.bottom; row++) {
       const cells: string[] = []
       const htmlCells: string[] = []
-      for (let col = s.left; col <= colEnd; col++) {
+      for (let col = range.left; col <= range.right; col++) {
         const text = r.cellText(row, col)
         cells.push(text)
+        if (covered.has(cellKey(row, col))) continue // 被合并覆盖,不出 <td>(TSV 仍占位保持列对齐)
         const css = r.cellInlineStyle(row, col)
-        htmlCells.push(`<td${css ? ` style="${css}"` : ''}>${escapeHtml(text)}</td>`)
+        const span = spanAt.get(cellKey(row, col))
+        const spanAttr = span ? `${span.rs > 1 ? ` rowspan="${span.rs}"` : ''}${span.cs > 1 ? ` colspan="${span.cs}"` : ''}` : ''
+        const imgHtml = (imgAt.get(cellKey(row, col)) ?? []).map((g) => `<img data-clip-img="${g.key}" width="${g.w}" height="${g.h}" src="${g.url}" style="width:${g.w}px;height:${g.h}px" />`).join('')
+        htmlCells.push(`<td${spanAttr}${css ? ` style="${css}"` : ''}>${escapeHtml(text)}${imgHtml}</td>`)
       }
       lines.push(cells.join('\t'))
       htmlRows.push(`<tr>${htmlCells.join('')}</tr>`)
     }
     const tsv = lines.join('\n')
-    const html = `<table border="1" style="border-collapse:collapse">${htmlRows.join('')}</table>`
+    // 瘦身快照嵌进 data-ooxml-clip:图片字节不进快照(只引用),由可见 <img> 携带 → 避免双重 base64;
+    // 降级时去掉图片。粘贴时本组件读快照 + 回填 <img> 字节做 1:1;外部应用忽略属性,只读可见 table。
+    const snap = serializeSnapshot(sheet, wb, range, { withImageBytes: false })
+    const clip = encodeSnapshot(dropImages ? withoutImages(snap) : snap)
+    const html = `<table data-ooxml-clip="${clip}" border="1" style="border-collapse:collapse">${htmlRows.join('')}</table>`
     try {
       // 优先写 text/plain + text/html(粘到 Word/Excel 保留表格与格式)
       const ClipItem = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem
@@ -1456,11 +1527,14 @@ export class ViewerController {
    */
   pasteRichHtml(html: string, at?: { row: number; col: number }): boolean {
     if (!this.editCfg.editable || !this.sheet) return false
-    const parsed = parseClipboardHtml(html)
-    if (!parsed) return false
     const sel = this.getSelection()
     const start = at ?? this.selActive ?? (sel ? { row: sel.top, col: sel.left } : null)
     if (!start) return false
+    // 本组件自己复制的 → 用嵌在剪贴板里的完整快照做 1:1(跨实例 Vue3/Vue2/React 通用);否则走外部 HTML 近似解析
+    const snap = parseSnapshotHtml(html)
+    if (snap) return this.edit.pasteSnapshot(start, snap)
+    const parsed = parseClipboardHtml(html)
+    if (!parsed) return false
     return this.edit.pasteRich(start, parsed)
   }
 

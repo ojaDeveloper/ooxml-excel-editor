@@ -113,6 +113,12 @@ export function removeImage(sheet: SheetModel, index: number): void {
   sheet.images.splice(index, 1)
 }
 
+/** 整个 CellModel 落格(承载公式/超链/批注/富文本/dispImgId 等 setCellValue 推不出的字段)+ 撑维度。 */
+export function setCellModel(sheet: SheetModel, cell: CellModel): void {
+  sheet.cells.set(cellKey(cell.row, cell.col), cell)
+  growDimension(sheet, cell.row, cell.col)
+}
+
 // ---- WPS 单元格内嵌图(DISPIMG)⇄ 浮动图 互转(第二期) ----
 
 /** 为登记表生成一个未占用的 DISPIMG id(确定性:从计数找空位,不依赖随机) */

@@ -3,13 +3,15 @@
  * 发"前后完整快照"事件、暴露命令式编辑 API + 查询 API。组合进 ViewerController(非继承)。
  * 这是要求 5("一切都有 API/事件")的承重墙:UI/公式/导出都建在它上面。
  */
-import type { CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
+import type { CellModel, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
+import { cellKey } from '../model/types'
 import type { CellValue } from '../model/data-access'
 import { buildCellSnapshot, type CellSnapshot } from '../model/snapshot'
 import { cloneWorkbook, restoreWorkbookInto } from '../model/clone'
-import { cloneImageAnchor, convertFloatToCellImage, convertCellImageToFloat, setCellValue, applyStyleOverride, addImage } from '../model/mutations'
+import { cloneImageAnchor, convertFloatToCellImage, convertCellImageToFloat, setCellValue, setCellModel, applyStyleOverride, addImage, internStyle, restoreDimension } from '../model/mutations'
 import { pxToEmu } from '../layout/units'
 import type { ParsedClipboard } from './clipboard-html'
+import { reviveClipRaw, b64ToBytes, type ClipSnapshot } from './clipboard-snapshot'
 import { applyCommand, affectedOf, isDimCommand, isImageCommand, isStructCommand, type CellPos, type DimAxis, type EditCommand } from './commands'
 import type { PermissionDeniedPayload } from '../plugin'
 
@@ -322,6 +324,102 @@ export class EditController {
     if (denied.length) {
       const payload: PermissionDeniedPayload = { reason: 'paste', cells: denied, message: `粘贴撞 ${denied.length} 个只读格,已跳过` }
       this.host.emit('permission-denied', payload)
+    }
+    return true
+  }
+
+  /**
+   * 1:1 保真粘贴:用复制时序列化进剪贴板的完整模型快照(本组件自己复制的,跨实例 Vue3/Vue2/React 通用)
+   * 覆盖式落到目标区 —— 完整还原 值/原始类型/数字格式/全部样式(含边框)/合并/图片(浮动 + DISPIMG)/行高列宽。
+   * 跟 pasteRich(外部 HTML 近似)同走命令栈(整体单次撤销)+ 前后快照 cell-change + 只读 permission-denied。
+   */
+  pasteSnapshot(start: { row: number; col: number }, snap: ClipSnapshot): boolean {
+    if (!this.host.isEditingEnabled()) return false
+    const sheet = this.host.getSheet()
+    const wb = this.host.getWorkbook()
+    if (!sheet || !wb) return false
+    if (!snap.cells.length && !snap.merges.length && !snap.images.length && !snap.rowHeights.length && !snap.colWidths.length) return false
+    this.ensureBaseline()
+    const d = this.host.getDate1904()
+    const snapWb = cloneWorkbook(wb)
+
+    // 受影响 = 整个粘贴矩形(覆盖式:源里的空格也清掉,保证 1:1)
+    const affected: CellPos[] = []
+    for (let r = 0; r < snap.rows; r++)
+      for (let c = 0; c < snap.cols; c++) {
+        const row = start.row + r
+        const col = start.col + c
+        if (this.host.isEditable(row, col)) affected.push({ row, col })
+      }
+    const before = affected.map((p) => buildCellSnapshot(sheet, p.row, p.col, d))
+    const denied: Array<{ row: number; col: number }> = []
+
+    // 1) 清目标矩形(可编辑格)→ 覆盖式
+    for (const p of affected) sheet.cells.delete(cellKey(p.row, p.col))
+
+    // 2) DISPIMG 单元格图字节登记进目标 cellImages(缺则补,已存在复用 id;data-url 兜底渲染)
+    if (snap.cellImages.length) {
+      if (!wb.cellImages) wb.cellImages = new Map()
+      for (const ci of snap.cellImages) {
+        if (!wb.cellImages.has(ci.id)) wb.cellImages.set(ci.id, { id: ci.id, bytes: b64ToBytes(ci.b64), mime: ci.mime, src: `data:${ci.mime};base64,${ci.b64}` })
+      }
+    }
+
+    // 3) 落格(完整模型 + intern 样式到目标表 → 跨表/跨实例 styleId 正确)
+    for (const cc of snap.cells) {
+      const row = start.row + cc.r
+      const col = start.col + cc.c
+      if (!this.host.isEditable(row, col)) { denied.push({ row, col }); continue }
+      const model: CellModel = { row, col, type: cc.type, raw: reviveClipRaw(cc.raw), styleId: internStyle(sheet, cc.style) }
+      if (cc.formula) model.formula = cc.formula
+      if (cc.hyperlink) model.hyperlink = cc.hyperlink
+      if (cc.comment) model.comment = cc.comment
+      if (cc.rich) model.rich = cc.rich
+      if (cc.dispImgId) model.dispImgId = cc.dispImgId
+      setCellModel(sheet, model)
+    }
+
+    // 4) 合并:先去掉目标矩形内已有合并,再按快照重建(只读区跳过 + denied)
+    const tr = { top: start.row, left: start.col, bottom: start.row + snap.rows - 1, right: start.col + snap.cols - 1 }
+    sheet.merges = sheet.merges.filter((m) => !(m.top >= tr.top && m.left >= tr.left && m.bottom <= tr.bottom && m.right <= tr.right))
+    for (const m of snap.merges) {
+      const range = { top: start.row + m.top, left: start.col + m.left, bottom: start.row + m.bottom, right: start.col + m.right }
+      if (range.top === range.bottom && range.left === range.right) continue
+      if (!_rangeAllEditableViaHost(this.host, range)) { denied.push(..._collectDeniedInRangeViaHost(this.host, range)); continue }
+      applyCommand(sheet, { kind: 'merge-cells', range })
+    }
+
+    // 5) 浮动图(相对锚点 → 目标起点偏移;DISPIMG 已在第 3 步随格落地,这里只处理真浮动图)
+    for (const im of snap.images) {
+      const fromRow = start.row + im.from.row
+      const fromCol = start.col + im.from.col
+      if (!this.host.isEditable(fromRow, fromCol)) { denied.push({ row: fromRow, col: fromCol }); continue }
+      addImage(sheet, {
+        src: `data:${im.mime};base64,${im.b64}`,
+        bytes: b64ToBytes(im.b64),
+        mime: im.mime,
+        from: { col: fromCol, row: fromRow, colOffEmu: im.from.colOffEmu, rowOffEmu: im.from.rowOffEmu },
+        to: im.to ? { col: start.col + im.to.col, row: start.row + im.to.row, colOffEmu: im.to.colOffEmu, rowOffEmu: im.to.rowOffEmu } : undefined,
+        extWidthEmu: im.extWidthEmu,
+        extHeightEmu: im.extHeightEmu,
+        editAs: im.editAs,
+      })
+    }
+
+    // 6) 行高列宽(1:1:源定制过的行/列尺寸搬到目标对应行列)
+    for (const dim of snap.rowHeights) restoreDimension(sheet, 'row', start.row + dim.i, { height: dim.height ?? sheet.defaultRowHeight, hidden: !!dim.hidden, customHeight: !!dim.custom })
+    for (const dim of snap.colWidths) restoreDimension(sheet, 'col', start.col + dim.i, { width: dim.width ?? sheet.defaultColWidth, hidden: !!dim.hidden })
+
+    this.pushUndo({ kind: 'restore-wb', snapshot: snapWb }) // 整体单次撤销
+    this.markDirty()
+    this.host.onModelChange()
+    this.host.rebuildOverlays() // 图片增删 → 重建叠加层
+    if (this.host.isRecalcEnabled()) this.refreshEngine()
+    affected.forEach((p, i) =>
+      this.host.emit('cell-change', { before: before[i], after: buildCellSnapshot(sheet, p.row, p.col, d), source: 'api' } satisfies CellChangePayload),
+    )
+    if (denied.length) {
+      this.host.emit('permission-denied', { reason: 'paste', cells: denied, message: `粘贴撞 ${denied.length} 个只读格,已跳过` } satisfies PermissionDeniedPayload)
     }
     return true
   }
