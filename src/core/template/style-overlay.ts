@@ -65,6 +65,7 @@ export function applyStyleTemplate(
     charts: [],
     shapes: [],
     sparklines: [],
+    pivotTables: [],
     showGridLines: tplSheet.showGridLines,
   }
 
@@ -127,6 +128,7 @@ function stripTemplateContent(tplSheet: SheetModel, name: string): SheetModel {
     charts: [],
     shapes: [],
     sparklines: [],
+    pivotTables: [],
     showGridLines: tplSheet.showGridLines,
   }
 }

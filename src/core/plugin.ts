@@ -13,7 +13,7 @@
  *   <ExcelViewer :plugins="[myPlugin]" />   // Vue
  *   <ExcelViewer plugins={[myPlugin]} />    // React —— 同一插件,两框架通用
  */
-import type { CellStyleFn, CellStyleOverride, ImageAnchor, MergeRange, TransformModelFn, WorkbookModel } from './model/types'
+import type { CellStyleFn, CellStyleOverride, ImageAnchor, MergeRange, PivotTableLayout, TransformModelFn, WorkbookModel } from './model/types'
 import type { CellValue, ReadOptions, SheetToJSONOptions } from './model/data-access'
 import type { CellSnapshot } from './model/snapshot'
 import type { CellInspection } from './model/inspect'
@@ -30,6 +30,20 @@ export interface Rect {
   y: number
   w: number
   h: number
+}
+
+export type PivotOutput = { kind: 'current-sheet'; cell: string } | { kind: 'new-sheet' }
+export interface CreatePivotTableOptions {
+  /** 源数据区域,第一行作为字段名。缺省时使用当前选区。 */
+  sourceRange?: MergeRange
+  /** 源数据所在 sheet index。缺省为当前活动表。 */
+  sourceSheetIndex?: number
+  /** 输出位置。缺省为当前表源区域右侧空两列。 */
+  output?: PivotOutput
+  /** 透视表布局。缺省:第一个文本字段为行字段,第一个数值字段为值字段。 */
+  layout?: Partial<PivotTableLayout>
+  /** 是否打开右侧字段面板。缺省 false;工具栏入口会打开。 */
+  showPanel?: boolean
 }
 
 export type PluginEvent =
@@ -73,6 +87,8 @@ export interface ViewerApi {
   setActiveSheet(index: number): void
   getSelection(): MergeRange | null
   setSelection(range: MergeRange): void
+  /** 滚动到指定单元格;select=true 时同步选中目标格。 */
+  scrollToCell(row: number, col: number, opts?: { select?: boolean }): boolean
   rectOf(row: number, col: number): Rect | null
   rectOfRange(range: MergeRange): Rect | null
   redraw(): void
@@ -87,6 +103,18 @@ export interface ViewerApi {
   setEditableTargets(targets: EditableTarget | EditableTarget[] | undefined): void
   /** 当前生效的可编辑白名单. `undefined` 表示未启用白名单. */
   getEditableTargets(): EditableTarget | EditableTarget[] | undefined
+  /** 按活动单元格所在列排序;未开启自动筛选时会先按选区/已用区建立筛选范围。 */
+  sortActiveColumn(dir: 'asc' | 'desc'): boolean
+  /** 通过 API 直接创建静态透视表,不依赖当前页面选区或对话框。需开启 `pivotTable` + `editable` 配置(默认均关)。 */
+  createPivotTable(opts: CreatePivotTableOptions): boolean
+  /** 基于当前选区创建静态透视汇总表;未传 opts 时使用默认布局并输出到右侧。需 `pivotTable` + `editable`。 */
+  createPivotTableFromSelection(opts?: {
+    rowFieldIndex?: number
+    valueFieldIndex?: number
+    output?: PivotOutput
+  }): boolean
+  /** 打开透视表字段选择对话框,再从当前选区创建静态透视汇总表。需 `pivotTable` + `editable`。 */
+  openPivotTableDialog(): boolean
   /** 导出当前/指定表为图片 Blob(默认 png) */
   exportImage(opts?: ImageExportOptions): Promise<Blob>
   /** 导出为图片并触发下载 */

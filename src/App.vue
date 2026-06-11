@@ -274,6 +274,15 @@ function showSheetJSON() {
   navigator.clipboard?.writeText(JSON.stringify(json, null, 2)).catch(() => {})
   lastEvent.value = `[数据] ${json.length} 行已复制为 JSON · 首行: ${JSON.stringify(json[0] ?? {})}`.slice(0, 140)
 }
+function jumpToLastRow() {
+  const viewer = viewerRef.value
+  const wb = viewer?.getWorkbook()
+  if (!viewer || !wb) return
+  const sheet = wb.sheets[viewer.getActiveSheet()]
+  const row = Math.max(0, sheet.dimension.rows - 1)
+  viewer.scrollToCell(row, 0, { select: true })
+  lastEvent.value = `已跳到末行 A${row + 1}`
+}
 
 // 示例插件: 负数标红 + 单击 toast + 贡献一个工具栏按钮(definePlugin 打包 cellStyle/events/toolbar)
 const negativesPlugin = definePlugin({
@@ -331,6 +340,7 @@ const demoBarItems = computed<DemoItem[]>(() => {
   const arr: DemoItem[] = [
     { id: 'pdf-watermark', type: 'btn', label: 'PDF(页码+水印)', title: '演示 beforeRenderPage 钩子', onClick: () => void exportPdfWithWatermark() },
     { id: 'sheet-json', type: 'btn', label: '数据→JSON', title: '演示数据读取 API getSheetJSON', onClick: showSheetJSON },
+    { id: 'jump-last-row', type: 'btn', label: '跳到末行', title: '演示 scrollToCell(row,col,{select:true}) 导航 API', onClick: jumpToLastRow },
     { id: 'fit', type: 'select', label: '贴合', title: 'WPS 内嵌图贴合方式',
       selectModel: () => cellImageFit.value,
       selectOptions: [
@@ -505,12 +515,13 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         :plugins="plugins"
         :cell-image-fit="cellImageFit"
         :editable="editMode"
+        :pivot-table="true"
         :recalc="editMode"
         :read-only-ranges="[{ top: 1, left: 0, bottom: 1, right: 4 }]"
         :editable-targets="editableTargetsApplied"
         :read-only-cell-style="highlightReadOnly"
         :editor="demoSelectEditor"
-        :toolbar="['find', 'filter', 'clear-filter', 'separator', 'copy', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export']"
+        :toolbar="['find', 'filter', 'sort', 'clear-filter', 'separator', 'copy', 'pivot-table', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export']"
         @selection-change="(s) => { lastEvent = `选区 ${s.range.top + 1},${s.range.left + 1} → ${s.range.bottom + 1},${s.range.right + 1}`; selTick++ }"
         @cell-change="onCellChange"
         @dim-change="onDimChange"

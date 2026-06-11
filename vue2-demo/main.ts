@@ -20,7 +20,7 @@ new Vue({
       highlightReadOnly: false,
       cellImageFit: 'contain' as 'contain' | 'fill' | 'cover',
       lastEvent: '',
-      toolbarItems: ['find', 'filter', 'clear-filter', 'separator', 'copy', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export'],
+      toolbarItems: ['find', 'filter', 'sort', 'clear-filter', 'separator', 'copy', 'pivot-table', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export'],
       editableTargetsApplied: undefined as any,
       editTargetsDialogOpen: false,
       editTargetsCells: {} as Record<string, true>,
@@ -82,6 +82,7 @@ new Vue({
       arr.push(
         { id: 'pdf-watermark', kind: 'btn', label: 'PDF(页码+水印)', title: '演示 beforeRenderPage 钩子', onClick: this.exportPdfWithWatermark },
         { id: 'sheet-json', kind: 'btn', label: '数据→JSON', title: '演示数据读取 API getSheetJSON', onClick: this.showSheetJSON },
+        { id: 'jump-last-row', kind: 'btn', label: '跳到末行', title: '演示 scrollToCell(row,col,{select:true}) 导航 API', onClick: this.jumpToLastRow },
         { id: 'fit', kind: 'select', label: '贴合', title: 'WPS 内嵌图贴合方式', model: this.cellImageFit, options: [
           { value: 'contain', label: 'contain 等比(同 WPS)' }, { value: 'fill', label: 'fill 铺满' }, { value: 'cover', label: 'cover 裁剪' },
         ], onSelect: (v: string) => { this.cellImageFit = v as any } },
@@ -171,6 +172,15 @@ new Vue({
       const json = viewer.getSheetJSON({ headerRow: 1 })
       navigator.clipboard?.writeText(JSON.stringify(json, null, 2)).catch(() => {})
       this.lastEvent = `[数据] ${json.length} 行已复制为 JSON · 首行: ${JSON.stringify(json[0] ?? {})}`.slice(0, 140)
+    },
+    jumpToLastRow() {
+      const viewer = (this.$refs.viewer as any)
+      const wb = viewer?.getWorkbook?.()
+      if (!viewer || !wb) return
+      const sheet = wb.sheets[viewer.getActiveSheet()]
+      const row = Math.max(0, sheet.dimension.rows - 1)
+      viewer.scrollToCell(row, 0, { select: true })
+      this.lastEvent = `已跳到末行 A${row + 1}`
     },
     downloadXlsx() { (this.$refs.viewer as any)?.downloadXlsx() },
     downloadCsv() { (this.$refs.viewer as any)?.downloadCsv() },
@@ -322,6 +332,7 @@ new Vue({
           :file-name="fileName"
           :cell-image-fit="cellImageFit"
           :editable="editMode"
+          :pivot-table="true"
           :recalc="editMode"
           :editable-targets="editableTargetsApplied"
           :read-only-cell-style="highlightReadOnly"

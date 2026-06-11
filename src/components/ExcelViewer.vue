@@ -88,6 +88,12 @@ const props = withDefaults(
     toolbar?: boolean | Array<string | ToolbarItem>
     /** 编辑总开关:默认 false = 只读(行为不变)。开启后才能进入编辑(E0:闸门) */
     editable?: boolean
+    /**
+     * 透视表功能开关:默认 false = 关闭。开启后(还需 `editable`)工具栏 `pivot-table` 入口可见、
+     * `createPivotTable`/`openPivotTableDialog` 等 API 生效、导出 .xlsx 回注真实 OOXML 透视表零件
+     * (overlay 模式同时保留原文件透视表)。
+     */
+    pivotTable?: boolean
     /** 按格只读判定:返回 true = 只读(cell 为空格时传 null) */
     cellReadOnly?: (cell: CellModel | null, pos: { row: number; col: number }) => boolean | void
     /** 只读区域(0-based 闭区间);命中即只读 */
@@ -170,6 +176,7 @@ function effectiveTransform(wb: WorkbookModel): WorkbookModel {
 // 编辑配置(E0:默认只读;开 editable + 可按格/区域只读)
 const effectiveEditConfig = computed<EditConfig>(() => ({
   editable: props.editable,
+  pivotTable: props.pivotTable,
   cellReadOnly: props.cellReadOnly,
   readOnlyRanges: props.readOnlyRanges,
   editableTargets: props.editableTargets,
@@ -332,6 +339,7 @@ const progressPct = computed(() => {
 })
 
 const activeSheet = ref(0)
+const sheetsVersion = ref(0) // 工作表列表版本(core 增删表时 +1;workbook 为 shallowRef,用它强制 SheetTabs 重渲)
 const zoom = ref(1)
 
 const rootEl = ref<HTMLElement | null>(null)
@@ -416,6 +424,7 @@ onMounted(() => {
         onTooltip: (tip) => (tooltip.value = tip),
         onFindChange: () => findVersion.value++,
         onFilterChange: () => filterVersion.value++,
+        onActiveSheetChange: (index) => { activeSheet.value = index; sheetsVersion.value++ }, // core 新增表(透视新建工作表)→ 顶版本号让 SheetTabs 重读(workbook 是 shallowRef,push 不自动通知)
         onEditEvent: (event, payload) => fire(event, payload),
         onContextMenuBefore: (payload) => {
           // 1) 先跑插件 contextMenu(数组顺序串行,后者拿前者的输出)
@@ -807,12 +816,17 @@ const viewerApi: ViewerApi = {
   },
   getSelection: () => selection.value,
   setSelection: programmaticSetSelection,
+  scrollToCell: (row, col, opts) => controller?.scrollToCell(row, col, opts) ?? false,
   rectOf,
   rectOfRange,
   redraw: () => doRender(),
   isCellEditable: (row, col) => controller?.isCellEditable(row, col) ?? false,
   setEditableTargets: (targets) => controller?.setEditableTargets(targets),
   getEditableTargets: () => controller?.getEditableTargets(),
+  sortActiveColumn: (dir) => controller?.sortActiveColumn(dir) ?? false,
+  createPivotTable: (opts) => controller?.createPivotTable(opts) ?? false,
+  createPivotTableFromSelection: (opts) => controller?.createPivotTableFromSelection(opts) ?? false,
+  openPivotTableDialog: () => controller?.openPivotTableDialog() ?? false,
   editCell: (row, col, value) => controller?.editCell(row, col, value) ?? false,
   editRange: (range, values) => controller?.editRange(range, values) ?? false,
   clearRange: (range) => controller?.clearRange(range) ?? false,
@@ -958,6 +972,35 @@ function builtinTool(id: string): ResolvedToolbarItem | null {
         disabled: !controller?.hasFilters(),
         onClick: () => controller?.clearAllFilters(),
       })
+    case 'sort': {
+      const sortState = controller?.getSortState()
+      const active = controller?.getActiveCell()
+      const disabled = !active || !sheet.value
+      return bi({
+        id,
+        iconSvg: I('sort'),
+        label: '排序',
+        title: active ? `按 ${colIndexToLetters(active.col)} 列排序` : '选中一个单元格后按该列排序',
+        active: !!(active && sortState?.col === active.col && sortState.dir),
+        disabled,
+        items: [
+          bi({
+            id: 'sort-asc',
+            label: '升序 (A → Z / 小 → 大)',
+            active: !!(active && sortState?.col === active.col && sortState.dir === 'asc'),
+            disabled,
+            onClick: () => controller?.sortActiveColumn('asc'),
+          }),
+          bi({
+            id: 'sort-desc',
+            label: '降序 (Z → A / 大 → 小)',
+            active: !!(active && sortState?.col === active.col && sortState.dir === 'desc'),
+            disabled,
+            onClick: () => controller?.sortActiveColumn('desc'),
+          }),
+        ],
+      })
+    }
     case 'copy':
       return bi({
         id,
@@ -966,6 +1009,16 @@ function builtinTool(id: string): ResolvedToolbarItem | null {
         title: '复制选区 (Ctrl+C)',
         disabled: !selection.value,
         onClick: () => void controller?.copySelection(),
+      })
+    case 'pivot-table':
+      if (!props.pivotTable) return null // 功能未开启(默认):不渲染入口
+      return bi({
+        id,
+        iconSvg: I('pivot-table'),
+        label: '透视表',
+        title: '选择字段并基于当前选区创建静态透视汇总表',
+        disabled: !selection.value || !props.editable,
+        onClick: () => controller?.openPivotTableDialog(),
       })
     case 'wrap-text': {
       const wrapState = controller?.getSelectionWrapState() ?? 'none'
@@ -1100,7 +1153,7 @@ function builtinTool(id: string): ResolvedToolbarItem | null {
         ),
       })
     default:
-      return null // 'sort' 等待实现
+      return null
   }
 }
 
@@ -1128,7 +1181,7 @@ const resolvedToolbar = computed<ResolvedToolbarItem[]>(() => {
   void findVersion.value
   void filterVersion.value
   if (props.toolbar === false) return []
-  const entries: Array<string | ToolbarItem> = Array.isArray(props.toolbar) ? props.toolbar : ['find', 'filter']
+  const entries: Array<string | ToolbarItem> = Array.isArray(props.toolbar) ? props.toolbar : ['find', 'filter', 'sort']
   const out: ResolvedToolbarItem[] = []
   for (const e of entries) {
     if (typeof e === 'string') {
@@ -1349,6 +1402,7 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
 
     <SheetTabs
       v-if="workbook"
+      :key="sheetsVersion"
       :workbook="workbook as WorkbookModel"
       :active="activeSheet"
       @select="activeSheet = $event"
@@ -1547,6 +1601,39 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
   border: 1px solid #d9d27e;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
   max-width: 300px;
+}
+:deep(.ooxml-pivot-button) {
+  position: absolute;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  padding: 0 3px 0 6px;
+  border: 1px solid #9aa7b2;
+  border-radius: 2px;
+  background: linear-gradient(#ffffff, #e8edf2);
+  color: #1f2329;
+  font: 12px/1.2 -apple-system, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  pointer-events: auto;
+  overflow: hidden;
+  cursor: default;
+}
+:deep(.ooxml-pivot-button:hover) {
+  border-color: #6e879e;
+  background: linear-gradient(#ffffff, #dde8f4);
+}
+:deep(.ooxml-pivot-button .ooxml-pivot-label) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+:deep(.ooxml-pivot-button .ooxml-pivot-caret) {
+  flex: 0 0 auto;
+  color: #3c4a57;
+  font-size: 10px;
 }
 .state {
   position: absolute;

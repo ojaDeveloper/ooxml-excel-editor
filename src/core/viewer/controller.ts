@@ -10,9 +10,9 @@
  * onSelectionChange(壳据此 +1 让选区相关计算属性重算)、onCellClick/onCellDblClick/onHyperlink/onFilterButton/onTooltip
  * (交互回调,壳决定 emit / 插件派发 / 策略)。壳不需镜像 contentSize/selection —— 直接读控制器。
  */
-import type { CellModel, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
+import type { CellModel, CellStyle, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, PivotFilterRule, PivotSummary, PivotTableLayout, PivotTableModel, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
-import { setImageRect, cloneImageAnchor } from '../model/mutations'
+import { setCellValue, setImageRect, cloneImageAnchor } from '../model/mutations'
 import { pxToEmu } from '../layout/units'
 import { deleteIntersectsMerge } from '../model/structure'
 import { anchorRect } from '../overlay/anchor'
@@ -28,6 +28,7 @@ import { inspectCell, type CellInspection } from '../model/inspect'
 // import { applyStyleTemplate } from '../template/style-overlay'
 import { CellEditorHost } from '../edit/editor-host'
 import { ContextMenuHost, type MenuItem } from '../edit/context-menu'
+import { PivotDialogHost, PivotFieldPanelHost, type PivotFieldOption, type PivotOutputChoice } from './pivot-dialog-host'
 import { parseClipboardHtml } from '../edit/clipboard-html'
 import { LightboxHost } from './lightbox-host'
 import type { CellEditorContext, EditorCommitValue, EditorResolver } from '../edit/editor-context'
@@ -40,6 +41,7 @@ import { OverlayManager, type OverlayQuads } from './overlay-manager'
 import { WorkbookExporter, type ExporterHost } from '../export/exporter'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '../export/types'
 import type { XlsxExportOptions } from '../export/xlsx-writer'
+import type { CreatePivotTableOptions } from '../plugin'
 
 export type Cell = { row: number; col: number }
 export interface TooltipState {
@@ -102,6 +104,8 @@ export interface ViewerControllerHooks {
   onFindChange: () => void
   /** 筛选状态/浮层变化(壳据此 +1 让 FilterPopup / 工具栏重算) */
   onFilterChange: () => void
+  /** core 里新增/切换工作表时通知壳同步 activeSheet。 */
+  onActiveSheetChange?: (index: number) => void
   /** 编辑事件(cell-change/edit-start/edit-commit;壳转 emit + 插件派发) */
   onEditEvent: (event: EditEventName, payload: unknown) => void
   /** 右键菜单触发前(Plan C):用户可调 `preventDefault()` 阻止内置菜单弹出(然后自渲染) */
@@ -160,6 +164,10 @@ export class ViewerController {
   /** 右键上下文菜单宿主(G3;body 级 DOM,框架无关) */
   private menuHost = new ContextMenuHost()
   private lightbox = new LightboxHost()
+  private pivotDialog = new PivotDialogHost()
+  private pivotPanel = new PivotFieldPanelHost()
+  /** 透视表"活刷新"重入兜底:recompute 内部 setCellValue 不再触发 onModelChange,此旗保险。 */
+  private pivotRefreshing = false
   private lightboxEnabled = true
   /** 用户的右键菜单 transform 回调(Plan C):`(ctx, items) => MenuItem[] | undefined` */
   private ctxMenuTransform: ContextMenuTransform | null = null
@@ -228,6 +236,7 @@ export class ViewerController {
       getRendererOpts: () => this.rendererOpts,
       getFileName: () => this.fileName,
       getSourceBuffer: () => this.sourceBuffer,
+      isPivotEnabled: () => !!this.editCfg.pivotTable,
     }
     this.exporter = new WorkbookExporter(host)
 
@@ -244,6 +253,7 @@ export class ViewerController {
           ? (this.editCfg.formulaEngine ?? defaultFormulaEngineFactory)
           : null,
       onModelChange: () => {
+        this.refreshPivotsAfterEdit() // 源数据改动 → 透视表"活刷新"(在重算 metrics 之前改完模型)
         this.renderer?.rebuildMetrics()
         this.refreshContentSize()
         this.render()
@@ -525,6 +535,8 @@ export class ViewerController {
     this.editorHost.dispose()
     this.menuHost.dispose()
     this.lightbox.dispose()
+    this.pivotDialog.dispose()
+    this.pivotPanel.dispose()
     this.edit.disposeEngine()
   }
 
@@ -662,6 +674,28 @@ export class ViewerController {
     this.render()
   }
 
+  /** 滚动到指定单元格;select=true 时同步选中目标格。 */
+  scrollToCell(row: number, col: number, opts?: { select?: boolean }): boolean {
+    const r = this.renderer
+    if (!r) return false
+    const targetRow = Math.max(0, Math.min(row, MAX_GRID_ROWS - 1))
+    const targetCol = Math.max(0, Math.min(col, MAX_GRID_COLS - 1))
+    if (targetRow >= r.metrics.vRows || targetCol >= r.metrics.vCols) {
+      this.virtualRows = Math.max(this.virtualRows, targetRow + 1)
+      this.virtualCols = Math.max(this.virtualCols, targetCol + 1)
+      if (r.setVirtualExtent(this.virtualRows, this.virtualCols)) this.refreshContentSize()
+    }
+    const m = r.mergeAt(targetRow, targetCol)
+    const target = m ? { row: m.top, col: m.left } : { row: targetRow, col: targetCol }
+    if (opts?.select) {
+      this.selectCell(target.row, target.col)
+      return true
+    }
+    this.scrollCellIntoView(target)
+    this.render()
+    return true
+  }
+
   /** 命令式设选区(anchor=左上, active=右下) */
   setSelectionRange(range: MergeRange): void {
     this.selMode = 'range'
@@ -754,6 +788,14 @@ export class ViewerController {
       const fcol = r.filterButtonAt(this.view, p.x, p.y)
       if (fcol != null) {
         this.openFilterPopup(fcol)
+        return
+      }
+    }
+    // 透视表行分组折叠/展开按钮(功能开启时)
+    if (r && p && this.editCfg.pivotTable) {
+      const tg = r.pivotToggleAt(this.view, p.x, p.y)
+      if (tg) {
+        this.togglePivotGroup(tg.tableIdx, tg.key)
         return
       }
     }
@@ -1292,9 +1334,12 @@ export class ViewerController {
   }
 
   private scrollActiveIntoView(): void {
+    if (this.selActive) this.scrollCellIntoView(this.selActive)
+  }
+
+  private scrollCellIntoView(c: Cell): void {
     const r = this.renderer
     const sc = this.els.scroller
-    const c = this.selActive
     if (!r || !c) return
     const hw = r.metrics.rowHeaderWidth
     const hh = r.metrics.colHeaderHeight
@@ -1690,6 +1735,361 @@ export class ViewerController {
   /** 当前排序状态(壳可读以显示指示) */
   getSortState(): { col: number; dir: 'asc' | 'desc' | null } {
     return { col: this.sortCol, dir: this.sortDir }
+  }
+
+  /** 按活动单元格所在列排序;若当前表未开启自动筛选,先按选区/已用区建立筛选范围。 */
+  sortActiveColumn(dir: 'asc' | 'desc'): boolean {
+    const s = this.sheet
+    const active = this.getActiveCell()
+    if (!s || !active) return false
+    if (!s.autoFilterRange) this.toggleAutoFilter()
+    if (!s.autoFilterRange || active.col < s.autoFilterRange.left || active.col > s.autoFilterRange.right) return false
+    this.sortColumn(active.col, dir)
+    return this.sortCol === active.col && this.sortDir === dir
+  }
+
+  /** 打开 WPS 式透视表入口:确认选区字段后生成静态透视汇总表。需 `pivotTable` + `editable` 配置。 */
+  openPivotTableDialog(): boolean {
+    const sel = this.getSelection()
+    if (!this.editCfg.pivotTable) return false
+    if (!sel || !this.renderer || !this.sheet || !this.editCfg.editable) return false
+    const fields = this.pivotFieldOptions(sel)
+    if (fields.length < 2) return false
+    this.pivotDialog.show({
+      rangeLabel: `${colLabel(sel.left)}${sel.top + 1}:${colLabel(sel.right)}${sel.bottom + 1}`,
+      defaultOutputCell: `${colLabel(Math.min(sel.right + 2, MAX_GRID_COLS - 2))}${sel.top + 1}`,
+      onSubmit: (output) => this.createPivotTableFromSelection({ output }),
+    })
+    return true
+  }
+
+  /** 兼容旧 API:基于当前选区创建静态透视汇总表。 */
+  createPivotTableFromSelection(opts: { rowFieldIndex?: number; valueFieldIndex?: number; output?: PivotOutputChoice } = {}): boolean {
+    const sel = this.getSelection()
+    if (!sel) return this.failPivot('透视表创建失败:请先选择包含表头且至少两列两行的数据区域。')
+    const layout: Partial<PivotTableLayout> = {}
+    if (opts.rowFieldIndex != null) layout.rows = [opts.rowFieldIndex]
+    if (opts.valueFieldIndex != null) layout.values = [{ field: opts.valueFieldIndex, summary: 'sum' }]
+    return this.createPivotTable({ sourceRange: sel, output: opts.output, layout, showPanel: true })
+  }
+
+  /** 通过 API 直接创建静态透视表,不依赖页面选区或对话框。需 `pivotTable` + `editable` 配置。 */
+  createPivotTable(opts: CreatePivotTableOptions): boolean {
+    const r = this.renderer
+    const wb = this.workbook
+    if (!this.editCfg.pivotTable) return this.failPivot('透视表创建失败:未开启透视表功能(pivotTable 配置,默认关闭)。')
+    if (!r || !wb) return this.failPivot('透视表创建失败:工作簿尚未加载完成。')
+    if (!this.editCfg.editable) return this.failPivot('透视表创建失败:请先开启编辑模式。')
+    const sourceIndex = opts.sourceSheetIndex ?? this.activeIndex
+    const s = wb.sheets[sourceIndex]
+    if (!s) return this.failPivot('透视表创建失败:源工作表不存在。')
+    const sel = opts.sourceRange ?? this.getSelection()
+    if (!sel || sel.bottom <= sel.top || sel.right <= sel.left) return this.failPivot('透视表创建失败:请先选择包含表头且至少两列两行的数据区域。')
+
+    const headers: string[] = []
+    for (let col = sel.left; col <= sel.right; col++) headers.push(this.pivotCellText(s, sel.top, col) || `字段${col - sel.left + 1}`)
+    const fieldOptions = this.pivotFieldOptionsForSheet(s, sel)
+
+    // 显式给了行或值字段 → 沿用(编程 API,缺一边自动补);否则空白起步(对话框),不猜字段,等用户在面板勾选。
+    const explicit = !!(opts.layout?.rows?.length || opts.layout?.values?.length)
+    let initialLayout: PivotTableLayout
+    if (explicit) {
+      const fieldCount = headers.length
+      let rowFieldOffset = (opts.layout?.rows?.[0] ?? -1) - sel.left
+      let valueFieldOffset = (opts.layout?.values?.[0]?.field ?? -1) - sel.left
+      if (valueFieldOffset < 0) valueFieldOffset = (fieldOptions.find((f) => f.numeric)?.index ?? -1) - sel.left
+      if (rowFieldOffset < 0) rowFieldOffset = (fieldOptions.find((f) => f.index !== sel.left + valueFieldOffset)?.index ?? -1) - sel.left
+      if (valueFieldOffset < 0 || valueFieldOffset >= fieldCount) return this.failPivot('透视表创建失败:请选择有效的值字段。')
+      if (rowFieldOffset < 0 || rowFieldOffset === valueFieldOffset) rowFieldOffset = valueFieldOffset === 0 ? 1 : 0
+      if (rowFieldOffset < 0 || rowFieldOffset >= fieldCount) return this.failPivot('透视表创建失败:请选择有效的行字段。')
+      initialLayout = normalizePivotLayout(opts.layout, sel.left + rowFieldOffset, sel.left + valueFieldOffset)
+    } else {
+      initialLayout = { filters: opts.layout?.filters?.map((rule) => ({ ...rule, values: rule.values?.slice() })) ?? [], columns: [], rows: [], values: [] }
+    }
+    const built = this.buildPivotRows(s, sel, fieldOptions, initialLayout, [])
+    if (!built) return this.failPivot('透视表创建失败:值字段没有可汇总的数据。')
+
+    const output = opts.output ?? { kind: 'current-sheet' as const, cell: `${colLabel(sel.right + 2)}${sel.top + 1}` }
+    const at = output.kind === 'new-sheet' ? { row: 0, col: 0 } : parseCellRef(output.cell)
+    if (!at) return this.failPivot('透视表创建失败:请输入有效的生成位置,例如 H1。')
+    const outTop = at.row
+    const outLeft = at.col
+    const outWidth = Math.max(1, ...built.rows.map((row) => row.length))
+    if (outLeft + outWidth - 1 >= MAX_GRID_COLS) return this.failPivot('透视表创建失败:生成位置超出最大列数。')
+    const range = { top: outTop, left: outLeft, bottom: outTop + built.rows.length - 1, right: outLeft + outWidth - 1 }
+    if (range.bottom >= MAX_GRID_ROWS) return this.failPivot('透视表创建失败:生成位置超出最大行数。')
+    if (output.kind === 'current-sheet') {
+      for (let row = range.top; row <= range.bottom; row++) {
+        for (let col = range.left; col <= range.right; col++) {
+          if (!this.isCellEditable(row, col)) return this.failPivot('透视表创建失败:生成区域包含只读单元格,请换一个位置或选择新建工作表。')
+        }
+      }
+    }
+
+    this.edit.ensureBaseline()
+    const snap = cloneWorkbook(wb)
+    const outSheet = output.kind === 'new-sheet' ? createPivotSheet(wb) : s
+    for (let rr = 0; rr < built.rows.length; rr++) {
+      for (let cc = 0; cc < built.rows[rr].length; cc++) setCellValue(outSheet, outTop + rr, outLeft + cc, built.rows[rr][cc])
+    }
+    const pivot: PivotTableModel = {
+      name: `PivotTable${outSheet.pivotTables.length + 1}`,
+      range,
+      fields: headers,
+      source: { sheetIndex: sourceIndex, range: { ...sel } },
+      layout: clonePivotLayout(initialLayout),
+      collapsed: [],
+      rowGroups: built.groups.map((g) => ({ row: outTop + g.rowOffset, key: g.key })),
+      buttons: [
+        { row: outTop, col: outLeft, label: built.rowLabel, kind: 'row' as const },
+        { row: outTop, col: outLeft + 1, label: built.valueLabel, kind: 'data' as const },
+      ],
+    }
+    outSheet.pivotTables.push(pivot)
+    this.edit.pushUndoExternal({ kind: 'restore-wb', snapshot: snap })
+    this.edit.markDirtyExternal()
+    if (output.kind === 'new-sheet') {
+      wb.activeSheet = wb.sheets.indexOf(outSheet)
+      this.hooks.onActiveSheetChange?.(wb.activeSheet)
+      this.rebuild(outSheet, wb, this.view.zoom, this.rendererOpts)
+    } else {
+      r.rebuildMetrics()
+      this.refreshContentSize()
+      void this.overlays.build(s, r, this.view)
+    }
+    this.selectCell(outTop, outLeft)
+    if (opts.showPanel) this.showPivotPanel({ sourceSheet: s, outSheet, sourceRange: { ...sel }, outRange: range, fields: fieldOptions, layout: initialLayout })
+    return true
+  }
+
+  private showPivotPanel(ctx: { sourceSheet: SheetModel; outSheet: SheetModel; sourceRange: MergeRange; outRange: MergeRange; fields: PivotFieldOption[]; layout: PivotTableLayout }): void {
+    this.pivotPanel.show({
+      fields: ctx.fields,
+      filterValues: pivotFilterValues(ctx.sourceSheet, ctx.sourceRange, ctx.fields),
+      layout: ctx.layout,
+      onChange: (layout) => {
+        const table = ctx.outSheet.pivotTables.find((p) => p.range.top === ctx.outRange.top && p.range.left === ctx.outRange.left)
+        if (!table) return
+        table.layout = clonePivotLayout(layout)
+        if (!this.recomputePivot(ctx.outSheet, table)) return
+        ctx.outRange.bottom = table.range.bottom
+        ctx.outRange.right = table.range.right
+        this.renderer?.rebuildMetrics()
+        this.refreshContentSize()
+        if (this.sheet && this.renderer) void this.overlays.build(this.sheet, this.renderer, this.view)
+        this.render()
+      },
+    })
+  }
+
+  /**
+   * 透视表的唯一重算入口:读 pivot.source/layout/collapsed → 重建静态结果 → 清旧区写新区 →
+   * 刷新 range/buttons/rowGroups。被面板改布局、源数据"活刷新"、折叠/展开三处共用,避免逻辑分叉。
+   */
+  private recomputePivot(hostSheet: SheetModel, pivot: PivotTableModel): boolean {
+    const wb = this.workbook
+    if (!wb || !pivot.source || !pivot.layout) return false
+    const sourceSheet = wb.sheets[pivot.source.sheetIndex]
+    if (!sourceSheet) return false
+    const fields = this.pivotFieldOptionsForSheet(sourceSheet, pivot.source.range)
+    const built = this.buildPivotRows(sourceSheet, pivot.source.range, fields, pivot.layout, pivot.collapsed ?? [])
+    if (!built) return false
+    const top = pivot.range.top
+    const left = pivot.range.left
+    const width = Math.max(1, ...built.rows.map((row) => row.length))
+    const newBottom = top + built.rows.length - 1
+    const newRight = left + width - 1
+    // 清"旧 ∪ 新"区(折叠后新区更小,残留行要清掉),再写新结果
+    const clearBottom = Math.max(pivot.range.bottom, newBottom)
+    const clearRight = Math.max(pivot.range.right, newRight)
+    for (let row = top; row <= clearBottom; row++) {
+      for (let col = left; col <= clearRight; col++) hostSheet.cells.delete(cellKey(row, col))
+    }
+    for (let rr = 0; rr < built.rows.length; rr++) {
+      for (let cc = 0; cc < built.rows[rr].length; cc++) setCellValue(hostSheet, top + rr, left + cc, built.rows[rr][cc])
+    }
+    pivot.range = { top, left, bottom: newBottom, right: newRight }
+    pivot.buttons = [
+      { row: top, col: left, label: built.rowLabel, kind: 'row' },
+      { row: top, col: left + 1, label: built.valueLabel, kind: 'data' },
+    ]
+    pivot.rowGroups = built.groups.map((g) => ({ row: top + g.rowOffset, key: g.key }))
+    return true
+  }
+
+  /**
+   * 源数据"活刷新":任何模型变更(编辑/粘贴/撤销/重做都经 onModelChange)后,把所有透视表按其源区域重算,
+   * 让结果跟着源数据走(WPS 透视表的"活"语义)。重算用 setCellValue 直接改模型(不经命令栈,不再触发
+   * onModelChange),pivotRefreshing 兜底防重入。功能开关关闭或无透视表时零开销。
+   */
+  private refreshPivotsAfterEdit(): void {
+    if (this.pivotRefreshing || !this.editCfg.pivotTable) return
+    const wb = this.workbook
+    if (!wb) return
+    let any = false
+    for (const sh of wb.sheets) if ((sh.pivotTables?.length ?? 0) > 0) { any = true; break }
+    if (!any) return
+    this.pivotRefreshing = true
+    try {
+      for (const hostSheet of wb.sheets) {
+        for (const pivot of hostSheet.pivotTables ?? []) {
+          if (pivot.source && pivot.layout) this.recomputePivot(hostSheet, pivot)
+        }
+      }
+    } finally {
+      this.pivotRefreshing = false
+    }
+  }
+
+  /** 折叠/展开某个外层行分组(行字段 ≥2 时由折叠按钮触发),重算并重绘。 */
+  private togglePivotGroup(tableIdx: number, key: string): void {
+    const sheet = this.sheet
+    if (!sheet) return
+    const pivot = sheet.pivotTables[tableIdx]
+    if (!pivot) return
+    const collapsed = new Set(pivot.collapsed ?? [])
+    if (collapsed.has(key)) collapsed.delete(key)
+    else collapsed.add(key)
+    pivot.collapsed = [...collapsed]
+    if (!this.recomputePivot(sheet, pivot)) return
+    this.renderer?.rebuildMetrics()
+    this.refreshContentSize()
+    if (this.renderer) void this.overlays.build(sheet, this.renderer, this.view)
+    this.render()
+  }
+
+  /**
+   * 重建透视结果为二维单元格数组(框架无关纯计算)。
+   * 行字段第 1 个为外层分组,其余为内层明细 → 多行字段时产出可折叠的"大纲"(外层分组行带小计 +
+   * 内层缩进明细);单行字段退化为扁平(每个值一行,无折叠)。列字段横向展开,值字段可多个。
+   * groups 列出可折叠的分组表头行(相对 top 的偏移 + 外层 key),供渲染折叠按钮 + 命中测试。
+   */
+  private buildPivotRows(sourceSheet: SheetModel, sel: MergeRange, fields: PivotFieldOption[], layout: PivotTableLayout, collapsed: string[] = []): { rows: Array<Array<string | number>>; rowLabel: string; valueLabel: string; groups: Array<{ rowOffset: number; key: string }> } | null {
+    const rowIndexes = layout.rows
+    const valueRules = layout.values
+    // 空透视表:还没选任何行/值字段 → 占位框(用户在右侧面板勾选字段后会重算填充,对齐 WPS/Excel 空白起步)
+    if (!rowIndexes.length && !valueRules.length) {
+      return { rows: [['数据透视表']], rowLabel: '数据透视表', valueLabel: '', groups: [] }
+    }
+    const columns = valueRules.length ? layout.columns : [] // 无值字段时列展开无意义
+    const collapsedSet = new Set(collapsed)
+    const ruleNumeric = valueRules.map((rule) => fields.find((f) => f.index === rule.field)?.numeric ?? false) // 循环不变量,预存避免每行 find
+    const fieldLabel = (index: number) => fields.find((f) => f.index === index)?.label ?? `字段${index + 1}`
+
+    const filteredRows: number[] = []
+    for (let row = sel.top + 1; row <= sel.bottom; row++) {
+      if (pivotRowKept(sourceSheet, row, layout.filters)) filteredRows.push(row)
+    }
+
+    const colKeys = uniqueSorted(filteredRows.map((row) => keyFor(sourceSheet, row, columns)))
+    const effectiveColKeys = colKeys.length ? colKeys : ['']
+    const valueLabels = valueRules.map((rule) => `${pivotSummaryLabel(rule.summary)}: ${fieldLabel(rule.field)}`)
+    const header: Array<string | number> = [rowIndexes.length ? (rowIndexes.map(fieldLabel).join('/') || '行标签') : '总计']
+    for (const colKey of effectiveColKeys) {
+      for (const label of valueLabels) header.push(colKey ? `${colKey} ${label}` : label)
+    }
+
+    // colKey → [每个值规则一个累加器]
+    type ColAccs = Map<string, PivotAcc[]>
+    const accInto = (ca: ColAccs, colKey: string, row: number): void => {
+      let accs = ca.get(colKey)
+      if (!accs) ca.set(colKey, (accs = valueRules.map(() => emptyPivotAcc())))
+      for (let v = 0; v < valueRules.length; v++) {
+        const raw = sourceSheet.cells.get(cellKey(row, valueRules[v].field))?.raw
+        const n = pivotNumber(raw)
+        addPivotAcc(accs[v], ruleNumeric[v] && n != null ? n : null, raw)
+      }
+    }
+    const lineOf = (label: string, ca: ColAccs): Array<string | number> => {
+      const line: Array<string | number> = [label]
+      effectiveColKeys.forEach((colKey) => {
+        const accs = ca.get(colKey)
+        for (let v = 0; v < valueRules.length; v++) line.push(accs ? resolvePivotAcc(accs[v], valueRules[v].summary) : 0)
+      })
+      return line
+    }
+
+    // 只有值字段(无行字段)→ 整体一行总计
+    if (!rowIndexes.length) {
+      const ca: ColAccs = new Map()
+      for (const row of filteredRows) accInto(ca, columns.length ? keyFor(sourceSheet, row, columns) : '', row)
+      return { rows: [header, lineOf('总计', ca)], rowLabel: header[0] as string, valueLabel: valueLabels.join('/'), groups: [] }
+    }
+
+    const outerField = rowIndexes[0]
+    const innerFields = rowIndexes.slice(1)
+    const hasHierarchy = innerFields.length > 0
+    interface OuterGroup { subtotal: ColAccs; inner: Map<string, ColAccs> }
+    const outerGroups = new Map<string, OuterGroup>()
+    for (const row of filteredRows) {
+      const outerKey = keyFor(sourceSheet, row, [outerField])
+      const colKey = columns.length ? keyFor(sourceSheet, row, columns) : ''
+      let g = outerGroups.get(outerKey)
+      if (!g) outerGroups.set(outerKey, (g = { subtotal: new Map(), inner: new Map() }))
+      accInto(g.subtotal, colKey, row)
+      if (hasHierarchy) {
+        const innerKey = keyFor(sourceSheet, row, innerFields)
+        let ic = g.inner.get(innerKey)
+        if (!ic) g.inner.set(innerKey, (ic = new Map()))
+        accInto(ic, colKey, row)
+      }
+    }
+    if (!outerGroups.size) return null
+
+    const grand: PivotAcc[][] = effectiveColKeys.map(() => valueRules.map(() => emptyPivotAcc()))
+    const rows: Array<Array<string | number>> = [header]
+    const groups: Array<{ rowOffset: number; key: string }> = []
+    for (const outerKey of uniqueSorted([...outerGroups.keys()])) {
+      const g = outerGroups.get(outerKey)!
+      effectiveColKeys.forEach((colKey, ci) => {
+        const accs = g.subtotal.get(colKey)
+        if (accs) for (let v = 0; v < valueRules.length; v++) mergePivotAcc(grand[ci][v], accs[v])
+      })
+      if (hasHierarchy) {
+        groups.push({ rowOffset: rows.length, key: outerKey })
+        rows.push(lineOf(`  ${outerKey}`, g.subtotal)) // 分组表头(=小计);前导空格给折叠按钮让位
+        if (!collapsedSet.has(outerKey)) {
+          for (const innerKey of uniqueSorted([...g.inner.keys()])) rows.push(lineOf(`　　${innerKey}`, g.inner.get(innerKey)!))
+        }
+      } else {
+        rows.push(lineOf(outerKey, g.subtotal)) // 单行字段:扁平,每个值一行
+      }
+    }
+    const grandLine: Array<string | number> = ['总计']
+    for (let ci = 0; ci < effectiveColKeys.length; ci++) for (let v = 0; v < valueRules.length; v++) grandLine.push(resolvePivotAcc(grand[ci][v], valueRules[v].summary))
+    rows.push(grandLine)
+    return { rows, rowLabel: header[0] as string, valueLabel: valueLabels.join('/'), groups }
+  }
+
+  private failPivot(message: string): false {
+    console.warn(`[ooxml-preview] ${message}`)
+    if (typeof window !== 'undefined') window.alert(message)
+    return false
+  }
+
+  private pivotFieldOptions(sel: MergeRange): PivotFieldOption[] {
+    const s = this.sheet
+    if (!s) return []
+    return this.pivotFieldOptionsForSheet(s, sel)
+  }
+
+  private pivotFieldOptionsForSheet(s: SheetModel, sel: MergeRange): PivotFieldOption[] {
+    if (sel.bottom <= sel.top) return []
+    const out: PivotFieldOption[] = []
+    for (let col = sel.left; col <= sel.right; col++) {
+      let numeric = 0
+      for (let row = sel.top + 1; row <= sel.bottom; row++) {
+        if (pivotNumber(s.cells.get(cellKey(row, col))?.raw) != null) numeric++
+      }
+      out.push({ index: col, label: this.pivotCellText(s, sel.top, col) || `字段${col - sel.left + 1}`, numeric: numeric > 0 })
+    }
+    return out
+  }
+
+  private pivotCellText(sheet: SheetModel, row: number, col: number): string {
+    if (sheet === this.sheet && this.renderer) return this.renderer.cellText(row, col).trim()
+    const raw = sheet.cells.get(cellKey(row, col))?.raw
+    return raw == null ? '' : String(raw).trim()
   }
 
   /**
@@ -2188,6 +2588,137 @@ type Hit =
 function cellRange(c: Cell): MergeRange {
   return { top: c.row, left: c.col, bottom: c.row, right: c.col }
 }
+function colLabel(col: number): string {
+  let n = col + 1
+  let s = ''
+  while (n > 0) {
+    const r = (n - 1) % 26
+    s = String.fromCharCode(65 + r) + s
+    n = Math.floor((n - 1) / 26)
+  }
+  return s
+}
+
+function parseCellRef(ref: string): Cell | null {
+  const m = /^\s*([A-Za-z]+)([1-9]\d*)\s*$/.exec(ref)
+  if (!m) return null
+  let col = 0
+  for (const ch of m[1].toUpperCase()) col = col * 26 + ch.charCodeAt(0) - 64
+  const row = Number(m[2]) - 1
+  col -= 1
+  return row >= 0 && row < MAX_GRID_ROWS && col >= 0 && col < MAX_GRID_COLS ? { row, col } : null
+}
+
+function pivotNumber(raw: CellModel['raw'] | undefined): number | null {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+  if (typeof raw === 'string') {
+    const n = Number(raw.replace(/,/g, '').trim())
+    if (Number.isFinite(n)) return n
+  }
+  return null
+}
+
+function keyFor(sheet: SheetModel, row: number, cols: number[]): string {
+  if (!cols.length) return ''
+  return cols.map((col) => {
+    const raw = sheet.cells.get(cellKey(row, col))?.raw
+    return raw == null || String(raw).trim() === '' ? '(空白)' : String(raw)
+  }).join(' / ')
+}
+
+function uniqueSorted(values: string[]): string[] {
+  return [...new Set(values)].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }))
+}
+
+function pivotFilterValues(sheet: SheetModel, sel: MergeRange, fields: PivotFieldOption[]): Record<number, string[]> {
+  const out: Record<number, string[]> = {}
+  for (const field of fields) {
+    const values: string[] = []
+    for (let row = sel.top + 1; row <= sel.bottom; row++) {
+      const raw = sheet.cells.get(cellKey(row, field.index))?.raw
+      if (raw != null && String(raw).trim() !== '') values.push(String(raw))
+    }
+    out[field.index] = uniqueSorted(values)
+  }
+  return out
+}
+
+function normalizePivotLayout(layout: Partial<PivotTableLayout> | undefined, rowField: number, valueField: number): PivotTableLayout {
+  return {
+    filters: layout?.filters?.map((rule) => ({ ...rule, values: rule.values?.slice() })) ?? [],
+    columns: layout?.columns?.slice() ?? [],
+    rows: layout?.rows?.length ? layout.rows.slice() : [rowField],
+    values: layout?.values?.length ? layout.values.map((rule) => ({ ...rule })) : [{ field: valueField, summary: 'sum' }],
+  }
+}
+
+function clonePivotLayout(layout: PivotTableLayout): PivotTableLayout {
+  return {
+    filters: layout.filters.map((rule) => ({ ...rule, values: rule.values?.slice() })),
+    columns: layout.columns.slice(),
+    rows: layout.rows.slice(),
+    values: layout.values.map((rule) => ({ ...rule })),
+  }
+}
+
+/** 一行是否通过所有筛选规则(WPS 语义:all 不过滤 / non-empty 去空 / equals 单值 / include 多选包含)。 */
+function pivotRowKept(sheet: SheetModel, row: number, filters: PivotFilterRule[]): boolean {
+  for (const rule of filters) {
+    const raw = sheet.cells.get(cellKey(row, rule.field))?.raw
+    const value = raw == null || String(raw).trim() === '' ? '' : String(raw)
+    if (rule.mode === 'non-empty' && !value) return false
+    if (rule.mode === 'equals' && value !== (rule.value ?? '')) return false
+    if (rule.mode === 'include' && rule.values && rule.values.length && !rule.values.includes(value)) return false
+  }
+  return true
+}
+
+function createPivotSheet(wb: WorkbookModel): SheetModel {
+  const base = 'PivotTable'
+  const used = new Set(wb.sheets.map((s) => s.name))
+  let name = base
+  let n = 1
+  while (used.has(name)) name = `${base}${++n}`
+  const sheet: SheetModel = {
+    name,
+    index: wb.sheets.length,
+    state: 'visible',
+    dimension: { rows: 0, cols: 0 },
+    cells: new Map(),
+    styles: [defaultPivotStyle()],
+    merges: [],
+    columns: new Map(),
+    rows: new Map(),
+    defaultColWidth: 80,
+    defaultRowHeight: 24,
+    freeze: { frozenRows: 0, frozenCols: 0 },
+    conditional: [],
+    dataValidations: [],
+    images: [],
+    charts: [],
+    shapes: [],
+    sparklines: [],
+    pivotTables: [],
+    showGridLines: true,
+  }
+  wb.sheets.push(sheet)
+  return sheet
+}
+
+function defaultPivotStyle(): CellStyle {
+  return {
+    font: { name: 'Calibri', size: 11, bold: false, italic: false, underline: false, strike: false, color: '#000000' },
+    fill: { type: 'none' },
+    borders: {},
+    hAlign: 'general',
+    vAlign: 'bottom',
+    wrapText: false,
+    shrinkToFit: false,
+    textRotation: 0,
+    indent: 0,
+    numFmt: 'General',
+  }
+}
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -2222,6 +2753,43 @@ export function compareCellValues(a: CellModel['raw'], b: CellModel['raw']): num
   }
   if (ra === 2) return (a ? 1 : 0) - (b ? 1 : 0)
   return String(a).localeCompare(String(b), undefined, { numeric: true })
+}
+
+type PivotAcc = { sum: number; count: number; max: number | null; min: number | null }
+
+function emptyPivotAcc(): PivotAcc {
+  return { sum: 0, count: 0, max: null, min: null }
+}
+
+function addPivotAcc(acc: PivotAcc, numeric: number | null, raw: CellModel['raw'] | undefined): void {
+  if (numeric != null) {
+    acc.sum += numeric
+    acc.count++
+    acc.max = acc.max == null ? numeric : Math.max(acc.max, numeric)
+    acc.min = acc.min == null ? numeric : Math.min(acc.min, numeric)
+  } else if (raw != null && String(raw).trim()) {
+    acc.count++
+  }
+}
+
+function mergePivotAcc(target: PivotAcc, source: PivotAcc): void {
+  target.sum += source.sum
+  target.count += source.count
+  if (source.max != null) target.max = target.max == null ? source.max : Math.max(target.max, source.max)
+  if (source.min != null) target.min = target.min == null ? source.min : Math.min(target.min, source.min)
+}
+
+function resolvePivotAcc(acc: PivotAcc, summary: PivotSummary): number {
+  if (summary === 'count') return acc.count
+  if (summary === 'avg') return acc.count ? acc.sum / acc.count : 0
+  if (summary === 'max') return acc.max ?? 0
+  if (summary === 'min') return acc.min ?? 0
+  return acc.sum
+}
+
+function pivotSummaryLabel(summary: PivotSummary): string {
+  const labels: Record<PivotSummary, string> = { sum: '求和项', count: '计数项', avg: '平均值', max: '最大值', min: '最小值' }
+  return labels[summary]
 }
 
 function typeRank(v: CellModel['raw']): number {

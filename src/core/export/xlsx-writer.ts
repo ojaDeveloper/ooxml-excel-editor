@@ -12,6 +12,7 @@ import { GridMetrics } from '../layout/grid-metrics'
 import { anchorRect } from '../overlay/anchor'
 import { emuToPx, DEFAULT_MDW, PX_PER_POINT } from '../layout/units'
 import { injectCellImagesIntoZip } from './wps-cellimages'
+import { injectPivotTablesIntoZip, restoreOriginalPivotPartsIntoZip } from './pivot-tables'
 import type { ExportProgressFn } from '../progress'
 import { checkAborted } from './abort'
 
@@ -30,6 +31,12 @@ export interface XlsxExportOptions {
   fidelity?: 'rebuild' | 'overlay'
   /** 原始 .xlsx 字节(overlay 模式用;由 exporter 从 host 注入,用方一般不直接传) */
   sourceBuffer?: ArrayBuffer
+  /**
+   * 透视表零件回注开关(默认 false,经 viewer 导出时随 `EditConfig.pivotTable` 自动注入)。
+   * 开启时:① App 内创建的透视表重建成真实 OOXML 零件(pivot-tables.ts);② overlay 模式
+   * 从 `sourceBuffer` 原样搬运原文件的透视表零件(ExcelJS 不建模 pivot,不搬运就丢)。
+   */
+  pivotTables?: boolean
   /** 长任务进度回调(zip 写出前/后 emit `{stage:'zip'}`;exceljs writeBuffer 黑盒) */
   onProgress?: ExportProgressFn
   /** 取消信号(zip 阶段前后检查) */
@@ -288,7 +295,7 @@ export async function workbookToXlsxBlob(workbook: WorkbookModel, opts: XlsxExpo
     const buf = await wb.xlsx.writeBuffer()
     checkAborted(opts.signal)
     opts.onProgress?.({ stage: 'zip', ratio: 1 })
-    return finalizeBlob(buf, workbook)
+    return finalizeBlob(buf, workbook, opts)
   }
 
   // 默认:从模型完整重建
@@ -307,14 +314,28 @@ export async function workbookToXlsxBlob(workbook: WorkbookModel, opts: XlsxExpo
   const buf = await wb.xlsx.writeBuffer()
   checkAborted(opts.signal)
   opts.onProgress?.({ stage: 'zip', ratio: 1 })
-  return finalizeBlob(buf, workbook)
+  return finalizeBlob(buf, workbook, opts)
 }
 
-/** ExcelJS 写出后:回注 WPS 单元格内嵌图(DISPIMG)私有件,再封 Blob。无内嵌图时零开销。 */
-function finalizeBlob(buf: ArrayBuffer, workbook: WorkbookModel): Blob {
+/**
+ * ExcelJS 写出后:回注 WPS 单元格内嵌图(DISPIMG)私有件 + 真实 OOXML 透视表零件,再封 Blob。
+ * 透视表回注受 `opts.pivotTables` 开关控制(默认关):先搬运原文件零件(overlay 有原件时),
+ * 再注 App 内创建的(编号自动避开已搬运的)。都没有时零开销。
+ */
+function finalizeBlob(buf: ArrayBuffer, workbook: WorkbookModel, opts: XlsxExportOptions): Blob {
   let bytes: Uint8Array = new Uint8Array(buf)
   if (workbook.cellImages && workbook.cellImages.size) {
     bytes = injectCellImagesIntoZip(bytes, workbook)
+  }
+  if (opts.pivotTables) {
+    try {
+      if (opts.fidelity === 'overlay' && opts.sourceBuffer) {
+        bytes = restoreOriginalPivotPartsIntoZip(bytes, new Uint8Array(opts.sourceBuffer))
+      }
+      bytes = injectPivotTablesIntoZip(bytes, workbook)
+    } catch {
+      /* 透视表回注失败不影响主体导出(静态结果仍在单元格里) */
+    }
   }
   return new Blob([bytes as BlobPart], { type: XLSX_MIME })
 }

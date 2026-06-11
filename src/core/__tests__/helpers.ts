@@ -38,6 +38,7 @@ export function makeSheet(over: Partial<SheetModel> = {}): SheetModel {
     charts: [],
     shapes: [],
     sparklines: [],
+    pivotTables: [],
     showGridLines: true,
   }
   return { ...base, ...over }

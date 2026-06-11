@@ -160,6 +160,7 @@ function buildSheet(ws: ExcelJS.Worksheet, index: number, theme: CssColor[], onR
     charts: [],
     shapes: [],
     sparklines: [],
+    pivotTables: [],
     pageSetup,
     showGridLines,
   }

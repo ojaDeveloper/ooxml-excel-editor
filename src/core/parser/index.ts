@@ -9,6 +9,7 @@ import { attachCellImages } from './cell-image-parser'
 import { attachRowMeta } from './row-meta-parser'
 import { attachSparklines } from './sparkline-parser'
 import { attachPageBreaks } from './page-break-parser'
+import { attachPivotTables } from './pivot-parser'
 
 export async function parseWorkbook(buffer: ArrayBuffer, onProgress?: ProgressFn): Promise<WorkbookModel> {
   // 1. 原始包(用于 theme / drawings / charts) —— 复用一份 buffer
@@ -44,6 +45,13 @@ export async function parseWorkbook(buffer: ArrayBuffer, onProgress?: ProgressFn
     attachSparklines(pkg, sheets)
   } catch (e) {
     console.warn('[ooxml-preview] sparklines 解析失败，跳过迷你图:', e)
+  }
+
+  // 4.5 透视表只读 UI 元数据(字段按钮/范围);数据仍由 worksheet 普通单元格显示
+  try {
+    attachPivotTables(pkg, sheets)
+  } catch (e) {
+    console.warn('[ooxml-preview] 透视表 UI 元数据解析失败，跳过:', e)
   }
 
   // 5. 手动分页符

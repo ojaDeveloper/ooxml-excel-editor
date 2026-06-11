@@ -174,6 +174,15 @@ function Demo() {
     navigator.clipboard?.writeText(JSON.stringify(json, null, 2)).catch(() => {})
     alert(`${json.length} 行已复制为 JSON · 首行: ${JSON.stringify(json[0] ?? {})}`.slice(0, 200))
   }
+  function jumpToLastRow() {
+    const viewer = ref.current
+    const wb = viewer?.getWorkbook()
+    if (!viewer || !wb) return
+    const sheet = wb.sheets[viewer.getActiveSheet()]
+    const row = Math.max(0, sheet.dimension.rows - 1)
+    viewer.scrollToCell(row, 0, { select: true })
+    alert(`已跳到末行 A${row + 1}`)
+  }
 
   // 开发期把命令式句柄挂 window,供 e2e 取几何/读数据(与 Vue demo 的 __excelViewer 对齐)
   if (import.meta.env.DEV) {
@@ -186,6 +195,7 @@ function Demo() {
     items.push(
       { id: 'pdf-watermark', kind: 'btn', label: 'PDF(页码+水印)', title: '演示 beforeRenderPage 钩子', onClick: () => void exportPdfWithWatermark() },
       { id: 'sheet-json', kind: 'btn', label: '数据→JSON', title: '演示数据读取 API getSheetJSON', onClick: showSheetJSON },
+      { id: 'jump-last-row', kind: 'btn', label: '跳到末行', title: '演示 scrollToCell(row,col,{select:true}) 导航 API', onClick: jumpToLastRow },
     )
   }
   if (src) {
@@ -330,13 +340,14 @@ function Demo() {
           fileName={fileName}
           plugins={plugins}
           editable={editMode}
+          pivotTable={true}
           cellImageFit={fit}
           recalc={editMode}
           readOnlyRanges={readOnlyRanges}
           editableTargets={editableTargetsApplied}
           readOnlyCellStyle={highlightReadOnly}
           editor={demoSelectEditor}
-          toolbar={['find', 'filter', 'clear-filter', 'separator', 'copy', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export']}
+          toolbar={['find', 'filter', 'sort', 'clear-filter', 'separator', 'copy', 'pivot-table', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export']}
           onSelectionChange={() => bumpSel()}
           onCellChange={(p) => {
             bumpSel() // 颜色回显随内容/样式变更刷新

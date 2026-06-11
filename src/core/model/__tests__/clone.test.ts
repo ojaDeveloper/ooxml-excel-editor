@@ -38,6 +38,21 @@ describe('clone — 轻量快照:重负载共享、可变部分克隆(性能)', 
     expect(cs.cells.get(cellKey(0, 0))).not.toBe(s.cells.get(cellKey(0, 0))) // 格克隆
     expect(cs.styles).not.toBe(s.styles) // styles 新数组(防 internStyle 追加污染)
   })
+
+  it('pivotTables 元数据克隆,布局变更不污染快照', () => {
+    const wb = workbook()
+    wb.sheets[0].pivotTables = [{
+      name: 'PivotTable1',
+      range: { top: 0, left: 0, bottom: 2, right: 2 },
+      fields: ['城市', '金额'],
+      buttons: [{ row: 0, col: 0, label: '城市', kind: 'row' }],
+      source: { sheetIndex: 0, range: { top: 0, left: 0, bottom: 10, right: 2 } },
+      layout: { filters: [], columns: [], rows: [0], values: [{ field: 1, summary: 'sum' }] },
+    }]
+    const snap = cloneWorkbook(wb)
+    wb.sheets[0].pivotTables[0].layout!.values[0].summary = 'avg'
+    expect(snap.sheets[0].pivotTables[0].layout!.values[0].summary).toBe('sum')
+  })
 })
 
 describe('clone — cloneWorkbook + restoreWorkbookInto(脏状态还原;E3.5)', () => {
@@ -73,5 +88,17 @@ describe('clone — cloneWorkbook + restoreWorkbookInto(脏状态还原;E3.5)', 
     setColumnWidth(wb.sheets[0], 0, 999)
     restoreWorkbookInto(wb, baseline) // 第二次还原
     expect(wb.sheets[0].columns.get(0)).toMatchObject({ width: 64 })
+  })
+
+  it('restoreWorkbookInto:还原 sheet 数量,撤销新增工作表', () => {
+    const wb = workbook()
+    const baseline = cloneWorkbook(wb)
+    wb.sheets.push({ ...wb.sheets[0], name: 'PivotTable', index: 1, cells: new Map() })
+    wb.activeSheet = 1
+
+    restoreWorkbookInto(wb, baseline)
+    expect(wb.sheets).toHaveLength(1)
+    expect(wb.activeSheet).toBe(0)
+    expect(wb.sheets[0].name).toBe('S1')
   })
 })

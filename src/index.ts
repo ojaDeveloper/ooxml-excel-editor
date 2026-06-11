@@ -45,6 +45,13 @@ export type {
   ImageAnchor,
   ShapeSpec,
   Sparkline,
+  PivotTableModel,
+  PivotButton,
+  PivotTableLayout,
+  PivotFilterRule,
+  PivotValueRule,
+  PivotSummary,
+  PivotFilterMode,
   CssColor,
   TransformModelFn,
   CellStyleFn,
@@ -65,6 +72,8 @@ export type {
   PluginEvent,
   Rect,
   ToolbarItem,
+  CreatePivotTableOptions,
+  PivotOutput,
 } from './core/plugin'
 
 // 扩展: 导出 / 打印(选项类型 + beforeRenderPage 钩子)。

@@ -57,9 +57,44 @@ function run(label: string, url: string, canvasSel: string, handle: string, scro
     }, handle)) as number
     expect(dimRowsAfter).toBe(dimRows)
   })
+
+  test(`${label}: scrollToCell 定位目标格且不改 dimension`, async ({ page }) => {
+    await page.goto(url)
+    await ready(page, canvasSel, handle)
+
+    const before = (await page.evaluate((h) => {
+      const v = (window as any)[h]
+      return v.getWorkbook().sheets[v.getActiveSheet()].dimension.rows
+    }, handle)) as number
+
+    const ok = await call(page, handle, 'scrollToCell', before + 30, 3, { select: true })
+    expect(ok).toBe(true)
+    const selection = (await call(page, handle, 'getSelection')) as { top: number; left: number; bottom: number; right: number }
+    expect(selection).toEqual({ top: before + 30, left: 3, bottom: before + 30, right: 3 })
+    const scrollTop = await page.locator(scrollerSel).evaluate((el) => (el as HTMLElement).scrollTop)
+    expect(scrollTop).toBeGreaterThan(0)
+
+    const after = (await page.evaluate((h) => {
+      const v = (window as any)[h]
+      return v.getWorkbook().sheets[v.getActiveSheet()].dimension.rows
+    }, handle)) as number
+    expect(after).toBe(before)
+  })
 }
 
 test.describe('虚拟空行(滚动自动延伸,不动 dimension)e2e', () => {
   run('Vue', '/', 'canvas.grid-canvas', '__excelViewer', '.scroller', '.scroller > .spacer')
   run('React', '/react.html', 'canvas.rxl-canvas', '__excelViewerReact', '.rxl-scroller', '.rxl-scroller > .rxl-spacer')
+
+  test('Vue demo: 跳到末行按钮调用 scrollToCell', async ({ page }) => {
+    await page.goto('/')
+    await ready(page, 'canvas.grid-canvas', '__excelViewer')
+    await page.getByRole('button', { name: '跳到末行' }).click()
+    const selection = await call(page, '__excelViewer', 'getSelection') as { top: number; left: number; bottom: number; right: number }
+    const rows = await page.evaluate(() => {
+      const v = (window as any).__excelViewer
+      return v.getWorkbook().sheets[v.getActiveSheet()].dimension.rows
+    }) as number
+    expect(selection).toEqual({ top: rows - 1, left: 0, bottom: rows - 1, right: 0 })
+  })
 })

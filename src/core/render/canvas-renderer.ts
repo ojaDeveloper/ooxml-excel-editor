@@ -22,6 +22,7 @@ import {
 } from './text'
 import { autoFitRowHeights } from '../layout/autofit'
 import { drawFilterButton, filterButtonBox, isFilterHeader } from './autofilter'
+import { drawPivotToggle, pivotToggleBox } from './pivot-toggle'
 
 /**
  * WPS 单元格内嵌图(DISPIMG)在格内的贴合方式:
@@ -550,8 +551,55 @@ export class CanvasRenderer {
     if (flags.headers) this.drawHeaders(layout.panes, view)
     this.drawFreezeLines(layout) // 导出时 freeze=0 → 直接返回
     if (flags.pageBreaks) this.drawPageBreaks(view)
+    if (flags.selection) this.drawPivotToggles(view) // 折叠按钮只在实时视图画,导出件不画
     if (flags.selection && this.findHits.length) this.drawFind(view)
     if (flags.selection) this.drawSelection(view)
+  }
+
+  /** 画各透视表的行分组折叠/展开按钮(贴在分组表头格最左)。 */
+  private drawPivotToggles(view: ViewState): void {
+    const tables = this.sheet.pivotTables
+    if (!tables?.length) return
+    const hw = this.metrics.rowHeaderWidth
+    const hh = this.metrics.colHeaderHeight
+    const ctx = this.ctx
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(hw, hh, view.width - hw, view.height - hh)
+    ctx.clip()
+    for (const pivot of tables) {
+      const groups = pivot.rowGroups
+      if (!groups?.length) continue
+      const collapsed = new Set(pivot.collapsed ?? [])
+      const col = pivot.range.left
+      for (const g of groups) {
+        const rect = this.cellScreenRect(view, g.row, col)
+        if (rect.x + rect.w < hw || rect.y + rect.h < hh || rect.x > view.width || rect.y > view.height) continue
+        const box = pivotToggleBox(rect.x, rect.y, rect.w, rect.h)
+        if (box) drawPivotToggle(ctx, box.x, box.y, box.size, collapsed.has(g.key))
+      }
+    }
+    ctx.restore()
+  }
+
+  /** 屏幕坐标是否落在某透视表的折叠按钮上;是则返回 { tableIdx, key }。 */
+  pivotToggleAt(view: ViewState, px: number, py: number): { tableIdx: number; key: string } | null {
+    const tables = this.sheet.pivotTables
+    if (!tables?.length) return null
+    const cell = this.cellAtScreen(view, px, py)
+    if (!cell) return null
+    for (let ti = 0; ti < tables.length; ti++) {
+      const pivot = tables[ti]
+      const groups = pivot.rowGroups
+      if (!groups?.length || cell.col !== pivot.range.left) continue
+      for (const g of groups) {
+        if (g.row !== cell.row) continue
+        const rect = this.cellScreenRect(view, g.row, pivot.range.left)
+        const box = pivotToggleBox(rect.x, rect.y, rect.w, rect.h)
+        if (box && px >= box.x && px <= box.x + box.size && py >= box.y && py <= box.y + box.size) return { tableIdx: ti, key: g.key }
+      }
+    }
+    return null
   }
 
   /** 查找高亮: 所有命中淡黄,当前项橙色描边 */
@@ -1398,7 +1446,7 @@ export class CanvasRenderer {
   }
 
   private styleOf(cell: CellModel): CellStyle {
-    const base = this.sheet.styles[cell.styleId]
+    const base = this.sheet.styles[cell.styleId] ?? defaultCellStyle()
     const editable = this.isEditableFn(cell.row, cell.col)
     let out: CellStyle = base
     // ① cellStyle 钩子 (传入 ctx.editable;旧 (cell, pos) => ... 签名兼容,第 3 入参可选)
@@ -1421,6 +1469,21 @@ export class CanvasRenderer {
       if (roOver) out = mergeStyleOverride(out, roOver)
     }
     return out
+  }
+}
+
+function defaultCellStyle(): CellStyle {
+  return {
+    font: { name: 'Calibri', size: 11, bold: false, italic: false, underline: false, strike: false, color: '#000000' },
+    fill: { type: 'none' },
+    borders: {},
+    hAlign: 'general',
+    vAlign: 'bottom',
+    wrapText: false,
+    shrinkToFit: false,
+    textRotation: 0,
+    indent: 0,
+    numFmt: 'General',
   }
 }
 

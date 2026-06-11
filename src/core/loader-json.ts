@@ -68,6 +68,7 @@ function makeSheet(name: string, index: number): SheetModel {
     charts: [],
     shapes: [],
     sparklines: [],
+    pivotTables: [],
     showGridLines: true,
   }
 }

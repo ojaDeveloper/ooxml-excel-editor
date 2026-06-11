@@ -38,6 +38,8 @@ export interface ExporterHost {
   getFileName(): string | undefined
   /** 原始 .xlsx 字节(高保真 overlay 导出重载原件用;无则返回 null,overlay 回退 rebuild) */
   getSourceBuffer?(): ArrayBuffer | null
+  /** 透视表功能是否开启(EditConfig.pivotTable;决定 xlsx 导出是否回注/保留 pivot 零件) */
+  isPivotEnabled?(): boolean
 }
 
 export class WorkbookExporter {
@@ -399,6 +401,7 @@ export class WorkbookExporter {
       const buf = this.host.getSourceBuffer?.() ?? null
       if (buf) o.sourceBuffer = buf // 注入原件;无则 writer 自动回退 rebuild
     }
+    o.pivotTables ??= this.host.isPivotEnabled?.() ?? false // 透视表零件回注随功能开关
     return workbookToXlsxBlob(wb, o)
   }
   async downloadXlsx(opts?: XlsxExportOptions): Promise<void> {

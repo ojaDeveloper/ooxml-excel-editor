@@ -60,6 +60,7 @@ function makeInvoiceTemplate(): WorkbookModel {
     charts: [],
     shapes: [],
     sparklines: [],
+    pivotTables: [],
     showGridLines: false,
   }
   // 装饰文字 (会被丢弃, 仅用于验证清空)

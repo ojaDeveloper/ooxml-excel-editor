@@ -35,6 +35,13 @@ export type {
   ImageAnchor,
   ShapeSpec,
   Sparkline,
+  PivotTableModel,
+  PivotButton,
+  PivotTableLayout,
+  PivotFilterRule,
+  PivotValueRule,
+  PivotSummary,
+  PivotFilterMode,
   CssColor,
   TransformModelFn,
   CellStyleFn,
@@ -126,6 +133,8 @@ export type {
   Rect,
   ToolbarItem,
   ViewerApi,
+  CreatePivotTableOptions,
+  PivotOutput,
 } from './plugin'
 
 // ---- 布局 / 格式 ----

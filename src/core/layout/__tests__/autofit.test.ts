@@ -41,7 +41,7 @@ function makeSheet(cell: { text: string; wrap: boolean }, colWidth: number): She
     rows: new Map(),
     defaultColWidth: 64, defaultRowHeight: 20,
     freeze: { frozenRows: 0, frozenCols: 0 },
-    conditional: [], dataValidations: [], images: [], charts: [], shapes: [], sparklines: [], showGridLines: true,
+    conditional: [], dataValidations: [], images: [], charts: [], shapes: [], sparklines: [], pivotTables: [], showGridLines: true,
   }
 }
 

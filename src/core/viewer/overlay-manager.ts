@@ -43,6 +43,12 @@ interface ShapeEl {
   shapeIdx: number
   quad: Quad
 }
+interface PivotButtonEl {
+  el: HTMLButtonElement
+  tableIdx: number
+  buttonIdx: number
+  quad: Quad
+}
 
 const CHART_BOX_CSS =
   'position:absolute;background:rgba(255,255,255,0.96);border:1px solid #e2e4e7;box-shadow:0 1px 4px rgba(0,0,0,0.08);'
@@ -54,6 +60,7 @@ export class OverlayManager {
   private imageEls: ImageEl[] = []
   private chartPlaceholders: ChartPlaceholder[] = []
   private shapeEls: ShapeEl[] = []
+  private pivotButtonEls: PivotButtonEl[] = []
   /** 防止异步加载 echarts 期间已切表/重建: build 自增,await 后 token 变了就放弃 */
   private buildToken = 0
 
@@ -84,6 +91,8 @@ export class OverlayManager {
     this.chartPlaceholders = []
     for (const sh of this.shapeEls) sh.el.remove()
     this.shapeEls = []
+    for (const p of this.pivotButtonEls) p.el.remove()
+    this.pivotButtonEls = []
     for (const im of this.imageEls) im.el.remove()
     this.imageEls = []
   }
@@ -170,6 +179,33 @@ export class OverlayManager {
         }
       }
     }
+
+    for (let ti = 0; ti < sheet.pivotTables.length; ti++) {
+      const table = sheet.pivotTables[ti]
+      for (let bi = 0; bi < table.buttons.length; bi++) {
+        const btn = table.buttons[bi]
+        const anchor: ImageAnchor = {
+          src: '',
+          from: { row: btn.row, col: btn.col, rowOffEmu: 0, colOffEmu: 0 },
+          to: { row: btn.row + 1, col: btn.col + 1, rowOffEmu: 0, colOffEmu: 0 },
+        }
+        const quad = this.quadrantOf(anchor, renderer)
+        const el = document.createElement('button')
+        el.type = 'button'
+        el.className = `ooxml-pivot-button ${btn.kind}`
+        el.title = `${table.name}: ${btn.label}`
+        el.setAttribute('aria-label', `透视表字段 ${btn.label}`)
+        const label = document.createElement('span')
+        label.className = 'ooxml-pivot-label'
+        label.textContent = btn.label
+        const caret = document.createElement('span')
+        caret.className = 'ooxml-pivot-caret'
+        caret.textContent = '▾'
+        el.append(label, caret)
+        this.container(quad).appendChild(el)
+        this.pivotButtonEls.push({ el, tableIdx: ti, buttonIdx: bi, quad })
+      }
+    }
     this.position(sheet, renderer, view)
   }
 
@@ -211,6 +247,21 @@ export class OverlayManager {
     for (const p of this.chartPlaceholders) {
       placeInQuad(p.el, anchorRect(renderer.metrics, p.spec.anchor), p.quad, fw, fh, view)
     }
+    for (const p of this.pivotButtonEls) {
+      const btn = sheet.pivotTables[p.tableIdx]?.buttons[p.buttonIdx]
+      if (!btn) continue
+      const rect = cellRect(renderer, btn.row, btn.col)
+      placeInQuad(p.el, rect, p.quad, fw, fh, view)
+    }
+  }
+}
+
+function cellRect(renderer: CanvasRenderer, row: number, col: number) {
+  return {
+    left: renderer.metrics.colLeft(col),
+    top: renderer.metrics.rowTop(row),
+    width: renderer.metrics.colWidth(col),
+    height: renderer.metrics.rowHeight(row),
   }
 }
 

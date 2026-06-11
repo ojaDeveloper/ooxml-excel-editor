@@ -114,6 +114,12 @@ export interface ExcelViewerProps {
   plugins?: ExcelPlugin[]
   /** 编辑总开关:默认 false = 只读(行为不变)。开启后才能进入编辑(E0:闸门) */
   editable?: boolean
+  /**
+   * 透视表功能开关:默认 false = 关闭。开启后(还需 `editable`)工具栏 `pivot-table` 入口可见、
+   * `createPivotTable`/`openPivotTableDialog` 等 API 生效、导出 .xlsx 回注真实 OOXML 透视表零件
+   * (overlay 模式同时保留原文件透视表)。
+   */
+  pivotTable?: boolean
   /** 按格只读判定:返回 true = 只读(cell 为空格时传 null) */
   cellReadOnly?: (cell: CellModel | null, pos: { row: number; col: number }) => boolean | void
   /** 只读区域(0-based 闭区间);命中即只读 */
@@ -143,10 +149,10 @@ export interface ExcelViewerProps {
   formulaEngine?: FormulaEngineFactory
   /**
    * 操作工具栏配置 (跟 Vue 3/Vue 2 同 API):
-   * - `true`/不传(默认): 显示默认两项 ['find', 'filter']
+   * - `true`/不传(默认): 显示默认三项 ['find', 'filter', 'sort']
    * - `false`: 隐藏整条工具栏
    * - 数组: 显式控制项与顺序 (内置 id 或自定义 ToolbarItem)
-   * - 内置 id: find / filter / clear-filter / copy / wrap-text / template / image-tools /
+   * - 内置 id: find / filter / sort / clear-filter / copy / wrap-text / template / image-tools /
    *   freeze / export / zoom / 'separator' (或 '|')
    */
   toolbar?: boolean | Array<string | import('@/core/plugin').ToolbarItem>
@@ -183,12 +189,17 @@ export interface ExcelViewerHandle {
   setActiveSheet: (i: number) => void
   getSelection: () => MergeRange | null
   setSelection: (range: MergeRange) => void
+  scrollToCell: (row: number, col: number, opts?: { select?: boolean }) => boolean
   rectOf: (row: number, col: number) => { x: number; y: number; w: number; h: number } | null
   rectOfRange: (range: MergeRange) => { x: number; y: number; w: number; h: number } | null
   redraw: () => void
   isCellEditable: (row: number, col: number) => boolean
   setEditableTargets: (targets: EditableTarget | EditableTarget[] | undefined) => void
   getEditableTargets: () => EditableTarget | EditableTarget[] | undefined
+  sortActiveColumn: (dir: 'asc' | 'desc') => boolean
+  createPivotTable: ViewerApi['createPivotTable']
+  createPivotTableFromSelection: ViewerApi['createPivotTableFromSelection']
+  openPivotTableDialog: ViewerApi['openPivotTableDialog']
   editCell: (row: number, col: number, value: CellValue) => boolean
   editRange: (range: MergeRange, values: CellValue[][]) => boolean
   clearRange: (range: MergeRange) => boolean
@@ -377,6 +388,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     const p = propsRef.current
     return {
       editable: p.editable,
+      pivotTable: p.pivotTable,
       cellReadOnly: p.cellReadOnly,
       readOnlyRanges: p.readOnlyRanges,
       editableTargets: p.editableTargets,
@@ -493,6 +505,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
         },
         onFindChange: () => force(),
         onFilterChange: () => force(),
+        onActiveSheetChange: (index) => setActiveSheet(index),
         onEditEvent: (event, payload) => {
           if (event === 'cell-change') {
             force() // 编辑改了格内容 → 重渲 chrome(公式栏联动);cell-change 非高频,安全
@@ -685,12 +698,17 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       setActiveSheet: (i) => workbook?.sheets[i] && setActiveSheet(i),
       getSelection: () => controllerRef.current?.getSelection() ?? null,
       setSelection: (range) => controllerRef.current?.setSelectionRange(range),
+      scrollToCell: (row, col, opts) => controllerRef.current?.scrollToCell(row, col, opts) ?? false,
       rectOf: (row, col) => controllerRef.current?.rectOf(row, col) ?? null,
       rectOfRange: (range) => controllerRef.current?.rectOfRange(range) ?? null,
       redraw: () => controllerRef.current?.render(),
       isCellEditable: (row, col) => controllerRef.current?.isCellEditable(row, col) ?? false,
       setEditableTargets: (targets) => controllerRef.current?.setEditableTargets(targets),
       getEditableTargets: () => controllerRef.current?.getEditableTargets(),
+      sortActiveColumn: (dir) => controllerRef.current?.sortActiveColumn(dir) ?? false,
+      createPivotTable: (opts) => controllerRef.current?.createPivotTable(opts) ?? false,
+      createPivotTableFromSelection: (opts) => controllerRef.current?.createPivotTableFromSelection(opts) ?? false,
+      openPivotTableDialog: () => controllerRef.current?.openPivotTableDialog() ?? false,
       editCell: (row, col, value) => controllerRef.current?.editCell(row, col, value) ?? false,
       editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
       clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
@@ -798,12 +816,17 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     },
     getSelection: () => controllerRef.current?.getSelection() ?? null,
     setSelection: (range) => controllerRef.current?.setSelectionRange(range),
+    scrollToCell: (row, col, opts) => controllerRef.current?.scrollToCell(row, col, opts) ?? false,
     rectOf: (row, col) => controllerRef.current?.rectOf(row, col) ?? null,
     rectOfRange: (range) => controllerRef.current?.rectOfRange(range) ?? null,
     redraw: () => controllerRef.current?.render(),
     isCellEditable: (row, col) => controllerRef.current?.isCellEditable(row, col) ?? false,
     setEditableTargets: (targets) => controllerRef.current?.setEditableTargets(targets),
     getEditableTargets: () => controllerRef.current?.getEditableTargets(),
+    sortActiveColumn: (dir) => controllerRef.current?.sortActiveColumn(dir) ?? false,
+    createPivotTable: (opts) => controllerRef.current?.createPivotTable(opts) ?? false,
+    createPivotTableFromSelection: (opts) => controllerRef.current?.createPivotTableFromSelection(opts) ?? false,
+    openPivotTableDialog: () => controllerRef.current?.openPivotTableDialog() ?? false,
     editCell: (row, col, value) => controllerRef.current?.editCell(row, col, value) ?? false,
     editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
     clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
@@ -1008,7 +1031,22 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       case 'find': return bi({ id, iconSvg: I('find'), label: '查找', title: '查找 (Ctrl+F)', active: findOpen, onClick: () => (findOpen ? closeFind() : setFindOpen(true)) })
       case 'filter': return bi({ id, iconSvg: I('filter'), label: '筛选', title: '切换自动筛选', active: !!sheet?.autoFilterRange, onClick: () => ctrl?.toggleAutoFilter() })
       case 'clear-filter': return bi({ id, iconSvg: I('clear-filter'), label: '清除筛选', title: '清除当前表全部筛选', disabled: !ctrl?.hasFilters(), onClick: () => ctrl?.clearAllFilters() })
+      case 'sort': {
+        const sortState = ctrl?.getSortState()
+        const act = ctrl?.getActiveCell()
+        const disabled = !act || !sheet
+        return bi({
+          id, iconSvg: I('sort'), label: '排序',
+          title: act ? `按 ${colIndexToLetters(act.col)} 列排序` : '选中一个单元格后按该列排序',
+          active: !!(act && sortState?.col === act.col && sortState.dir), disabled,
+          items: [
+            bi({ id: 'sort-asc', label: '升序 (A → Z / 小 → 大)', active: !!(act && sortState?.col === act.col && sortState.dir === 'asc'), disabled, onClick: () => ctrl?.sortActiveColumn('asc') }),
+            bi({ id: 'sort-desc', label: '降序 (Z → A / 大 → 小)', active: !!(act && sortState?.col === act.col && sortState.dir === 'desc'), disabled, onClick: () => ctrl?.sortActiveColumn('desc') }),
+          ],
+        })
+      }
       case 'copy': return bi({ id, iconSvg: I('copy'), label: '复制', title: '复制选区 (Ctrl+C)', disabled: !selection, onClick: () => void ctrl?.copySelection() })
+      case 'pivot-table': return props.pivotTable ? bi({ id, iconSvg: I('pivot-table'), label: '透视表', title: '选择字段并基于当前选区创建静态透视汇总表', disabled: !selection || !props.editable, onClick: () => ctrl?.openPivotTableDialog() }) : null // 功能未开启(默认):不渲染入口
       case 'wrap-text': {
         const wrapState = ctrl?.getSelectionWrapState() ?? 'none'
         return bi({ id, iconSvg: I('wrap-text'), label: '自动换行', title: '自动换行(选区,WPS 风格 toggle)', active: wrapState === 'all', disabled: !selection || !props.editable, onClick: () => void ctrl?.toggleWrapTextOnSelection() })
@@ -1079,7 +1117,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   }
   const resolvedToolbar: ResolvedToolbarItem[] = (() => {
     if (props.toolbar === false) return []
-    const entries: Array<string | ToolbarItem> = Array.isArray(props.toolbar) ? props.toolbar : ['find', 'filter']
+    const entries: Array<string | ToolbarItem> = Array.isArray(props.toolbar) ? props.toolbar : ['find', 'filter', 'sort']
     const out: ResolvedToolbarItem[] = []
     for (const e of entries) {
       if (typeof e === 'string') {

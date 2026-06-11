@@ -58,4 +58,14 @@ test.describe('排序 e2e(筛选下拉 升序/降序 → 行重排)', () => {
     const topProduct = await page.evaluate(() => (window as any).__excelViewer.getCellText(2, 0))
     expect(topProduct).toBe('笔记本电脑')
   })
+
+  test('工具栏排序按活动列升序', async ({ page }) => {
+    await loadSample(page)
+    await page.evaluate((c) => (window as any).__excelViewer.setSelection({ top: 2, left: c, bottom: 2, right: c }), PRICE_COL)
+    await page.locator('.action-toolbar').getByRole('button', { name: /排序/ }).click()
+    await page.locator('.tb-menu').getByRole('button', { name: /升序/ }).click()
+
+    const asc = await page.evaluate((c) => [2, 3, 4, 5, 6].map((r) => (window as any).__excelViewer.getCellValue(r, c) as number), PRICE_COL)
+    expect(asc).toEqual([...asc].sort((a, b) => a - b))
+  })
 })

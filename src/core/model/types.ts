@@ -252,6 +252,8 @@ export interface SheetModel {
   shapes: ShapeSpec[]
   /** 迷你图(单元格内嵌折线/柱/盈亏图) */
   sparklines: Sparkline[]
+  /** 透视表只读 UI 元数据:用于叠加字段按钮/下拉箭头;数据仍按普通单元格显示 */
+  pivotTables: PivotTableModel[]
   /** 手动分页符(0-based 边界索引): 在这些行上方/列左侧画分页虚线 */
   pageBreaks?: { rows: number[]; cols: number[] }
   /** 原生页面设置(打印/导出默认值来源);缺省走 export 模块默认 */
@@ -303,6 +305,42 @@ export interface Sparkline {
   /** 主色(可选，缺省用默认蓝) */
   color?: CssColor
   negativeColor?: CssColor
+}
+
+/** 透视表字段按钮(只读 UI):按钮锚在对应标题/筛选单元格上。 */
+export interface PivotButton {
+  row: number
+  col: number
+  label: string
+  kind: 'row' | 'col' | 'page' | 'data' | 'field'
+}
+
+/** 透视表模型(只读):范围来自 pivotTableDefinition/location,字段来自 cacheFields + axis/dataFields。 */
+export interface PivotTableModel {
+  name: string
+  range: MergeRange
+  fields: string[]
+  buttons: PivotButton[]
+  /** 静态透视表来源:当前模型内的源表 index + 源数据区域。用于运行时重建/后续导出。 */
+  source?: { sheetIndex: number; range: MergeRange }
+  /** 运行时透视布局元数据:字段 index 均为源数据区域内的绝对列 index。 */
+  layout?: PivotTableLayout
+  /** 已折叠的外层行分组 key(行字段 ≥2 时,外层分组可折叠隐藏明细;空/缺省 = 全展开)。 */
+  collapsed?: string[]
+  /** 运行时:可折叠的分组表头所在输出行(绝对行号)+ 外层 key;每次重算刷新,供渲染折叠按钮 + 命中测试。 */
+  rowGroups?: { row: number; key: string }[]
+}
+
+export type PivotSummary = 'sum' | 'count' | 'avg' | 'max' | 'min'
+/** all=全部 / non-empty=非空 / equals=单值等于 / include=多选包含(values 列出保留值,空=不约束)。 */
+export type PivotFilterMode = 'all' | 'non-empty' | 'equals' | 'include'
+export interface PivotFilterRule { field: number; mode: PivotFilterMode; value?: string; values?: string[] }
+export interface PivotValueRule { field: number; summary: PivotSummary }
+export interface PivotTableLayout {
+  filters: PivotFilterRule[]
+  columns: number[]
+  rows: number[]
+  values: PivotValueRule[]
 }
 
 export interface WorkbookModel {

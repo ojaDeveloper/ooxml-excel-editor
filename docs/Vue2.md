@@ -110,7 +110,7 @@ Vue 2 壳代码统一从 `@vue/composition-api` import Composition API (`ref` / 
 | **数据源** | `src` / `workbook` / `jsonOptions` / `templateFile` / `templateName` / `fileName` |
 | **主题** | `theme` / `cellStyle` / `cellImageFit` / `readOnlyCellStyle` |
 | **交互** | `imageLightbox` / `openLinks` / `contextMenu` / `toolbar` |
-| **编辑** | `editable` / `cellReadOnly` / `readOnlyRanges` / `editableTargets` / `strictDimensions` / `editor` / `recalc` / `formulaEngine` |
+| **编辑** | `editable` / `pivotTable`(透视表开关,默认关) / `cellReadOnly` / `readOnlyRanges` / `editableTargets` / `strictDimensions` / `editor` / `recalc` / `formulaEngine` |
 | **数据钩子** | `transformModel` / `plugins` |
 
 ### Events (15 项)

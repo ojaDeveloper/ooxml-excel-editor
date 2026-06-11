@@ -2,6 +2,54 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.4.0] - 2026-06-11
+
+**透视表(Pivot Table)完整闭环** — WPS 式创建入口 → 右侧字段面板 → 编程 API → **导出真实 OOXML 透视表零件**,并支持**活刷新 / 折叠展开 / 多选筛选**。整个功能由 **`pivotTable` 配置开启,默认关闭**(三 demo 已开启)。另含 `scrollToCell` 导航 API 与工具栏 `sort` 内置项。
+
+### 新增
+
+#### 透视结果"活"化 + 多选筛选(2026-06-11)
+
+- **活刷新**:编辑源数据区任意单元格(含撤销/重做,统一走 `onModelChange` chokepoint)后,所有透视表按其 `source` 区域自动重算 —— 从"静态快照"变"活对象"。重算经唯一入口 `recomputePivot`(面板改布局 / 活刷新 / 折叠展开三处共用),直接改模型不入命令栈(派生态),`pivotRefreshing` 防重入,无透视表 / 功能关闭时零开销。
+- **行分组折叠/展开**:放 ≥2 个行字段时 `buildPivotRows` 产出"大纲"——外层分组行带小计、内层缩进明细;分组表头行首画 [−]/[+] 折叠按钮(canvas 绘制 + `CanvasRenderer.pivotToggleAt` 命中,与 autofilter 下拉同款),点击折叠/展开该组。折叠状态存 `PivotTableModel.collapsed`,运行时 `rowGroups` 记录可折叠表头行供渲染/命中。单行字段退化为扁平结果(无折叠),既有行为不变。
+- **空白起步 + 字段勾选联动 + 新建表显示**(2026-06-11,修用户反馈):① 对话框创建的透视表不再自动猜字段(此前会把"首个数值列=值、首个其它列=行"硬塞,常把"编号/ID"列当行字段),改为空白占位 + 面板选字段填充,对齐 WPS/Excel;`createPivotTable` 仅在显式传 `layout.rows/values` 时沿用字段(编程 API 不变)。② 字段列表复选框从 `disabled` 改为可点 —— 勾选即加入(数值→值/其它→行),取消即移出,顶部字段列表与底部四区双向联动。③ 修「新建工作表」输出后新表 tab 不显示:Vue 3 壳 `workbook` 是 `shallowRef`,`sheets.push` 不触发 `SheetTabs` 的 `computed` 重算 → 给 SheetTabs 加 `:key` 版本号,`onActiveSheetChange` 时 +1 强制重渲(React/Vue 2 壳内联重读,本就正常)。
+- **四区大白话 tooltip + 列交叉表确认**:字段面板「筛选器 / 列 / 行 / 值」每个区加 hover 说明(区标题带 ⓘ),筛选器/列空着时方框内还有一句引导;补 e2e 证实「列」字段确实横向展开成二维交叉表。
+- **多选筛选**:`PivotFilterMode` 增 `'include'`(`PivotFilterRule.values` 列出保留值)。字段面板筛选 chip 点开底部明细面板,可选 全部 / 非空 / 多选(勾选具体值,带全选/清空)。导出对齐 WPS:`include`/`non-empty` → `multipleItemSelectionAllowed` + 未选项 `item@h=1`。
+
+#### `pivotTable` 功能开关(默认关闭,opt-in)
+
+#### `pivotTable` 功能开关(默认关闭,opt-in)
+
+- 三壳同名 boolean prop(`:pivot-table` / `pivotTable`),进 `EditConfig.pivotTable`。**默认 `false`:工具栏 `pivot-table` 入口不渲染、`createPivotTable`/`openPivotTableDialog` 等 API 返回 `false` 并提示、导出不回注 pivot 零件 —— 行为与历史版本完全一致(零回归)**。开启后(还需 `editable`)下述全部能力生效。直接用 core `workbookToXlsxBlob` 时对应 `XlsxExportOptions.pivotTables`(经 viewer 导出时自动随开关注入)。
+
+#### 透视表创建(WPS 风格,core 落地、三壳共用)
+
+- **工具栏 `pivot-table` 入口**(需 `editable`):选中带表头数据区 → 「创建透视表」对话框选择生成位置(现有工作表指定单元格 / 新建工作表)→ 写出静态透视汇总表,入命令栈(undo 整体还原)。
+- **右侧「数据透视表」字段面板**(框架无关 body 级 DOM,[src/core/viewer/pivot-dialog-host.ts](src/core/viewer/pivot-dialog-host.ts)):字段搜索;按钮/拖拽把字段加入 **筛选器 / 列 / 行 / 值** 四区;拖到移除区删除;筛选器支持 全部/非空/具体值;值字段可多个、汇总方式可切 求和/计数/平均值/最大值/最小值;每次变更重建静态结果。
+- **编程 API**:`createPivotTable({ sourceRange, sourceSheetIndex, output, layout, showPanel })` 不经页面直接创建;`createPivotTableFromSelection()` 选区快捷;`openPivotTableDialog()` 打开入口对话框。三壳(Vue3 ref / React handle / Vue2 viewerApi)+ 插件 `viewer` 均已暴露。
+- **模型元数据**:`PivotTableModel` 保存 `source`(源表 + 源区域)与 `layout`(四区布局),`cloneWorkbook` 深克隆,undo 快照不被面板操作污染。
+
+#### 导出真实 OOXML 透视表零件 ([src/core/export/pivot-tables.ts](src/core/export/pivot-tables.ts))
+
+- ExcelJS 不建模 pivot 零件,写出后在 **zip 层回注**(同 WPS cellimages 模式):`pivotCacheDefinition`(cacheSource + cacheFields/sharedItems)+ `pivotCacheRecords`(源数据行)+ `pivotTableDefinition`(location / pivotFields / row/col/page/dataFields / 样式)+ workbook `<pivotCaches>` + 全套 rels + `[Content_Types].xml`。
+- `refreshOnLoad="1"`:Excel/WPS 打开导出件即识别为**真透视表**并按源区域重算原生布局;静态汇总结果仍写在单元格里,不支持透视的查看器也能看。
+- **筛选器导出语义对齐 WPS**:"= 具体值"写 `pageField@item` 指向选中项(打开还原筛选状态);"非空"映射为多选 + 隐藏空白项(`multipleItemSelectionAllowed` + `item@h`,即 WPS"去掉空白"语义);"全部"不写选中。
+- **overlay 导出保留原文件透视表**(`restoreOriginalPivotPartsIntoZip`):原文件已有的透视表(解析为只读,ExcelJS load→write 会整套丢掉)在 overlay 模式下从原件 zip **原样搬运**整套零件(pivotCache/pivotTables 目录 + workbook 注册 + worksheet 隐式关系按表名重挂 + Content_Types),cacheId 保留、r:id 重新分配;后续 App 新建透视表的零件编号/cacheId 自动避开。"打开 → 编辑 → 另存,透视表仍在"。rebuild 模式因结构可能被增删行列改动,不搬运(退化为普通单元格)。
+- 回注/搬运失败自动降级为纯静态结果,不影响主体导出。
+
+#### 其它
+
+- `scrollToCell(row, col, { select? })` 命令式导航 API(三壳 + 插件 viewer),超出当前虚拟区自动扩展。
+- 工具栏内置 `sort` 项(按活动单元格所在列升/降序;未开自动筛选先按选区/已用区建立范围),`viewer.sortActiveColumn(dir)` 同步暴露。
+
+### 修复
+
+- **pivot-parser 支持标准 ECMA-376 隐式关联**:真 Excel 文件的透视表零件靠 worksheet rels 关联(sheet XML 里没有元素),此前只认 worksheet XML 内的 `pivotTableDefinition` 引用 → 标准文件解析不到只读透视表按钮。现在两条路径都认(rels 扫描 + 兼容引用),导出件可往返解析。
+
+### 测试
+
+- 单测 316 → 330(pivot-parser 解析 + clone 元数据 + 导出回注零件结构/往返 + equals/non-empty/include 筛选语义 + overlay 原件搬运/编号避让等);e2e 118 → 124(`e2e/pivot.e2e.ts`:UI 入口全链路 + 面板切换汇总方式 + undo;API 新建工作表 + 求和;导出 zip 零件断言;活刷新随源编辑/撤销;2 行字段折叠/展开;include 多选筛选;面板筛选复选框)。
+
 ## [1.3.3] - 2026-06-09
 
 **Vue 2.6 真实兼容修复合集** — 1.3.2 上线后消费方 Vue 2.6.12 + vue-cli 4 (webpack 4) 项目验证暴露两个 Vue 2.6 特有 bug (函数 ref 不支持 / `ctx.expose` shim 语义不同), 1.3.3 一并修掉. **现在 Vue 2.6 / 2.7 / Vue 3 三个版本都真正可用**.
