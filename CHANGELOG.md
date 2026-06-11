@@ -2,6 +2,78 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.6.0] - 2026-06-12
+
+### 新增 — 可配置粘贴行为(覆盖 / 合并 / 仅值)+ 右键选择性粘贴 + 工具栏配置面板 + 只读提示
+
+**问题**:粘贴(尤其从 WPS 粘真实表格)有两类痛点 —— ① 目标区**原有合并/结构没清掉**,旧合并吞列致数据错位(如示例 A1:E1 旧合并把粘进来的前 5 列吞了);② "贴近源(覆盖)"还是"保留目标格式(仅值)"应由用户选,而非写死。
+
+**方案 —— 框架无关的 `PasteBehavior` 配置系统**(core,三壳共用):
+
+- **逐项可配**(默认 = 覆盖式 1:1):`cellStyle` / `fill`(覆盖/合并/不粘)· `rowHeight`(搬源/不动)· `colWidth`(仅首行搬源/总搬/不动)· `sourceMerges`(应用/不应用)· **`targetMerges`(清掉/保留 —— 默认清,修数据错位)** · `images`(落格/不粘)。首行 vs 中间唯一差异收敛在 `colWidth: 'firstRowOnly'`(列宽整列共享,仅粘到首行才取源宽,粘到中间不动上方表头)。
+- **两条粘贴路径都按配置走**:`pasteRich`(外部 WPS/Excel)+ `pasteSnapshot`(应用内/跨实例 1:1);样式按「覆盖式以中性默认为基 / 合并式以目标为基 / 仅值留目标」三档算(见 `resolvePastedCellStyle`)。
+- **右键「选择性粘贴」子菜单**(core context-menu 加一级 flyout):`覆盖格式(贴近源)` / `保留原样式(仅值)`,逐次预设,不改默认。
+- **工具栏「⚙ 粘贴配置」面板**(`paste-config-host.ts`,框架无关 DOM,**三壳/三 demo 共用一份**,UI 天然 1:1):列出全部项下拉自由定制 + 两个快捷预设(覆盖式 1:1 / 仅值)+ 恢复默认;应用即 `setPasteBehavior`。
+- **API / prop**(三壳同名):组件 `:paste-behavior`(`Partial<PasteBehavior>`,缺项回落默认)· `viewer.getPasteBehavior()` / `setPasteBehavior(cfg)` / `openPasteConfigDialog()` · `pasteRichHtml(html, at, behaviorOverride)` 第 3 参逐次预设。导出 `PasteBehavior` / `DEFAULT_PASTE_BEHAVIOR` / `PASTE_PRESET_VALUES_ONLY` / `resolvePasteBehavior`。
+- **只读检查 + 提醒 = 核心层统一(不按输入方式重写)**:只读**判定**本就是核心层唯一真相源 `resolveEditable()`(`isCellEditable` 全走它),任何改数据的操作(粘贴/编辑/合并/拆分/图片互转)在 EditController 里逐格 `isEditable` 拦截 + 收集 denied + emit `permission-denied`;**提醒**统一收口在控制器 `emitEditEvent` —— 所有 `permission-denied`(dimension 列宽行高=布局除外)经此**一处**按 `readOnlyPrompt` 配置弹内置提醒。新增输入方式只要照常走 EditController API,**无需各自重写只读检查/提醒**(避免遗漏)。
+- **只读提醒(逐格精确 + 可配 dialog/toast/none)**:撞只读(**编辑模式下也可能有只读格**,如 `readOnlyRanges`)不再静默 —— 收集**所有被跳过的只读格**(不止落点),按 `readOnlyPrompt`:`'dialog'`(默认,弹窗**列出具体哪些格**A1 引用)/ `'toast'`(顶部气泡)/ `'none'`(只发事件)。框架无关 DOM(`readonly-prompt-host.ts`)三壳共用。粘贴落点只读不再整次中止 —— 可编辑的格照常粘、只读格跳过并在提醒里列出。
+- **右键「选择性粘贴」二级菜单可达性修复**:菜单宿主加 flyout 关闭延时 + 紧贴父菜单(消除缝隙),从父项滑到子项不再"还没点到就消失"。
+- **Ctrl+V vs 右键差异(已知,浏览器限制)**:`Ctrl+V` 走 `paste` 事件拿**原始 HTML**(WPS 的 `<style>` 类格式全在);右键「粘贴/选择性粘贴」走 `navigator.clipboard.read()`,**浏览器会净化** HTML(删 `<style>`)→ 从 WPS 粘的类格式不如 Ctrl+V 全(应用内 1:1 复制因带 `data-ooxml-clip` 属性不受影响)。无法在右键路径绕过(无 paste 事件)。
+- 测试:`paste-behavior.test.ts`(9 个,各档样式解析)+ `paste-behavior.e2e.ts`(8 个:仅值保留目标 / 默认覆盖清目标合并修数据错位 / 配置面板弹出+预设+应用 / **粘到只读区弹对话框列出哪些格+只读格不被覆盖**,Vue+React)。
+
+### 修复 — 从 WPS/Excel 富粘贴丢"自动换行 + 垂直居中"(连带水平居中也看不出)
+
+- **现象**:WPS 里开了自动换行 + 水平/垂直居中的格,粘进来后不换行(长文本溢出/裁切)、垂直贴底,连水平居中也看不出来。
+- **根因(两处解析漏洞,均非回归,一直没实现)**:
+  - **`white-space` 没解析** → `wrapText` 永远 false。Excel/WPS 用 `white-space:normal` 标记开了自动换行(全局默认 `td{white-space:nowrap}`,换行格用 `normal` 覆盖)。
+  - **裸 `td` 元素默认层没收集** → 垂直居中丢。WPS 把"所有单元格默认"(如 `vertical-align:middle`、`white-space:nowrap`、`font-size:11pt`)放在 `td{...}` 选择器上,各 `.etN` 类只覆盖要改的;而 `parseClassStyles` **只收 `.类名` 规则、不收裸 `td` 规则**,于是没写 `vertical-align` 的格全回落成默认 `bottom`。
+  - **渲染器本就支持** `wrapText`/水平居中/垂直居中(canvas-renderer 1122/1152/1140 行),只是解析没喂字段。
+- **修法**:① `cssToStyleOverride` 增加 `white-space: normal|pre-wrap|pre-line → wrapText=true`;② `parseClassStyles` 额外收集裸 `td` 默认声明,`rawCssOf` 按 CSS 优先级 **td 默认 < 类 < 内联** 三层合并 → 没写垂直对齐的格拿到 `td` 的 `vertical-align:middle`;③ 字号解析认 `pt` 单位(`font-size:11.0pt` → 11,不再当 px 算成 8 —— 之前没喂 td 默认层不暴露,引入默认层后必须修对)。
+- 测试:`edit-paste-rich.e2e.ts` 的 WPS 夹具加裸 `td{vertical-align:middle;white-space:nowrap;font-size:11pt}` + 类 `white-space:normal`,断言粘贴后 `hAlign=center` + `vAlign=middle` + `wrapText=true` + `font.size=11`。
+
+> **路径隔离(为什么不会互相串)**:本组件三种"进数据"路径**各走各的解析,零交叉**——① 打开 .xlsx 走 `exceljs-adapter`(OOXML);② 应用内/跨实例复制走 `clipboard-snapshot`(自带 `data-ooxml-clip` 完整快照);③ 外部 WPS/Excel 粘贴才走 `clipboard-html`。本次只改 ③。`pasteRichHtml` 先认快照(② )、不是才退到外部解析(③),所以 ① ② 完全不受影响。每个外部粘贴格的 CSS 也是**独立**算出一份 `CellStyleOverride`(td默认+自己的类+自己的内联),不跨格混用。
+
+### 修复 — 外部富粘贴样式是"合并目标"而非"覆盖"(粘到带色表头会漏出表头底色)
+
+- **现象**:从首行(带绿底表头)开始粘,源里**没写填充**的格(如 WPS 的 `.et6` 没 `background`)粘完仍保留表头的绿底,不是干净覆盖成源的样子。
+- **根因**:`pasteRich` 用 `applyStyleOverride` 套源样式,而它以**目标格现有样式为基**做浅合并(给工具栏"加粗"那种增量编辑设计的)。源 patch 没写的属性(填充/边框)就保留目标原有的 → 粘到带色区会漏底色。
+- **修法**:`pasteRich` 套样式前先把目标格 styleId 归 0(中性默认),再合并源 patch —— 即**以中性默认为基的覆盖式**,源没写的属性回落默认(无填充/无边框),不再漏目标底色。结果贴近源,同 Excel"粘贴替换格式"、也同应用内 1:1 快照粘贴(后者本就清空目标再落)。
+- **为什么所有落点都这么做、不限首行**:样式是**逐格**的,覆盖只影响被粘的那几格、不波及邻格,所以任何位置都安全;列宽因**整列共享**才需限定首行。纯文本粘贴(源无样式 → 无 patch)不受影响,照常保留目标格式。
+- 测试:`edit-paste-rich.e2e.ts` 加"粘到红底格 → 源白底覆盖成白、源没写填充的格清成无填充(不漏红底)、边框照常"。
+
+### 变更 — 粘贴只带行高、列宽默认不改(例外:粘到首行时套用源列宽)
+
+- **问题**:粘贴(WPS/Excel 外部富粘贴 + 应用内 1:1 快照粘贴)原会把源**列宽**搬到目标列。但列宽是**整列共享**的,粘到第 18 行却把同列上方的表头(第 1~7 行)宽度一起改了 → 破坏现有表格布局。
+- **改法**:两条粘贴路径(`pasteRich` 外部 / `pasteSnapshot` 应用内)都**只搬行高;列宽默认不搬**(以现有表头为准,同 Excel 默认粘贴)。行高是逐行的,只影响被粘的那几行;内嵌图按**目标格尺寸**填充,不依赖源列宽,图照样填满。
+- **例外 — 粘到首行(`start.row === 0`)套用源列宽**:此时上方没有任何内容可被破坏,粘贴块本身就是新表头/新布局,列宽应以它为准。`row > 0`(粘进已有表格中间)才保持目标列宽不动。
+- 源列宽仍随 `ParsedClipboard.colWidths` / `ClipSnapshot.colWidths` 解析、携带,粘到首行即应用、否则保留。
+- 测试:`edit-paste-rich.e2e.ts`(WPS)断言粘到 row 2 列宽不被源覆盖、粘到 row 0 列宽=源 72/120;`clipboard-snapshot.test.ts`(应用内)断言粘到 row 5 目标列宽不变、粘到 row 0 套用源列宽 120。
+
+### 修复 — 空格/新建格/粘贴串入首格底色(根因:解析时 `styles[0]` 不是中性默认,而是第一个被解析到的格样式)
+
+- **现象**:加载示例(A1 是绿底表头)后,从 WPS 粘贴一段内容,部分**本应无底色**的格冒出绿底(看起来像"混入了第 1 行样式");散落分布(有的格白、有的格绿)。打开任意"首格带底色"的本地 .xlsx 也会有同类隐患(空格/编辑新建的格染上首格底色)。
+- **根因**:ExcelJS 解析器 `buildSheet` 按**遇到顺序** intern 样式,首个被解析到的单元格(通常是 A1 表头)样式就占据了 `styles[0]`。而全 core 多处把 `styleId 0` / `styles[0]` 当成"中性空白默认基样式"用——空格、`setCellValue` 新建的格、`applyStyleOverride` 对空格的兜底基样式都回落到它。于是 A1 的绿底成了"默认底色":凡是没有显式指定填充的格(如 WPS 类里**没写 `background:`** 的 `.et6`/`.et8`),`mergeStyleOverride` 保留基样式的 `fill` → 冒出绿底;写了 `background:#FFFFFF` 的格才是白 → 散落串色。
+- **修法(深修,非兜底)**:抽出唯一规范工厂 `makeDefaultStyle()`([src/core/model/types.ts](src/core/model/types.ts)),`buildSheet` 解析前**预置 `styles[0] = makeDefaultStyle()`**(无填充/无边框中性默认)并登记进 styleIndex,真实格样式从 index 1 起;首格 A1 的绿底样式仍在(只是换了 index),引用它的格不受影响。loader-json / clipboard-snapshot 原本各有一份重复的默认样式工厂,一并改为复用此唯一来源。
+- **影响面**:不止修了 WPS 粘贴——所有"空格/新建格/兜底基样式"路径现在都正确回落到中性默认,文件打开渲染零变化(带样式的格按各自 styleId 渲染如初),只有"默认格"不再染上首格底色。
+- 测试:`parse.test.ts` 加回归"styles[0] 恒为中性空白默认(首格 A1 有绿底也不占 index 0)";现有 339 单测 + e2e 全绿。
+
+### 修复 — Ctrl+V 改走 paste 事件(根因:clipboard.read() 会净化 HTML 删掉 `<style>`)
+
+- **真正的根因**:我们 Ctrl+V 原先走 `navigator.clipboard.read()`,这个 Async Clipboard API **会净化 HTML** —— 把 `<style>` 块、注释整个删掉。而 WPS/Excel 复制的格式(CSS 类)、数字格式(`mso-number-format`)、内嵌图(VML `o:gfxdata` 注释)**全在这三样里** → 过一遍 `read()` 就没了(实测:写 `<style>` 进剪贴板再 `read()` 读回,`<style>`/类定义/注释全被删)。这就是"直接打开 Excel 文件能完整解析、复制粘贴反而丢格式"的原因:打开文件走 ExcelJS 解 .xlsx(无损 OOXML),粘贴走系统剪贴板的 `text/html`(本就有损)且**还被浏览器二次净化**。
+- **修法**:控制器在 `scroller` 上绑 `paste` 事件,Ctrl+V 改走 `onPaste(e)` —— `e.clipboardData.getData('text/html')` 拿的是**原始未净化** HTML(WPS 的 `<style>`/VML 都在),不再走净化的 `read()`。`onKeyDown` 不再拦截 Ctrl+V(在那 `preventDefault` 反而会阻止 paste 事件)。我们自己复制的 `data-ooxml-clip` 快照也照样原样拿到,1:1 不受影响。
+- 右键菜单"粘贴"无 paste 事件,仍走 `pasteFromClipboard()`(`read()`,会净化)→ 从 WPS 粘的格式不如 Ctrl+V 全(已在方法注释/文档说明)。
+- 测试:`edit-paste-rich.e2e.ts` 加"派发 paste 事件(原始 HTML)→ onPaste → 类格式/numFmt/VML 图都还原"用例(Vue+React);自家 1:1 复制 e2e 仍过(快照不被净化)。
+
+### 修复 — 从 WPS/Excel 富粘贴丢格式/数字/图片(对照真实 WPS 剪贴板 HTML)
+
+- **解析 `<style>` 类样式**:Excel/WPS 复制的剪贴板 HTML 把单元格格式放在 `<style>` 块的 CSS 类里(`<td class=et3>` + `.et3{border:…;background:…}`,整段还包在 `<!-- -->` 里),而旧解析只读每个 `<td>` 的内联 `style=`(`DOMParser` 不会把类规则套到元素上)→ 边框/底色/字体全丢。现在 `parseClipboardHtml` 先收集所有 `<style>` 块的「类名→声明」(剥掉 `<!-- -->` 壳),落格时把命中类的声明合并进 `td.style`(类在前、内联在后,内联优先)再解析 → 还原边框/填充/字体/对齐。
+- **数字格式(日期/货币不再变成裸序列号)**:格式码在 `mso-number-format`(CSSOM 会丢弃这种私有属性),且值是 CSS 转义的(`2`→`"`、`\#`→`#`、`\;`→`;`、`\(`→`\(`)。新增 `parseMsoNumberFormat`/`unescapeMsoNumFmt` 从原始声明串解析并解转义 → `numFmt`(如 `yyyy/m/d`、`"￥"#,##0.00_);[Red]\("￥"#,##0.00\)`),配合 `x:num` 原始序列号 → 日期/货币正确显示(之前 46113 直接显示成裸数字)。
+- **列宽/行高 1:1**:剪贴板 HTML 带了 `<col width=N span=M>`(列宽 px)和 `<tr height=N>`(行高 px),`parseClipboardHtml` 现在解析出 `colWidths`/`rowHeights`,`pasteRich` 用 `restoreDimension` 搬到目标列/行 → 列宽行高 1:1。内嵌图填满单元格,**格尺寸对了图也就对了**(之前列宽行高没搬 → 图也显得不对)。(实测真实 WPS:行高 106px、列宽 72/124/197… 与 `<col span>` 完全对应)
+- **图片(WPS 区域复制内嵌图能救回来)**:之前以为是浏览器硬限制——其实 `<img src="file:///…">` 确实读不了,但 WPS 同时把图放在 VML `<v:shape o:gfxdata="base64">`(在 `<!--[if gte vml 1]>…<![endif]-->` 注释里),**那段 base64 是个 zip,内含 `media/imageN.png`**。新增 `extractVmlImageDataUrl`:从 td 的注释节点取 `o:gfxdata` → `unzipSync`(fflate)→ 取图 → data-uri → 走现有图片落格(转 DISPIMG 单元格图)。
+- **不影响应用内 1:1 复制**:本组件自己复制的内容带 `data-ooxml-clip`,粘贴时先走快照路径(`parseSnapshotHtml`/`pasteSnapshot`),根本不进 `parseClipboardHtml`,零影响。
+- 图片方向澄清(文档):WPS/Excel **区域复制**的图片在剪贴板里是 `file:///` 本地路径,浏览器读不到 → 区域里的图必然丢(浏览器限制);单图复制走 `pasteImageBlob` 仍可。
+- 测试:`e2e/edit-paste-rich.e2e.ts` 加 Excel/WPS 类样式(`<style> .xl 类`)用例(Vue + React),断言边框/填充/字体/对齐还原。
+
 ## [1.5.0] - 2026-06-11
 
 ### 新增 — 应用内复制粘贴 1:1 保真(走剪贴板嵌入快照)

@@ -18,6 +18,20 @@ describe('parseWorkbook (端到端)', () => {
     expect(wb.themeColors.length).toBeGreaterThanOrEqual(12)
   })
 
+  it('styles[0] 恒为中性空白默认(首格 A1 有绿底也不占 index 0)', async () => {
+    // 回归: 解析按遇到顺序 intern 样式, 首格 A1 是绿底表头(#21A366)。
+    // 若让 A1 样式占 styles[0], 则所有空格/新建格/setCellValue/applyStyleOverride 兜底(styleId 0)
+    // 都会冒出绿底 —— WPS 粘贴 / 编辑串色的根因。styles[0] 必须是无填充中性默认。
+    const wb = await parseWorkbook(loadSample())
+    const s1 = wb.sheets[0]
+    expect(s1.styles[0].fill).toEqual({ type: 'none' })
+    expect(s1.styles[0].borders).toEqual({})
+    // A1 的绿底样式仍存在(在别的 index 上), 真正引用它的格不受影响
+    const a1 = s1.cells.get(cellKey(0, 0))!
+    expect(a1.styleId).not.toBe(0)
+    expect(s1.styles[a1.styleId].fill).toEqual({ type: 'solid', fgColor: '#21A366' })
+  })
+
   it('合并单元格被识别', async () => {
     const wb = await parseWorkbook(loadSample())
     const s1 = wb.sheets[0]

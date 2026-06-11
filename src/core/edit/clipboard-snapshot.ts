@@ -12,7 +12,7 @@
  * DISPIMG 单元格图字节(base64,落地时登记进目标 cellImages)、行高、列宽。坐标全部相对复制区左上。
  */
 import type { AnchorCell, CellModel, CellStyle, CellValueType, MergeRange, RichTextRun, SheetModel, WorkbookModel } from '../model/types'
-import { cellKey } from '../model/types'
+import { cellKey, makeDefaultStyle } from '../model/types'
 
 /** raw 是 Date 时序列化为 {__d: epochMs},反序列化还原。其余原样 JSON。 */
 type ClipRaw = number | string | boolean | null | { __d: number }
@@ -56,20 +56,6 @@ export interface ClipSnapshot {
 /** 图片字节预算(原始字节):复制区图片总字节超此值 → 降级为"无图 1:1 复制",避免剪贴板超限/卡顿。 */
 export const CLIP_IMAGE_BUDGET_BYTES = 6 * 1024 * 1024
 
-function defaultStyle(): CellStyle {
-  return {
-    font: { name: 'Calibri', size: 11, bold: false, italic: false, underline: false, strike: false, color: '#000000' },
-    fill: { type: 'none' },
-    borders: {},
-    hAlign: 'general',
-    vAlign: 'bottom',
-    wrapText: false,
-    shrinkToFit: false,
-    textRotation: 0,
-    indent: 0,
-    numFmt: 'General',
-  }
-}
 
 /**
  * 抓一段区域的完整模型快照(相对坐标)。
@@ -86,7 +72,7 @@ export function serializeSnapshot(sheet: SheetModel, wb: WorkbookModel, range: M
     for (let c = 0; c < cols; c++) {
       const cell = sheet.cells.get(cellKey(range.top + r, range.left + c))
       if (!cell) continue
-      const style = sheet.styles[cell.styleId] ?? sheet.styles[0] ?? defaultStyle()
+      const style = sheet.styles[cell.styleId] ?? sheet.styles[0] ?? makeDefaultStyle()
       const cc: ClipCell = {
         r,
         c,

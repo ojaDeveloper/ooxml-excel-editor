@@ -20,6 +20,7 @@ import type { CellInspection } from './model/inspect'
 import type { MenuItem } from './edit/context-menu'
 import type { EditorResolver } from './edit/editor-context'
 import type { EditableTarget } from './edit/types'
+import type { PasteBehavior } from './edit/paste-behavior'
 import type { ViewerTheme } from './render/theme'
 import type { ExcelSource } from './loader'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from './export/types'
@@ -192,8 +193,15 @@ export interface ViewerApi {
   unmergeCells(range: MergeRange): boolean
   /** 把 TSV 文本粘到选区左上角(G2;类型自动推断、跳过只读、入命令栈);at 缺省用活动格 */
   pasteText(text: string, at?: { row: number; col: number }): boolean
-  /** 解析 Excel/WPS 复制的剪贴板 HTML → 富粘贴(值+字体/颜色/填充/边框/对齐+合并+data-uri图),整体单次撤销 */
-  pasteRichHtml(html: string, at?: { row: number; col: number }): boolean
+  /** 解析 Excel/WPS 复制的剪贴板 HTML → 富粘贴(值+字体/颜色/填充/边框/对齐+合并+data-uri图),整体单次撤销。
+   *  behaviorOverride = 逐次粘贴行为预设(右键「选择性粘贴」用;缺省走 setPasteBehavior 设的默认) */
+  pasteRichHtml(html: string, at?: { row: number; col: number }, behaviorOverride?: Partial<PasteBehavior> | null): boolean
+  /** 读当前粘贴行为配置(完整) */
+  getPasteBehavior(): PasteBehavior
+  /** 设粘贴行为默认(缺项回落默认);影响 Ctrl+V / 右键「粘贴」 */
+  setPasteBehavior(cfg: Partial<PasteBehavior> | null): void
+  /** 打开「粘贴行为配置」面板(框架无关 DOM,三壳共用);需 editable。返回是否打开 */
+  openPasteConfigDialog(): boolean
   /** 把一张图片 blob 落到活动格(转内嵌图);剪贴板单图 / 拖文件进网格用 */
   pasteImageBlob(blob: Blob, at?: { row: number; col: number }): Promise<boolean>
   /** 读当前表全部图片锚点(克隆;E6) */

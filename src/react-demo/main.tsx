@@ -214,6 +214,7 @@ function Demo() {
         { id: 'cell-to-float', kind: 'btn', label: '格→图', title: '内嵌图→浮动图', onClick: () => { const s = ref.current?.getSelection(); if (s) ref.current?.convertCellImageToFloat(s.top, s.left) } },
         { id: 'ins-row', kind: 'btn', label: '＋行', title: '选区上方插入行', onClick: () => { const s = ref.current?.getSelection(); if (s) ref.current?.insertRows(s.top, 1) } },
         { id: 'del-row', kind: 'btn', label: '－行', title: '删除选区行', onClick: () => { const s = ref.current?.getSelection(); if (s) ref.current?.deleteRows(s.top, s.bottom - s.top + 1) } },
+        { id: 'paste-config', kind: 'btn', label: '⚙ 粘贴配置', title: '配置 Ctrl+V/右键粘贴行为(覆盖/合并/仅值、目标合并清除、列宽…)', onClick: () => ref.current?.openPasteConfigDialog() },
       )
     }
     items.push(

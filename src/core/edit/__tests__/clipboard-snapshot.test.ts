@@ -106,9 +106,9 @@ describe('clipboard 1:1 保真快照', () => {
 
     // 合并 → A1:B1 平移到 (5,3)-(5,4)
     expect(tgt.sheet.merges).toContainEqual({ top: 5, left: 3, bottom: 5, right: 4 })
-    // 行高列宽平移
+    // 行高平移到目标行;列宽**不搬**(整列共享,搬会改表头)→ 目标列宽保持不变(与外部 WPS 粘贴一致)
     expect(tgt.sheet.rows.get(6)).toMatchObject({ height: 88, customHeight: true })
-    expect(tgt.sheet.columns.get(4)).toMatchObject({ width: 120 })
+    expect(tgt.sheet.columns.get(4)).toBeUndefined()
     // 浮动图平移到 from (6,3)
     expect(tgt.sheet.images.some((im) => im.from.row === 6 && im.from.col === 3)).toBe(true)
 
@@ -117,6 +117,16 @@ describe('clipboard 1:1 保真快照', () => {
     expect(tgt.sheet.cells.get(cellKey(6, 4))).toBeUndefined()
     expect(tgt.sheet.merges).toHaveLength(0)
     expect(tgt.sheet.images).toHaveLength(0)
+  })
+
+  it('粘到首行(start.row===0)→ 套用源列宽(粘贴块成新表头/新布局,列宽以它为准)', () => {
+    const src = richSource() // 源 col 1 宽 120
+    const snap = decodeSnapshot(encodeSnapshot(serializeSnapshot(src.sheet, src.wb, { top: 0, left: 0, bottom: 1, right: 1 })))!
+    const tgt = targetController()
+    tgt.ec.pasteSnapshot({ row: 0, col: 3 }, snap)
+    // start.row===0 → 源相对列 1 的宽 120 搬到目标 col 3+1=4
+    expect(tgt.sheet.columns.get(4)).toMatchObject({ width: 120 })
+    // 对照:粘到非首行(row 5)则不搬(上面已有用例验证 columns.get(4) 为 undefined)
   })
 
   it('瘦身传输:withImageBytes=false 去图片字节,reattachImages 从 <img> 回填 → pasteSnapshot 仍 1:1', () => {

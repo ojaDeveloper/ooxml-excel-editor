@@ -18,6 +18,7 @@ import { TOOLBAR_ICONS, svgWrap } from '@/components/toolbar-icons'
 import type { ToolbarItem } from '@/core/plugin'
 import type { CellModel, CellStyleFn, CellStyleOverride, ImageAnchor, MergeRange, SheetModel, TransformModelFn, WorkbookModel } from '@/core/model/types'
 import type { EditableTarget, EditConfig } from '@/core/edit/types'
+import { type PasteBehavior, DEFAULT_PASTE_BEHAVIOR } from '@/core/edit/paste-behavior'
 import type { FormulaEngineFactory } from '@/core/formula/engine'
 import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload, StructChangePayload } from '@/core/edit/edit-controller'
 import type { CellSnapshot } from '@/core/model/snapshot'
@@ -147,6 +148,10 @@ export interface ExcelViewerProps {
   recalc?: boolean
   /** 自定义/自研公式引擎工厂(可换引擎);不给则用默认 HyperFormula(需 npm i hyperformula) */
   formulaEngine?: FormulaEngineFactory
+  /** 粘贴行为(默认 = 覆盖式 1:1)。控制 Ctrl+V / 右键粘贴时源各方面如何落目标;也可 viewer.setPasteBehavior 运行时改 */
+  pasteBehavior?: Partial<PasteBehavior>
+  /** 粘贴撞只读格的内置提醒:'dialog'(默认,弹窗列出哪些格只读)/ 'toast'(气泡)/ 'none'(只发事件) */
+  readOnlyPrompt?: 'dialog' | 'toast' | 'none'
   /**
    * 操作工具栏配置 (跟 Vue 3/Vue 2 同 API):
    * - `true`/不传(默认): 显示默认三项 ['find', 'filter', 'sort']
@@ -213,7 +218,10 @@ export interface ExcelViewerHandle {
   mergeCells: (range: MergeRange) => boolean
   unmergeCells: (range: MergeRange) => boolean
   pasteText: (text: string, at?: { row: number; col: number }) => boolean
-  pasteRichHtml: (html: string, at?: { row: number; col: number }) => boolean
+  pasteRichHtml: (html: string, at?: { row: number; col: number }, behaviorOverride?: Partial<PasteBehavior> | null) => boolean
+  getPasteBehavior: () => PasteBehavior
+  setPasteBehavior: (cfg: Partial<PasteBehavior> | null) => void
+  openPasteConfigDialog: () => boolean
   pasteImageBlob: (blob: Blob, at?: { row: number; col: number }) => Promise<boolean>
   getImages: () => ImageAnchor[]
   addImage: (anchor: ImageAnchor) => number
@@ -395,6 +403,8 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       strictDimensions: p.strictDimensions,
       recalc: p.recalc,
       formulaEngine: p.formulaEngine,
+      pasteBehavior: p.pasteBehavior,
+      readOnlyPrompt: p.readOnlyPrompt,
     }
   }
   // E2: 合并编辑器解析器(prop 优先,其次插件数组序首个非空)。无任何 editor → undefined
@@ -612,7 +622,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
   useEffect(() => {
     controllerRef.current?.setEditConfig(buildEditConfig())
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.editable, props.cellReadOnly, props.readOnlyRanges, props.editableTargets, props.strictDimensions, props.recalc, props.formulaEngine])
+  }, [props.editable, props.cellReadOnly, props.readOnlyRanges, props.editableTargets, props.strictDimensions, props.recalc, props.formulaEngine, props.pasteBehavior, props.readOnlyPrompt])
 
   // ---- 右键菜单 transform 同步(Plan C) ----
   useEffect(() => {
@@ -722,7 +732,10 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       mergeCells: (range) => controllerRef.current?.mergeCells(range) ?? false,
       unmergeCells: (range) => controllerRef.current?.unmergeCells(range) ?? false,
       pasteText: (text, at) => controllerRef.current?.pasteText(text, at) ?? false,
-      pasteRichHtml: (html, at) => controllerRef.current?.pasteRichHtml(html, at) ?? false,
+      pasteRichHtml: (html, at, behaviorOverride) => controllerRef.current?.pasteRichHtml(html, at, behaviorOverride) ?? false,
+      getPasteBehavior: () => controllerRef.current?.getPasteBehavior() ?? DEFAULT_PASTE_BEHAVIOR,
+      setPasteBehavior: (cfg) => controllerRef.current?.setPasteBehavior(cfg),
+      openPasteConfigDialog: () => controllerRef.current?.openPasteConfigDialog() ?? false,
       pasteImageBlob: (blob, at) => controllerRef.current?.pasteImageBlob(blob, at) ?? Promise.resolve(false),
       getImages: () => controllerRef.current?.getImages() ?? [],
       addImage: (a) => controllerRef.current?.addImage(a) ?? -1,
@@ -840,7 +853,10 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     mergeCells: (range) => controllerRef.current?.mergeCells(range) ?? false,
     unmergeCells: (range) => controllerRef.current?.unmergeCells(range) ?? false,
     pasteText: (text, at) => controllerRef.current?.pasteText(text, at) ?? false,
-    pasteRichHtml: (html, at) => controllerRef.current?.pasteRichHtml(html, at) ?? false,
+    pasteRichHtml: (html, at, behaviorOverride) => controllerRef.current?.pasteRichHtml(html, at, behaviorOverride) ?? false,
+    getPasteBehavior: () => controllerRef.current?.getPasteBehavior() ?? DEFAULT_PASTE_BEHAVIOR,
+    setPasteBehavior: (cfg) => controllerRef.current?.setPasteBehavior(cfg),
+    openPasteConfigDialog: () => controllerRef.current?.openPasteConfigDialog() ?? false,
     pasteImageBlob: (blob, at) => controllerRef.current?.pasteImageBlob(blob, at) ?? Promise.resolve(false),
     getImages: () => controllerRef.current?.getImages() ?? [],
     addImage: (a) => controllerRef.current?.addImage(a) ?? -1,

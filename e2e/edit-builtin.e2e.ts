@@ -32,7 +32,7 @@ function run(label: string, url: string, canvasSel: string, renderAreaSel: strin
   test(`${label}: 双击进编辑→改值 Enter 提交;打字进编辑;Esc 取消;只读不进`, async ({ page }) => {
     await page.goto(url)
     await ready(page, canvasSel, handle)
-    const input = page.locator('input.ooxml-cell-editor')
+    const input = page.locator('textarea.ooxml-cell-editor')
 
     // 双击增长%格(2,4,无自定义编辑器 → 内置文本编辑器;且不被任何公式引用 → 不触发级联,
     // 这样 __lastCellChange 就是被编辑格本身,与 E4 重算解耦)
@@ -44,7 +44,8 @@ function run(label: string, url: string, canvasSel: string, renderAreaSel: strin
     const rect24 = (await call(page, handle, 'rectOf', 2, 4)) as { w: number; h: number }
     const ib = (await input.boundingBox())!
     expect(Math.abs(ib.width - rect24.w)).toBeLessThanOrEqual(1)
-    expect(Math.abs(ib.height - rect24.h)).toBeLessThanOrEqual(1)
+    // textarea 编辑器(1.2.1 起)盖住整格,但可因行高/长文本撑高略高于格(WPS 风格浮起撑高),故只要 ≥ 格高
+    expect(ib.height).toBeGreaterThanOrEqual(rect24.h - 1)
 
     // 改 999 + Enter → 提交 + 编辑器关 + cell-change(被编辑格自身,无级联)
     await input.fill('999')

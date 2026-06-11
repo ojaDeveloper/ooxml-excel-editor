@@ -16,7 +16,7 @@ import type {
   SheetModel,
   CssColor,
 } from '../model/types'
-import { cellKey } from '../model/types'
+import { cellKey, makeDefaultStyle } from '../model/types'
 import type { ProgressFn } from '../progress'
 import { resolveColor } from '../format/color'
 import { colWidthToPx, rowHeightToPx, DEFAULT_COL_WIDTH_CHARS, DEFAULT_ROW_HEIGHT_PT } from '../layout/units'
@@ -50,8 +50,10 @@ export function buildSheets(wb: ExcelJS.Workbook, themeColors: CssColor[], onPro
 }
 
 function buildSheet(ws: ExcelJS.Worksheet, index: number, theme: CssColor[], onRow?: () => void): SheetModel {
-  const styles: CellStyle[] = []
-  const styleIndex = new Map<string, number>()
+  // styles[0] 必须是中性空白默认(见 makeDefaultStyle 注释)。绝不能让"第一个被解析到的格样式"占据 index 0,
+  // 否则首格(常是带色表头,如 A1 绿底)会成为所有空格/新建格的默认底色,造成粘贴/编辑串色。
+  const styles: CellStyle[] = [makeDefaultStyle()]
+  const styleIndex = new Map<string, number>([[JSON.stringify(styles[0]), 0]])
   const cells = new Map<string, CellModel>()
 
   const internStyle = (style: CellStyle): number => {

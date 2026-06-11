@@ -3,12 +3,13 @@
  * 发"前后完整快照"事件、暴露命令式编辑 API + 查询 API。组合进 ViewerController(非继承)。
  * 这是要求 5("一切都有 API/事件")的承重墙:UI/公式/导出都建在它上面。
  */
-import type { CellModel, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
+import type { CellModel, CellStyle, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
 import type { CellValue } from '../model/data-access'
 import { buildCellSnapshot, type CellSnapshot } from '../model/snapshot'
 import { cloneWorkbook, restoreWorkbookInto } from '../model/clone'
-import { cloneImageAnchor, convertFloatToCellImage, convertCellImageToFloat, setCellValue, setCellModel, applyStyleOverride, addImage, internStyle, restoreDimension } from '../model/mutations'
+import { cloneImageAnchor, convertFloatToCellImage, convertCellImageToFloat, setCellValue, setCellModel, addImage, internStyle, restoreDimension } from '../model/mutations'
+import { type PasteBehavior, DEFAULT_PASTE_BEHAVIOR, resolvePasteBehavior, resolvePastedCellStyle, shouldApplyColWidth } from './paste-behavior'
 import { pxToEmu } from '../layout/units'
 import type { ParsedClipboard } from './clipboard-html'
 import { reviveClipRaw, b64ToBytes, type ClipSnapshot } from './clipboard-snapshot'
@@ -142,8 +143,19 @@ export class EditController {
   private engine: FormulaEngine | null = null
   private engineFor: WorkbookModel | null = null // 引擎对应哪个 workbook
   private warming = false
+  // 粘贴行为(默认覆盖式 1:1;经 setPasteBehavior / :paste-behavior prop 改;右键选择性粘贴逐次覆盖)
+  private pasteBehavior: PasteBehavior = DEFAULT_PASTE_BEHAVIOR
 
   constructor(private host: EditControllerHost) {}
+
+  /** 读当前粘贴行为(完整配置)。 */
+  getPasteBehavior(): PasteBehavior {
+    return this.pasteBehavior
+  }
+  /** 设粘贴行为默认(缺项回落默认);影响 Ctrl+V / 右键「粘贴」。 */
+  setPasteBehavior(cfg: Partial<PasteBehavior> | null): void {
+    this.pasteBehavior = resolvePasteBehavior(cfg)
+  }
 
   // ---- 公式引擎生命周期(E4) ----
   /** 异步懒初始化引擎(开重算 + 有工厂 + 尚未为当前簿建好)。返回的 Promise 供测试 await;生产 fire-and-forget。 */
@@ -239,17 +251,24 @@ export class EditController {
     }
     return !!inv
   }
+
+  /** 合并区 m 是否与矩形 [top,left]-[bottom,right] 有交叠(用于清粘贴区内的目标原有合并)。 */
+  private _mergeOverlaps(m: MergeRange, top: number, left: number, bottom: number, right: number): boolean {
+    return !(m.bottom < top || m.top > bottom || m.right < left || m.left > right)
+  }
   /**
    * 富粘贴(Excel/WPS 复制的 HTML 解析后):值 + 样式 + 合并 + 图片,**整体单次撤销**。
    * start = 落点左上角。跳过只读格。一次 cloneWorkbook 快照 → 应用全部 → 压一条 restore-wb 逆。
+   * behaviorOverride = 右键「选择性粘贴」逐次预设(覆盖 this.pasteBehavior;缺省走默认配置)。
    */
-  pasteRich(start: { row: number; col: number }, parsed: ParsedClipboard): boolean {
+  pasteRich(start: { row: number; col: number }, parsed: ParsedClipboard, behaviorOverride?: Partial<PasteBehavior> | null): boolean {
     if (!this.host.isEditingEnabled()) return false
     const sheet = this.host.getSheet()
     const wb = this.host.getWorkbook()
     if (!sheet || !wb) return false
     const { values, styles, merges, images } = parsed
     if (!values.length && !styles.length && !merges.length && !images.length) return false
+    const b = behaviorOverride ? resolvePasteBehavior({ ...this.pasteBehavior, ...behaviorOverride }) : this.pasteBehavior
     this.ensureBaseline()
     const d = this.host.getDate1904()
     const snap = cloneWorkbook(wb)
@@ -277,40 +296,68 @@ export class EditController {
     }
     const before = affected.map((p) => buildCellSnapshot(sheet, p.row, p.col, d))
 
-    // 应用:值 → 样式 → 合并 → 图片
+    // 粘贴区矩形(用于清目标原有合并)
+    const rectBottom = start.row + Math.max(0, values.length - 1)
+    const rectRight = start.col + Math.max(0, values.reduce((w, v) => Math.max(w, v.length), 0) - 1)
+    const denied: Array<{ row: number; col: number }> = []
+
+    // 目标原有合并(落在粘贴区内的)→ 按配置清掉(否则旧合并吞列致数据错位)
+    if (b.targetMerges === 'clear') {
+      sheet.merges = sheet.merges.filter((m) => !this._mergeOverlaps(m, start.row, start.col, rectBottom, rectRight))
+    }
+
+    // 应用:值 → 样式/填充 → 合并 → 图片。只读格跳过 + 收集 denied(整次结束发一次 permission-denied,不静默)
     for (let r = 0; r < values.length; r++)
       for (let c = 0; c < values[r].length; c++) {
         const row = start.row + r
         const col = start.col + c
         if (this.host.isEditable(row, col)) setCellValue(sheet, row, col, values[r][c])
+        else if (values[r][c] != null) denied.push({ row, col })
       }
-    for (const s of styles) {
-      const row = start.row + s.row
-      const col = start.col + s.col
-      if (this.host.isEditable(row, col)) applyStyleOverride(sheet, row, col, s.patch)
-    }
-    // Phase A 补漏 (2026-06-08): 合并 / 图片粘贴 per-cell editable 检查; 跳过的位置 emit permission-denied
-    const denied: Array<{ row: number; col: number }> = []
-    for (const m of merges) {
-      const range = { top: start.row + m.top, left: start.col + m.left, bottom: start.row + m.bottom, right: start.col + m.right }
-      if (range.top === range.bottom && range.left === range.right) continue
-      // 合并区域内任一格只读 → 跳过这块 + 收集 denied
-      if (!_rangeAllEditableViaHost(this.host, range)) {
-        denied.push(..._collectDeniedInRangeViaHost(this.host, range))
-        continue
+    if (b.cellStyle !== 'skip' || b.fill !== 'skip') {
+      const neutral = sheet.styles[0]
+      for (const s of styles) {
+        const row = start.row + s.row
+        const col = start.col + s.col
+        if (!this.host.isEditable(row, col)) continue
+        // 按 cellStyle/fill 两档(覆盖/合并/skip)算最终样式:覆盖式以中性默认为基(不漏目标底色),合并式以目标为基
+        const cell = sheet.cells.get(cellKey(row, col))
+        const target: CellStyle = (cell ? sheet.styles[cell.styleId] : neutral) ?? neutral
+        const full = resolvePastedCellStyle(target, neutral, s.patch, b.cellStyle, b.fill)
+        if (!full) continue
+        const styleId = internStyle(sheet, full)
+        if (cell) cell.styleId = styleId
+        else setCellModel(sheet, { row, col, type: 'empty', raw: null, styleId })
       }
-      applyCommand(sheet, { kind: 'merge-cells', range })
     }
-    for (const im of images) {
-      const row = start.row + im.row
-      const col = start.col + im.col
-      // 目标格只读 → 跳过 + 收集 denied
-      if (!this.host.isEditable(row, col)) { denied.push({ row, col }); continue }
-      const dec = dataUrlToBytes(im.dataUrl)
-      if (!dec) continue
-      const idx = addImage(sheet, { src: im.dataUrl, bytes: dec.bytes, mime: dec.mime, from: { col, row, colOffEmu: 0, rowOffEmu: 0 }, extWidthEmu: pxToEmu(96), extHeightEmu: pxToEmu(96) })
-      convertFloatToCellImage(wb, sheet, idx, row, col) // 落进单元格(像 WPS 嵌入)
+    if (b.sourceMerges === 'apply') {
+      for (const m of merges) {
+        const range = { top: start.row + m.top, left: start.col + m.left, bottom: start.row + m.bottom, right: start.col + m.right }
+        if (range.top === range.bottom && range.left === range.right) continue
+        // 合并区域内任一格只读 → 跳过这块 + 收集 denied
+        if (!_rangeAllEditableViaHost(this.host, range)) {
+          denied.push(..._collectDeniedInRangeViaHost(this.host, range))
+          continue
+        }
+        applyCommand(sheet, { kind: 'merge-cells', range })
+      }
     }
+    if (b.images === 'apply') {
+      for (const im of images) {
+        const row = start.row + im.row
+        const col = start.col + im.col
+        // 目标格只读 → 跳过 + 收集 denied
+        if (!this.host.isEditable(row, col)) { denied.push({ row, col }); continue }
+        const dec = dataUrlToBytes(im.dataUrl)
+        if (!dec) continue
+        const idx = addImage(sheet, { src: im.dataUrl, bytes: dec.bytes, mime: dec.mime, from: { col, row, colOffEmu: 0, rowOffEmu: 0 }, extWidthEmu: pxToEmu(96), extHeightEmu: pxToEmu(96) })
+        convertFloatToCellImage(wb, sheet, idx, row, col) // 落进单元格(像 WPS 嵌入)
+      }
+    }
+    // 行高:逐行搬源(只影响被粘的那几行,不动表头)
+    if (b.rowHeight === 'source') parsed.rowHeights.forEach((h, i) => { if (h > 0) restoreDimension(sheet, 'row', start.row + i, { height: h, hidden: false }) })
+    // 列宽:整列共享 → 默认 firstRowOnly(仅 start.row===0 搬源,避免粘到中间改上方表头);可配 source 总搬 / keep 不搬
+    if (shouldApplyColWidth(b, start.row)) parsed.colWidths.forEach((w, i) => { if (w > 0) restoreDimension(sheet, 'col', start.col + i, { width: w, hidden: false }) })
 
     this.pushUndo({ kind: 'restore-wb', snapshot: snap }) // 整体单次撤销
     this.markDirty()
@@ -320,12 +367,17 @@ export class EditController {
     affected.forEach((p, i) =>
       this.host.emit('cell-change', { before: before[i], after: buildCellSnapshot(sheet, p.row, p.col, d), source: 'api' } satisfies CellChangePayload),
     )
-    // Phase A: 合并 / 图片粘贴撞只读 → 整次结束发一次 permission-denied
-    if (denied.length) {
-      const payload: PermissionDeniedPayload = { reason: 'paste', cells: denied, message: `粘贴撞 ${denied.length} 个只读格,已跳过` }
-      this.host.emit('permission-denied', payload)
-    }
+    // 值 / 样式 / 合并 / 图片粘贴撞只读 → 整次结束发一次 permission-denied(去重),不静默
+    this._emitPasteDenied(denied)
     return true
+  }
+
+  /** 去重后发一次 paste 的 permission-denied(没只读格则不发)。 */
+  private _emitPasteDenied(denied: Array<{ row: number; col: number }>): void {
+    if (!denied.length) return
+    const seen = new Set<string>()
+    const uniq = denied.filter((p) => { const k = `${p.row}:${p.col}`; if (seen.has(k)) return false; seen.add(k); return true })
+    this.host.emit('permission-denied', { reason: 'paste', cells: uniq, message: `粘贴撞 ${uniq.length} 个只读格,已跳过(只读区不会被覆盖)` } satisfies PermissionDeniedPayload)
   }
 
   /**
@@ -333,12 +385,13 @@ export class EditController {
    * 覆盖式落到目标区 —— 完整还原 值/原始类型/数字格式/全部样式(含边框)/合并/图片(浮动 + DISPIMG)/行高列宽。
    * 跟 pasteRich(外部 HTML 近似)同走命令栈(整体单次撤销)+ 前后快照 cell-change + 只读 permission-denied。
    */
-  pasteSnapshot(start: { row: number; col: number }, snap: ClipSnapshot): boolean {
+  pasteSnapshot(start: { row: number; col: number }, snap: ClipSnapshot, behaviorOverride?: Partial<PasteBehavior> | null): boolean {
     if (!this.host.isEditingEnabled()) return false
     const sheet = this.host.getSheet()
     const wb = this.host.getWorkbook()
     if (!sheet || !wb) return false
     if (!snap.cells.length && !snap.merges.length && !snap.images.length && !snap.rowHeights.length && !snap.colWidths.length) return false
+    const b = behaviorOverride ? resolvePasteBehavior({ ...this.pasteBehavior, ...behaviorOverride }) : this.pasteBehavior
     this.ensureBaseline()
     const d = this.host.getDate1904()
     const snapWb = cloneWorkbook(wb)
@@ -354,35 +407,46 @@ export class EditController {
     const before = affected.map((p) => buildCellSnapshot(sheet, p.row, p.col, d))
     const denied: Array<{ row: number; col: number }> = []
 
-    // 1) 清目标矩形(可编辑格)→ 覆盖式
-    for (const p of affected) sheet.cells.delete(cellKey(p.row, p.col))
+    // 先记下目标矩形原有样式(供 merge/skip 档复用),再按档清矩形:仅 cellStyle+fill 都覆盖式才整片清(源空格清目标→1:1);
+    // 否则(合并/仅值)保留目标,只把源格盖上去。
+    const targetStyle = new Map<string, { id: number; style: CellStyle }>()
+    for (const p of affected) {
+      const c = sheet.cells.get(cellKey(p.row, p.col))
+      if (c) targetStyle.set(cellKey(p.row, p.col), { id: c.styleId, style: sheet.styles[c.styleId] ?? sheet.styles[0] })
+    }
+    const clearRect = b.cellStyle === 'overwrite' && b.fill === 'overwrite'
+    if (clearRect) for (const p of affected) sheet.cells.delete(cellKey(p.row, p.col))
 
     // 2) DISPIMG 单元格图字节登记进目标 cellImages(缺则补,已存在复用 id;data-url 兜底渲染)
-    if (snap.cellImages.length) {
+    if (b.images === 'apply' && snap.cellImages.length) {
       if (!wb.cellImages) wb.cellImages = new Map()
       for (const ci of snap.cellImages) {
         if (!wb.cellImages.has(ci.id)) wb.cellImages.set(ci.id, { id: ci.id, bytes: b64ToBytes(ci.b64), mime: ci.mime, src: `data:${ci.mime};base64,${ci.b64}` })
       }
     }
 
-    // 3) 落格(完整模型 + intern 样式到目标表 → 跨表/跨实例 styleId 正确)
+    // 3) 落格(完整模型 + 按 cellStyle/fill 档算 styleId:覆盖式=源样式;合并式=源盖目标;仅值=留目标样式)
+    const neutral = sheet.styles[0]
     for (const cc of snap.cells) {
       const row = start.row + cc.r
       const col = start.col + cc.c
       if (!this.host.isEditable(row, col)) { denied.push({ row, col }); continue }
-      const model: CellModel = { row, col, type: cc.type, raw: reviveClipRaw(cc.raw), styleId: internStyle(sheet, cc.style) }
+      const tgt = targetStyle.get(cellKey(row, col))
+      const full = resolvePastedCellStyle(tgt?.style ?? neutral, neutral, cc.style, b.cellStyle, b.fill)
+      const styleId = full ? internStyle(sheet, full) : (tgt?.id ?? 0) // null = 仅值,留目标样式
+      const model: CellModel = { row, col, type: cc.type, raw: reviveClipRaw(cc.raw), styleId }
       if (cc.formula) model.formula = cc.formula
       if (cc.hyperlink) model.hyperlink = cc.hyperlink
       if (cc.comment) model.comment = cc.comment
       if (cc.rich) model.rich = cc.rich
-      if (cc.dispImgId) model.dispImgId = cc.dispImgId
+      if (cc.dispImgId && b.images === 'apply') model.dispImgId = cc.dispImgId
       setCellModel(sheet, model)
     }
 
-    // 4) 合并:先去掉目标矩形内已有合并,再按快照重建(只读区跳过 + denied)
+    // 4) 合并:目标矩形内已有合并按配置清(默认清,否则旧合并吞列);再按快照重建源合并(可关)
     const tr = { top: start.row, left: start.col, bottom: start.row + snap.rows - 1, right: start.col + snap.cols - 1 }
-    sheet.merges = sheet.merges.filter((m) => !(m.top >= tr.top && m.left >= tr.left && m.bottom <= tr.bottom && m.right <= tr.right))
-    for (const m of snap.merges) {
+    if (b.targetMerges === 'clear') sheet.merges = sheet.merges.filter((m) => !this._mergeOverlaps(m, tr.top, tr.left, tr.bottom, tr.right))
+    if (b.sourceMerges === 'apply') for (const m of snap.merges) {
       const range = { top: start.row + m.top, left: start.col + m.left, bottom: start.row + m.bottom, right: start.col + m.right }
       if (range.top === range.bottom && range.left === range.right) continue
       if (!_rangeAllEditableViaHost(this.host, range)) { denied.push(..._collectDeniedInRangeViaHost(this.host, range)); continue }
@@ -390,7 +454,7 @@ export class EditController {
     }
 
     // 5) 浮动图(相对锚点 → 目标起点偏移;DISPIMG 已在第 3 步随格落地,这里只处理真浮动图)
-    for (const im of snap.images) {
+    if (b.images === 'apply') for (const im of snap.images) {
       const fromRow = start.row + im.from.row
       const fromCol = start.col + im.from.col
       if (!this.host.isEditable(fromRow, fromCol)) { denied.push({ row: fromRow, col: fromCol }); continue }
@@ -406,9 +470,9 @@ export class EditController {
       })
     }
 
-    // 6) 行高列宽(1:1:源定制过的行/列尺寸搬到目标对应行列)
-    for (const dim of snap.rowHeights) restoreDimension(sheet, 'row', start.row + dim.i, { height: dim.height ?? sheet.defaultRowHeight, hidden: !!dim.hidden, customHeight: !!dim.custom })
-    for (const dim of snap.colWidths) restoreDimension(sheet, 'col', start.col + dim.i, { width: dim.width ?? sheet.defaultColWidth, hidden: !!dim.hidden })
+    // 6) 行高:按配置搬源(逐行,不动表头);列宽:整列共享 → 默认 firstRowOnly(仅 start.row===0 搬源),可配 source/keep
+    if (b.rowHeight === 'source') for (const dim of snap.rowHeights) restoreDimension(sheet, 'row', start.row + dim.i, { height: dim.height ?? sheet.defaultRowHeight, hidden: !!dim.hidden, customHeight: !!dim.custom })
+    if (shouldApplyColWidth(b, start.row)) for (const dim of snap.colWidths) restoreDimension(sheet, 'col', start.col + dim.i, { width: dim.width ?? sheet.defaultColWidth, hidden: !!dim.hidden })
 
     this.pushUndo({ kind: 'restore-wb', snapshot: snapWb }) // 整体单次撤销
     this.markDirty()
@@ -418,9 +482,7 @@ export class EditController {
     affected.forEach((p, i) =>
       this.host.emit('cell-change', { before: before[i], after: buildCellSnapshot(sheet, p.row, p.col, d), source: 'api' } satisfies CellChangePayload),
     )
-    if (denied.length) {
-      this.host.emit('permission-denied', { reason: 'paste', cells: denied, message: `粘贴撞 ${denied.length} 个只读格,已跳过` } satisfies PermissionDeniedPayload)
-    }
+    this._emitPasteDenied(denied)
     return true
   }
 

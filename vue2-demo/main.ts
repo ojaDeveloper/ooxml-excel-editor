@@ -77,6 +77,7 @@ new Vue({
           { id: 'cell-to-float', kind: 'btn', label: '格→图', title: '内嵌图→浮动图', onClick: this.cellToFloat },
           { id: 'ins-row', kind: 'btn', label: '＋行', title: '选区上方插入行', onClick: this.insRow },
           { id: 'del-row', kind: 'btn', label: '－行', title: '删除选区行', onClick: this.delRow },
+          { id: 'paste-config', kind: 'btn', label: '⚙ 粘贴配置', title: '配置 Ctrl+V/右键粘贴行为(覆盖/合并/仅值、目标合并清除、列宽…)', onClick: () => this.v()?.openPasteConfigDialog() },
         )
       }
       arr.push(

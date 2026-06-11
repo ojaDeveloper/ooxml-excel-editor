@@ -25,6 +25,8 @@ import { CanvasRenderer, type ViewState } from '@/core/render/canvas-renderer'
 import { colIndexToLetters } from '@/core/layout/grid-metrics'
 import { ViewerController, type ContextMenuBeforePayload, type ContextMenuShowPayload, type ContextMenuTransform, type TooltipState, type FindState } from '@/core/viewer/controller'
 import type { EditableTarget, EditConfig } from '@/core/edit/types'
+import type { PasteBehavior } from '@/core/edit/paste-behavior'
+import { DEFAULT_PASTE_BEHAVIOR } from '@/core/edit/paste-behavior'
 import type { FormulaEngineFactory } from '@/core/formula/engine'
 import type { CellChangePayload, DimChangePayload, DirtyChangePayload, ImageChangePayload, StructChangePayload } from '@/core/edit/edit-controller'
 import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
@@ -129,6 +131,13 @@ const props = withDefaults(
     /** 自定义/自研公式引擎工厂(可换引擎);不给则用默认 HyperFormula(需 npm i hyperformula) */
     formulaEngine?: FormulaEngineFactory
     /**
+     * 粘贴行为(默认 = 覆盖式 1:1)。控制 Ctrl+V / 右键粘贴时源各方面如何落目标(覆盖/合并/仅值)。
+     * 不传 = 默认;也可 `viewer.setPasteBehavior(cfg)` 运行时改、右键「选择性粘贴」逐次选预设。
+     */
+    pasteBehavior?: Partial<PasteBehavior>
+    /** 粘贴撞只读格的内置提醒:'dialog'(默认,弹窗列出哪些格只读)/ 'toast'(气泡)/ 'none'(只发事件) */
+    readOnlyPrompt?: 'dialog' | 'toast' | 'none'
+    /**
      * 内置导出进度遮罩(P1.5):默认 `true` —— 调 `viewer.downloadPdf` / `downloadImage` / `downloadXlsx` /
      * `print` / 选区图片批量转换 时,壳自动建 `AbortController` + 接 `onProgress` →
      * 显示居中模态(stage 标签 + 进度条 + 取消按钮)。**关闭** `:export-progress="false"` 走纯回调
@@ -183,6 +192,8 @@ const effectiveEditConfig = computed<EditConfig>(() => ({
   strictDimensions: props.strictDimensions,
   recalc: props.recalc,
   formulaEngine: props.formulaEngine,
+  pasteBehavior: props.pasteBehavior,
+  readOnlyPrompt: props.readOnlyPrompt,
 }))
 // 合并编辑器解析器(E2:组件 editor prop 优先,其次插件 editor 数组序首个非空)
 function resolveEditor(cell: CellModel | null, pos: { row: number; col: number }): CellEditorFactory | void {
@@ -840,7 +851,10 @@ const viewerApi: ViewerApi = {
   mergeCells: (range) => controller?.mergeCells(range) ?? false,
   unmergeCells: (range) => controller?.unmergeCells(range) ?? false,
   pasteText: (text, at) => controller?.pasteText(text, at) ?? false,
-  pasteRichHtml: (html, at) => controller?.pasteRichHtml(html, at) ?? false,
+  pasteRichHtml: (html, at, behaviorOverride) => controller?.pasteRichHtml(html, at, behaviorOverride) ?? false,
+  getPasteBehavior: () => controller?.getPasteBehavior() ?? DEFAULT_PASTE_BEHAVIOR,
+  setPasteBehavior: (cfg) => controller?.setPasteBehavior(cfg),
+  openPasteConfigDialog: () => controller?.openPasteConfigDialog() ?? false,
   pasteImageBlob: (blob, at) => controller?.pasteImageBlob(blob, at) ?? Promise.resolve(false),
   getImages: () => controller?.getImages() ?? [],
   addImage: (a) => controller?.addImage(a) ?? -1,

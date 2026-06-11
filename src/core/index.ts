@@ -67,6 +67,8 @@ export { PluginOverlayHost } from './viewer/plugin-overlay'
 // ---- 编辑(配置 + 只读判定 + 写数据层 + 命令栈 + 快照;E0/E1) ----
 export { resolveEditable } from './edit/permissions'
 export type { EditConfig, EditPermission } from './edit/types'
+export type { PasteBehavior } from './edit/paste-behavior'
+export { DEFAULT_PASTE_BEHAVIOR, PASTE_PRESET_VALUES_ONLY, resolvePasteBehavior } from './edit/paste-behavior'
 export { EditController } from './edit/edit-controller'
 export type {
   EditControllerHost,

@@ -9,8 +9,8 @@
  * 类型自动推断(默认 on):数字字符串 → number,ISO 日期串 → Date,'TRUE'/'FALSE' → boolean。
  * 默认样式 = 单一缺省 CellStyle(makeDefaultStyle());壳的 :theme/:cellStyle/插件 仍可叠加。
  */
-import type { CellModel, CellStyle, CellValueType, SheetModel, WorkbookModel } from './model/types'
-import { cellKey } from './model/types'
+import type { CellModel, CellValueType, SheetModel, WorkbookModel } from './model/types'
+import { cellKey, makeDefaultStyle } from './model/types'
 
 export type JsonRow = unknown[] | Record<string, unknown>
 export type JsonSheetInput = { name?: string; rows: JsonRow[] }
@@ -31,22 +31,6 @@ export interface JsonLoadOptions {
 }
 
 const DEFAULT_THEME: string[] = Array(17).fill('#000000')
-
-/** 一份默认 CellStyle,与 ExcelJS 解析得到的"无样式"格视觉接近。 */
-function makeDefaultStyle(): CellStyle {
-  return {
-    font: { name: 'Calibri', size: 11, bold: false, italic: false, underline: false, strike: false, color: '#000000' },
-    fill: { type: 'none' },
-    borders: {},
-    hAlign: 'general',
-    vAlign: 'bottom',
-    wrapText: false,
-    shrinkToFit: false,
-    textRotation: 0,
-    indent: 0,
-    numFmt: 'General',
-  }
-}
 
 function makeSheet(name: string, index: number): SheetModel {
   return {

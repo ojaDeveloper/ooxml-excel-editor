@@ -358,6 +358,27 @@ export interface WorkbookModel {
 
 export const cellKey = (row: number, col: number) => `${row}:${col}`
 
+/**
+ * 规范的"空白默认样式"——所有 SheetModel.styles[0] 必须是它(中性、无填充、无边框)。
+ * 空格 / 新建格 / setCellValue 落的格 / applyStyleOverride 的兜底基样式都回落到 styleId 0,
+ * 因此 index 0 绝不能是"恰好第一个被解析到的单元格样式"(否则那个格的底色/边框会冒到所有默认格,
+ * 见 parser 把首格 A1 绿底当默认导致粘贴/编辑串色的 bug)。loader-json / parser / clipboard-snapshot 共用此工厂。
+ */
+export function makeDefaultStyle(): CellStyle {
+  return {
+    font: { name: 'Calibri', size: 11, bold: false, italic: false, underline: false, strike: false, color: '#000000' },
+    fill: { type: 'none' },
+    borders: {},
+    hAlign: 'general',
+    vAlign: 'bottom',
+    wrapText: false,
+    shrinkToFit: false,
+    textRotation: 0,
+    indent: 0,
+    numFmt: 'General',
+  }
+}
+
 /** 数据钩子: 解析后、渲染前改模型(返回新模型或就地改) */
 export type TransformModelFn = (workbook: WorkbookModel) => WorkbookModel | void
 

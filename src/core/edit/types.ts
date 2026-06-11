@@ -4,6 +4,7 @@
  */
 import type { CellModel, MergeRange } from '../model/types'
 import type { FormulaEngineFactory } from '../formula/engine'
+import type { PasteBehavior } from './paste-behavior'
 
 /**
  * 行/列维度目标 (Phase B, 2026-06-08) —— 用于尺寸 API (setColumnWidth / setRowHeight /
@@ -85,6 +86,19 @@ export interface EditConfig {
   recalc?: boolean
   /** 自定义/自研公式引擎工厂(可换引擎);不给则用默认 HyperFormula 适配器。 */
   formulaEngine?: FormulaEngineFactory
+  /**
+   * 粘贴行为配置(默认 = 覆盖式 1:1,见 {@link PasteBehavior})。控制 Ctrl+V / 右键粘贴时
+   * 源内容各方面如何落到目标(覆盖 / 合并 / 仅值)。不传 = 默认。也可运行时 `viewer.setPasteBehavior(cfg)`,
+   * 或右键「选择性粘贴」逐次选预设。缺项回落默认。
+   */
+  pasteBehavior?: Partial<PasteBehavior>
+  /**
+   * 粘贴撞只读格时的**内置提醒**方式(逐格精确,即便编辑模式下也可能有只读格):
+   *  - `'dialog'`(默认):弹窗列出**具体哪些格**只读,让用户明确知道哪部分没粘上;
+   *  - `'toast'`:顶部气泡简短提示 + 自动消失;
+   *  - `'none'`:不弹内置 UI(仍发 `permission-denied` 事件,消费方自处理)。
+   */
+  readOnlyPrompt?: 'dialog' | 'toast' | 'none'
 }
 
 /** 单元格编辑权限 */

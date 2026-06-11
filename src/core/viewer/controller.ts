@@ -29,8 +29,11 @@ import { inspectCell, type CellInspection } from '../model/inspect'
 import { CellEditorHost } from '../edit/editor-host'
 import { ContextMenuHost, type MenuItem } from '../edit/context-menu'
 import { PivotDialogHost, PivotFieldPanelHost, type PivotFieldOption, type PivotOutputChoice } from './pivot-dialog-host'
+import { PasteConfigDialogHost } from './paste-config-host'
+import { ReadOnlyPromptHost } from './readonly-prompt-host'
 import { parseClipboardHtml } from '../edit/clipboard-html'
 import { serializeSnapshot, encodeSnapshot, parseSnapshotHtml, withoutImages, bytesToB64, CLIP_IMAGE_BUDGET_BYTES } from '../edit/clipboard-snapshot'
+import { type PasteBehavior, DEFAULT_PASTE_BEHAVIOR, PASTE_PRESET_VALUES_ONLY } from '../edit/paste-behavior'
 import { LightboxHost } from './lightbox-host'
 import type { CellEditorContext, EditorCommitValue, EditorResolver } from '../edit/editor-context'
 import { defaultCellEditor } from '../edit/default-editor'
@@ -42,7 +45,7 @@ import { OverlayManager, type OverlayQuads } from './overlay-manager'
 import { WorkbookExporter, type ExporterHost } from '../export/exporter'
 import type { ImageExportOptions, PdfExportOptions, PrintOptions } from '../export/types'
 import type { XlsxExportOptions } from '../export/xlsx-writer'
-import type { CreatePivotTableOptions } from '../plugin'
+import type { CreatePivotTableOptions, PermissionDeniedPayload } from '../plugin'
 
 export type Cell = { row: number; col: number }
 export interface TooltipState {
@@ -167,6 +170,8 @@ export class ViewerController {
   private lightbox = new LightboxHost()
   private pivotDialog = new PivotDialogHost()
   private pivotPanel = new PivotFieldPanelHost()
+  private pasteConfigDialog = new PasteConfigDialogHost()
+  private readonlyPrompt = new ReadOnlyPromptHost()
   /** 透视表"活刷新"重入兜底:recompute 内部 setCellValue 不再触发 onModelChange,此旗保险。 */
   private pivotRefreshing = false
   private lightboxEnabled = true
@@ -224,6 +229,8 @@ export class ViewerController {
   private editorHost: CellEditorHost
   /** 按格解析编辑器(壳合并 plugin.editor + prop.editor 后注入;E2) */
   private editorResolver?: EditorResolver
+  /** paste 事件处理器(绑在 scroller 上;Ctrl+V 走它拿**原始**剪贴板 HTML,避开 clipboard.read() 的净化) */
+  private readonly onPasteHandler = (e: ClipboardEvent) => this.onPaste(e)
 
   constructor(
     private els: ViewerControllerEls,
@@ -262,10 +269,13 @@ export class ViewerController {
       rebuildOverlays: () => {
         if (this.sheet && this.renderer) void this.overlays.build(this.sheet, this.renderer, this.view)
       },
-      emit: (event, payload) => this.hooks.onEditEvent(event, payload),
+      emit: (event, payload) => this.emitEditEvent(event, payload),
     }
     this.edit = new EditController(editHost)
     this.editorHost = new CellEditorHost(els.editorSlot, (row, col) => this.rectOf(row, col))
+    // Ctrl+V 走 paste 事件:e.clipboardData 给的是原始未净化 HTML(WPS 的 <style>/VML 都在);
+    // clipboard.read()(pasteFromClipboard 用)会净化删掉 <style>/注释 → 丢格式/数字格式/内嵌图。
+    els.scroller.addEventListener('paste', this.onPasteHandler)
   }
 
   /** 切表/换簿/主题变化: 清状态,重建渲染器,重置滚动,量尺寸,建叠加层,绘制,按需重跑查找 */
@@ -532,12 +542,15 @@ export class ViewerController {
   dispose(): void {
     if (this.rafId) cancelAnimationFrame(this.rafId)
     this.rafId = 0
+    this.els.scroller.removeEventListener('paste', this.onPasteHandler)
     this.overlays.dispose()
     this.editorHost.dispose()
     this.menuHost.dispose()
     this.lightbox.dispose()
     this.pivotDialog.dispose()
     this.pivotPanel.dispose()
+    this.pasteConfigDialog.dispose()
+    this.readonlyPrompt.dispose()
     this.edit.disposeEngine()
   }
 
@@ -1080,6 +1093,14 @@ export class ViewerController {
     const items: MenuItem[] = [
       { label: '复制', action: () => void this.copySelection() },
       { label: '粘贴', disabled: !anyEditable, action: () => void this.pasteFromClipboard() },
+      {
+        label: '选择性粘贴',
+        disabled: !anyEditable,
+        children: [
+          { label: '覆盖格式(贴近源)', action: () => void this.pasteFromClipboard(DEFAULT_PASTE_BEHAVIOR) },
+          { label: '保留原样式(仅值)', action: () => void this.pasteFromClipboard(PASTE_PRESET_VALUES_ONLY) },
+        ],
+      },
       { separator: true },
       { label: `在上方插入 ${rows} 行`, action: () => this.insertRows(range.top, rows) },
       { label: `在左侧插入 ${cols} 列`, action: () => this.insertCols(range.left, cols) },
@@ -1267,11 +1288,8 @@ export class ViewerController {
       e.preventDefault()
       return
     }
-    if (this.editCfg.editable && (e.ctrlKey || e.metaKey) && (e.key === 'v' || e.key === 'V')) {
-      void this.pasteFromClipboard() // G2:Ctrl+V 粘贴(读剪贴板 → 区域写入)
-      e.preventDefault()
-      return
-    }
+    // Ctrl+V 不在此拦截:放行原生粘贴 → 触发 scroller 的 paste 事件(onPaste 拿原始 HTML);
+    // 在此 preventDefault 会**阻止** paste 事件,反而退回净化路径。
     if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
       this.selectAll()
       this.render()
@@ -1485,12 +1503,55 @@ export class ViewerController {
   }
 
   /**
-   * 从系统剪贴板粘贴。优先 `clipboard.read()` 拿 **text/html**(Excel/WPS 复制 → 富粘贴:值+字体+颜色+
-   * 填充+边框+合并),否则单张图片 → 落格,再否则回退 **text/plain** TSV(`pasteText`)。需读权限/安全上下文,
-   * 受限时回退 readText;都失败返 false。
+   * paste 事件粘贴(Ctrl+V 主路径,绑在 scroller 上)。`e.clipboardData` 给的是**原始未净化** HTML/图片/文本 ——
+   * 关键:`navigator.clipboard.read()`(pasteFromClipboard 用)会净化 HTML、删掉 `<style>` 块和注释,而 WPS/Excel
+   * 的格式(CSS 类)、数字格式(mso-number-format)、内嵌图(VML o:gfxdata)全在那里面 → 走 read 必丢。paste 事件不净化。
+   * 我们自己复制的快照(data-ooxml-clip)也一并原样拿到,1:1 不受影响。
    */
-  async pasteFromClipboard(): Promise<boolean> {
-    if (!this.editCfg.editable) return false
+  /**
+   * 统一出口(核心层唯一只读反馈点):**任何**改数据的操作撞只读 → EditController/控制器都经 `host.emit` 走到这里,
+   * 按 `readOnlyPrompt` 配置(dialog/toast/none)弹一次内置提醒,再转壳事件。新增输入方式只要照常走 EditController
+   * 的 API(其内 `isEditable` 中央闸门已逐格拦截 + emit permission-denied),无需各自重写只读检查/提醒。
+   */
+  private emitEditEvent(event: EditEventName, payload: unknown): void {
+    if (event === 'permission-denied') {
+      const p = payload as PermissionDeniedPayload
+      // 改数据源的操作(paste/merge/unmerge/image-convert)撞只读 → 统一弹提醒;dimension(列宽行高=布局,非数据)不弹
+      if (p?.reason && p.reason !== 'dimension') {
+        this.readonlyPrompt.show(this.editCfg.readOnlyPrompt ?? 'dialog', p.message ?? '目标只读,操作已跳过', p.cells ?? [])
+      }
+    }
+    this.hooks.onEditEvent(event, payload)
+  }
+
+  onPaste(e: ClipboardEvent): void {
+    const dt = e.clipboardData
+    if (!dt) return
+    const html = dt.getData('text/html')
+    const text = dt.getData('text/plain')
+    const file = Array.from(dt.items ?? []).find((it) => it.kind === 'file' && it.type.startsWith('image/'))?.getAsFile()
+    const hasContent = !!html || !!text || !!file
+    // 只读提示(用户诉求):只读模式 / 落点只读 → 不静默,发 permission-denied 让壳 toast,用户知道为啥没粘上
+    if (!this.editCfg.editable) {
+      if (hasContent) { e.preventDefault(); this.emitEditEvent('permission-denied', { reason: 'paste', cells: [], message: '当前为只读模式,无法粘贴(开启编辑后再试)' } satisfies PermissionDeniedPayload) }
+      return
+    }
+    // 落点/区域是否只读不在此预判 —— 交给 pasteRich/pasteSnapshot 的中央逐格 isEditable 闸门:可编辑的格照常粘,
+    // 只读格自动跳过并收集 → 经 emitEditEvent 统一提醒。避免在输入层重写一遍只读检查(换输入方式不必重写)。
+    if (html && this.pasteRichHtml(html)) { e.preventDefault(); return }
+    if (file) { void this.pasteImageBlob(file); e.preventDefault(); return }
+    if (text && this.pasteText(text)) e.preventDefault()
+  }
+
+  /**
+   * 从系统剪贴板粘贴(右键菜单"粘贴"等无 paste 事件的入口用)。`clipboard.read()` 拿 text/html —— 注意它会**净化**
+   * HTML(删 `<style>`/注释),所以从 WPS/Excel 粘的格式不如 Ctrl+V(走 onPaste 的原始 HTML)全。否则单图 / TSV 兜底。
+   */
+  async pasteFromClipboard(behaviorOverride?: Partial<PasteBehavior> | null): Promise<boolean> {
+    if (!this.editCfg.editable) {
+      this.emitEditEvent('permission-denied', { reason: 'paste', cells: [], message: '当前为只读模式,无法粘贴(开启编辑后再试)' } satisfies PermissionDeniedPayload)
+      return false
+    }
     type Clip = {
       read?: () => Promise<Array<{ types: string[]; getType: (t: string) => Promise<Blob> }>>
       readText?: () => Promise<string>
@@ -1502,7 +1563,7 @@ export class ViewerController {
         for (const it of items) {
           if (it.types.includes('text/html')) {
             const html = await (await it.getType('text/html')).text()
-            if (this.pasteRichHtml(html)) return true
+            if (this.pasteRichHtml(html, undefined, behaviorOverride)) return true
           }
         }
         for (const it of items) {
@@ -1525,17 +1586,32 @@ export class ViewerController {
    * 解析 Excel/WPS 复制的剪贴板 HTML(text/html)→ 富粘贴:值 + 字体/颜色/填充/边框/对齐 + 合并 + data-uri 图,
    * **整体单次撤销**。无 `<table>` 返 false(调用方回退 TSV)。at 缺省用活动格。
    */
-  pasteRichHtml(html: string, at?: { row: number; col: number }): boolean {
+  pasteRichHtml(html: string, at?: { row: number; col: number }, behaviorOverride?: Partial<PasteBehavior> | null): boolean {
     if (!this.editCfg.editable || !this.sheet) return false
     const sel = this.getSelection()
     const start = at ?? this.selActive ?? (sel ? { row: sel.top, col: sel.left } : null)
     if (!start) return false
     // 本组件自己复制的 → 用嵌在剪贴板里的完整快照做 1:1(跨实例 Vue3/Vue2/React 通用);否则走外部 HTML 近似解析
     const snap = parseSnapshotHtml(html)
-    if (snap) return this.edit.pasteSnapshot(start, snap)
+    if (snap) return this.edit.pasteSnapshot(start, snap, behaviorOverride)
     const parsed = parseClipboardHtml(html)
     if (!parsed) return false
-    return this.edit.pasteRich(start, parsed)
+    return this.edit.pasteRich(start, parsed, behaviorOverride)
+  }
+
+  /** 读当前粘贴行为配置(完整)。 */
+  getPasteBehavior(): PasteBehavior {
+    return this.edit.getPasteBehavior()
+  }
+  /** 设粘贴行为默认(缺项回落默认);影响 Ctrl+V / 右键「粘贴」。右键「选择性粘贴」逐次预设走 pasteRichHtml 的第 3 参。 */
+  setPasteBehavior(cfg: Partial<PasteBehavior> | null): void {
+    this.edit.setPasteBehavior(cfg)
+  }
+  /** 打开「粘贴行为配置」面板(框架无关 DOM,三壳共用);应用即 setPasteBehavior。需 editable。 */
+  openPasteConfigDialog(): boolean {
+    if (!this.editCfg.editable) return false
+    this.pasteConfigDialog.show({ current: this.edit.getPasteBehavior(), onSubmit: (cfg) => this.edit.setPasteBehavior(cfg) })
+    return true
   }
 
   /** 把一张图片 blob 落到活动格(转内嵌图);剪贴板单图粘贴 / 拖文件进网格用。 */
@@ -2245,6 +2321,7 @@ export class ViewerController {
   /** 设置编辑配置(默认只读;壳在挂载 + props 变化时调) */
   setEditConfig(cfg: EditConfig): void {
     this.editCfg = cfg ?? {}
+    this.edit.setPasteBehavior(this.editCfg.pasteBehavior ?? null) // 粘贴行为默认(缺项回落默认)
     this.edit.refreshEngine() // recalc/formulaEngine 可能变了 → 重置引擎并按需点火
   }
 

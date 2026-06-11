@@ -26,3 +26,6 @@ wps-roundtrip-test.xlsx
 
 # opencode 本地配置(含 API key,勿提交)
 opencode.json
+
+# WPS 剪贴板 HTML 抓样(含大图 base64,勿提交)
+docs/wps粘贴.txt

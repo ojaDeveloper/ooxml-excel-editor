@@ -63,6 +63,7 @@ import type {
   WorkbookModel,
 } from '@/core/model/types'
 import type { EditableTarget, EditConfig } from '@/core/edit/types'
+import { type PasteBehavior, DEFAULT_PASTE_BEHAVIOR } from '@/core/edit/paste-behavior'
 import type { FormulaEngineFactory } from '@/core/formula/engine'
 import type { EditorResolver, CellEditorFactory } from '@/core/edit/editor-context'
 import { revokeImages } from '@/core/finalize'
@@ -123,6 +124,8 @@ export default defineComponent({
     editor: { type: Function as PropType<EditorResolver>, default: undefined },
     recalc: { type: Boolean, default: false },
     formulaEngine: { type: Function as PropType<FormulaEngineFactory>, default: undefined },
+    pasteBehavior: { type: Object as PropType<Partial<PasteBehavior>>, default: undefined },
+    readOnlyPrompt: { type: String as PropType<'dialog' | 'toast' | 'none'>, default: undefined },
     contextMenu: { type: [Boolean, Function] as PropType<boolean | ContextMenuTransform>, default: undefined },
     exportProgress: { type: Boolean, default: true },
   },
@@ -250,6 +253,8 @@ export default defineComponent({
       strictDimensions: props.strictDimensions,
       recalc: props.recalc,
       formulaEngine: props.formulaEngine,
+      pasteBehavior: props.pasteBehavior,
+      readOnlyPrompt: props.readOnlyPrompt,
     }))
     function resolveEditor(cell: CellModel | null, pos: { row: number; col: number }): CellEditorFactory | void {
       const fromProp = props.editor?.(cell, pos)
@@ -666,7 +671,10 @@ export default defineComponent({
       mergeCells: (range: MergeRange) => controllerRef.value?.mergeCells(range) ?? false,
       unmergeCells: (range: MergeRange) => controllerRef.value?.unmergeCells(range) ?? false,
       pasteText: (text: string, at?: { row: number; col: number }) => controllerRef.value?.pasteText(text, at) ?? false,
-      pasteRichHtml: (html: string, at?: { row: number; col: number }) => controllerRef.value?.pasteRichHtml(html, at) ?? false,
+      pasteRichHtml: (html: string, at?: { row: number; col: number }, behaviorOverride?: Partial<PasteBehavior> | null) => controllerRef.value?.pasteRichHtml(html, at, behaviorOverride) ?? false,
+      getPasteBehavior: () => controllerRef.value?.getPasteBehavior() ?? DEFAULT_PASTE_BEHAVIOR,
+      setPasteBehavior: (cfg: Partial<PasteBehavior> | null) => controllerRef.value?.setPasteBehavior(cfg),
+      openPasteConfigDialog: () => controllerRef.value?.openPasteConfigDialog() ?? false,
       pasteImageBlob: (blob: Blob, at?: { row: number; col: number }) => controllerRef.value?.pasteImageBlob(blob, at) ?? Promise.resolve(false),
       getImages: () => controllerRef.value?.getImages() ?? [],
       addImage: (a: any) => controllerRef.value?.addImage(a) ?? -1,

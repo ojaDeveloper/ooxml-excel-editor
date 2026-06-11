@@ -374,6 +374,7 @@ const demoBarItems = computed<DemoItem[]>(() => {
       { id: 'cell-to-float', type: 'btn', label: '格→图', title: '把选中格的内嵌图拎成浮动图(WPS 嵌入→浮动)', onClick: cellToFloat },
       { id: 'ins-row', type: 'btn', label: '＋行', title: '选区上方插入行(E7)', onClick: insertRowAtSel },
       { id: 'del-row', type: 'btn', label: '－行', title: '删除选区行(E7)', onClick: deleteRowAtSel },
+      { id: 'paste-config', type: 'btn', label: '⚙ 粘贴配置', title: '配置 Ctrl+V/右键粘贴行为(覆盖/合并/仅值、目标合并清除、列宽…)', onClick: () => viewerRef.value?.openPasteConfigDialog() },
     )
   }
   return arr
