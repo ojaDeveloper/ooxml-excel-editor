@@ -277,8 +277,9 @@ function toCellModel(
     const style = extractStyle(cell, theme)
     const hasBorder = !!(style.borders.top || style.borders.bottom || style.borders.left || style.borders.right || style.borders.diagonal)
     const hasFill = style.fill.type !== 'none'
-    if (!hasBorder && !hasFill) return null
-    return { row, col, type: 'empty', raw: null, styleId: internStyle(style) }
+    const comment = extractComment((cell as any).note)
+    if (!hasBorder && !hasFill && !comment) return null // 真正空白(无边框/填充/批注)→ 跳过,不膨胀
+    return { row, col, type: 'empty', raw: null, comment, styleId: internStyle(style) }
   }
 
   let type: CellModel['type'] = 'string'

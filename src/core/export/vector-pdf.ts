@@ -377,7 +377,16 @@ function drawVectorCell(
   }
   let ty: number
   let baseline: 'top' | 'middle' | 'bottom'
-  if (s.vAlign === 'top') {
+  // 溢出顶对齐:wrap 文本折行后总高超过格高 → 顶对齐显示文头(跟 canvas/Excel 一致,避免 PDF 里被裁掉文头)
+  let forceTop = false
+  if (s.wrapText) {
+    const fsMm = s.font.size * (mmPerCss / MM_PER_PX)
+    try {
+      const lines = doc.splitTextToSize(text, Math.max(1, w - 2 * pad))
+      if (lines.length * fsMm * 1.15 > h - 2 * pad) forceTop = true
+    } catch { /* splitTextToSize 失败忽略 */ }
+  }
+  if (s.vAlign === 'top' || forceTop) {
     ty = y + pad
     baseline = 'top'
   } else if (s.vAlign === 'middle') {
@@ -441,7 +450,18 @@ function drawBorder(doc: any, edge: any, x1: number, y1: number, x2: number, y2:
   if (!edge || !edge.style || edge.style === 'none') return
   const [r, g, b] = hexToRgb(edge.color || '#000000')
   doc.setDrawColor(r, g, b)
-  doc.setLineWidth(BORDER_W[edge.style] ?? 0.2)
+  const lw = BORDER_W[edge.style] ?? 0.2
+  if (edge.style === 'double') {
+    // double 画成沿法线偏移的两条平行线(跟 canvas 一致,不再退化成单线)
+    doc.setLineWidth(Math.max(0.1, lw * 0.5))
+    const dx = x2 - x1, dy = y2 - y1, len = Math.hypot(dx, dy) || 1
+    const off = Math.max(0.18, lw * 0.6)
+    const nx = (-dy / len) * off, ny = (dx / len) * off
+    doc.line(x1 + nx, y1 + ny, x2 + nx, y2 + ny)
+    doc.line(x1 - nx, y1 - ny, x2 - nx, y2 - ny)
+    return
+  }
+  doc.setLineWidth(lw)
   doc.line(x1, y1, x2, y2)
 }
 

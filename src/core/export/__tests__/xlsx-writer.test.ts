@@ -70,6 +70,26 @@ describe('xlsx-writer 往返(从模型重建 → 重解析,值/样式/合并/几
     expect(ws.views?.[0]?.state).toBe('frozen') // 冻结存活
   })
 
+  it('富文本往返:每段字体(颜色/粗体)不丢', async () => {
+    const wb = workbook()
+    wb.sheets[0].cells.set(cellKey(1, 1), {
+      row: 1, col: 1, type: 'richtext', raw: 'AB',
+      rich: [
+        { text: 'A', font: { color: '#FF0000', bold: true } },
+        { text: 'B', font: { color: '#0000FF' } },
+      ],
+      styleId: 0,
+    } as never)
+    const buf = await (await workbookToXlsxBlob(wb)).arrayBuffer()
+    const re = await parseWorkbook(buf)
+    const cell = re.sheets[0].cells.get(cellKey(1, 1))!
+    expect(cell.type).toBe('richtext')
+    expect(cell.rich?.length).toBe(2)
+    expect(String(cell.rich?.[0].font?.color).toUpperCase()).toBe('#FF0000') // 红(以前导出丢)
+    expect(cell.rich?.[0].font?.bold).toBe(true)
+    expect(String(cell.rich?.[1].font?.color).toUpperCase()).toBe('#0000FF') // 蓝
+  })
+
   it('编辑一格再导出:新值进入 xlsx', async () => {
     const wb = workbook()
     wb.sheets[0].cells.set(cellKey(1, 0), { row: 1, col: 0, type: 'string', raw: 'EDITED', styleId: 0 } as never)

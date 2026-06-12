@@ -61,6 +61,20 @@ function cssToArgb(c?: string): string | undefined {
 }
 
 /** 把模型样式套到 ExcelJS cell(只设非默认部分,保文件精简)。 */
+/** 我们的 Partial<Font> → ExcelJS 富文本 run 字体(只写出现的字段);颜色 css→argb。 */
+function toExcelRichFont(f: Partial<CellStyle['font']>): Record<string, unknown> {
+  const color = f.color ? cssToArgb(f.color) : undefined
+  const out: Record<string, unknown> = {}
+  if (f.name) out.name = f.name
+  if (f.size) out.size = f.size
+  if (f.bold) out.bold = true
+  if (f.italic) out.italic = true
+  if (f.underline) out.underline = true
+  if (f.strike) out.strike = true
+  if (color) out.color = { argb: color }
+  return out
+}
+
 function applyStyle(ec: { font?: unknown; fill?: unknown; border?: unknown; alignment?: unknown; numFmt?: string }, st: CellStyle): void {
   const f = st.font
   const color = cssToArgb(f.color)
@@ -125,7 +139,8 @@ function cellValue(cell: CellModel): unknown {
     case 'hyperlink':
       return { text: String(cell.raw ?? ''), hyperlink: cell.hyperlink ?? '' }
     case 'richtext':
-      return cell.rich ? { richText: cell.rich.map((r) => ({ text: r.text })) } : (cell.raw ?? '')
+      // 带回每段字体(颜色/粗斜/下划线/删除线/字号/字体名)→ 富文本往返不丢格式
+      return cell.rich ? { richText: cell.rich.map((r) => (r.font ? { text: r.text, font: toExcelRichFont(r.font) } : { text: r.text })) } : (cell.raw ?? '')
     default:
       return cell.raw ?? null // empty
   }

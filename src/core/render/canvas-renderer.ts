@@ -1215,18 +1215,30 @@ export class CanvasRenderer {
     const runs = cell.rich || []
     const baseFont = style.font
     const hAlign = resolveHAlign(style.hAlign, false)
-    const availW = w - 2 * pad
+    const indentPx = (style.indent || 0) * 8 * zoom
+    const availW = w - 2 * pad - (hAlign === 'left' ? indentPx : 0)
 
-    // 每个 run 预算字体串 + 颜色
-    type Seg = { text: string; fontCss: string; color: string }
-    const fontCache: string[] = []
-    const colorOf: string[] = []
-    for (let i = 0; i < runs.length; i++) {
-      fontCache[i] = fontToCss({ ...baseFont, ...runs[i].font } as any, zoom)
-      colorOf[i] = (runs[i].font?.color as string) || baseFont.color
+    // shrinkToFit(且非 wrap):按单行总宽算统一缩放,塞进列宽(跟普通文本路径同档)
+    let scale = 1
+    if (style.shrinkToFit && !style.wrapText && availW > 0) {
+      let totalW = 0
+      for (let i = 0; i < runs.length; i++) { ctx.font = fontToCss({ ...baseFont, ...runs[i].font } as any, zoom); totalW += ctx.measureText(runs[i].text).width }
+      if (totalW > availW && totalW > 0) scale = Math.max(0.3, availW / totalW)
     }
 
-    // 排版成行:wrapText 时逐字符按列宽折行(保留各 run 字体/颜色,跟 WPS 一致);否则单行
+    // 每个 run 预算:字体串 + 颜色 + 下划线/删除线 + 缩放后字号(px,画装饰线用)
+    type Seg = { text: string; fontCss: string; color: string; ul: boolean; st: boolean; szPx: number }
+    const fontCache: string[] = []; const colorOf: string[] = []; const ulOf: boolean[] = []; const stOf: boolean[] = []; const szPxOf: number[] = []
+    for (let i = 0; i < runs.length; i++) {
+      const f = { ...baseFont, ...runs[i].font }
+      const szPt = (f.size ?? baseFont.size) * scale
+      fontCache[i] = fontToCss({ ...f, size: szPt } as any, zoom)
+      colorOf[i] = (runs[i].font?.color as string) || baseFont.color
+      ulOf[i] = !!f.underline; stOf[i] = !!f.strike; szPxOf[i] = szPt * zoom * (96 / 72)
+    }
+    const mkSeg = (ch: string, i: number): Seg => ({ text: ch, fontCss: fontCache[i], color: colorOf[i], ul: ulOf[i], st: stOf[i], szPx: szPxOf[i] })
+
+    // 排版成行:wrapText 逐字符按列宽折行(保留各 run 字体/颜色/装饰);否则单行
     const lines: Seg[][] = []
     if (style.wrapText && availW > 0) {
       let line: Seg[] = []
@@ -1239,18 +1251,18 @@ export class CanvasRenderer {
           const cw = ctx.measureText(ch).width
           if (lineW + cw > availW && lineW > 0) flush()
           const last = line[line.length - 1]
-          if (last && last.fontCss === fontCache[i] && last.color === colorOf[i]) last.text += ch
-          else line.push({ text: ch, fontCss: fontCache[i], color: colorOf[i] })
+          if (last && last.fontCss === fontCache[i] && last.color === colorOf[i] && last.ul === ulOf[i] && last.st === stOf[i]) last.text += ch
+          else line.push(mkSeg(ch, i))
           lineW += cw
         }
       }
       flush()
     } else {
-      lines.push(runs.map((r, i) => ({ text: r.text, fontCss: fontCache[i], color: colorOf[i] })))
+      lines.push(runs.map((_, i) => ({ ...mkSeg(runs[i].text, i) })))
     }
 
-    // 垂直对齐 + 溢出顶对齐(跟普通文本 drawText 完全一致:超出格高 → 顶对齐显示文头,WPS 行为)
-    const lineH = baseFont.size * zoom * (96 / 72) * LINE_HEIGHT_FACTOR
+    // 垂直对齐 + 溢出顶对齐(跟普通文本 drawText 一致:超出格高 → 顶对齐显示文头,WPS 行为)
+    const lineH = baseFont.size * scale * zoom * (96 / 72) * LINE_HEIGHT_FACTOR
     const totalH = lineH * lines.length
     const overflowsCell = totalH > h - 2 * pad
     let startY: number
@@ -1268,7 +1280,7 @@ export class CanvasRenderer {
       const segs = lines[li]
       let lineW = 0
       for (const s of segs) { ctx.font = s.fontCss; lineW += ctx.measureText(s.text).width }
-      let tx = x + pad
+      let tx = x + pad + indentPx
       if (hAlign === 'center') tx = x + (w - lineW) / 2
       else if (hAlign === 'right') tx = x + w - pad - lineW
       const ty = startY + li * lineH
@@ -1276,7 +1288,14 @@ export class CanvasRenderer {
         ctx.font = s.fontCss
         ctx.fillStyle = s.color
         ctx.fillText(s.text, tx, ty)
-        tx += ctx.measureText(s.text).width
+        const sw = ctx.measureText(s.text).width
+        if (s.ul || s.st) { // 逐 run 下划线/删除线
+          ctx.strokeStyle = s.color
+          ctx.lineWidth = Math.max(1, s.szPx / 14)
+          if (s.ul) { ctx.beginPath(); ctx.moveTo(tx, ty + 2); ctx.lineTo(tx + sw, ty + 2); ctx.stroke() }
+          if (s.st) { const sy = ty - s.szPx * 0.3; ctx.beginPath(); ctx.moveTo(tx, sy); ctx.lineTo(tx + sw, sy); ctx.stroke() }
+        }
+        tx += sw
         if (tx > x + w + 50) break // 非折行的超长单行:画出格外即停
       }
     }
@@ -1300,7 +1319,7 @@ export class CanvasRenderer {
     ctx.restore()
   }
 
-  private drawVerticalText(text: string, color: string, fontCss: string, x: number, y: number, w: number, h: number, _style: CellStyle): void {
+  private drawVerticalText(text: string, color: string, fontCss: string, x: number, y: number, w: number, h: number, style: CellStyle): void {
     const ctx = this.ctx
     ctx.save()
     ctx.beginPath()
@@ -1312,7 +1331,13 @@ export class CanvasRenderer {
     ctx.textBaseline = 'top'
     const chars = [...text]
     const lineH = parseFloat(fontCss) * 1.05
+    // 竖排也尊重 vAlign:字符串总高 vs 格高 → top/middle/bottom 起点(超高则顶对齐)
+    const totalH = chars.length * lineH
     let ty = y + 3
+    if (totalH <= h - 6) {
+      if (style.vAlign === 'middle') ty = y + (h - totalH) / 2
+      else if (style.vAlign === 'bottom') ty = y + h - totalH - 3
+    }
     for (const ch of chars) {
       ctx.fillText(ch, x + w / 2, ty)
       ty += lineH

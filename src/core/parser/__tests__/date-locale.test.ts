@@ -36,6 +36,24 @@ describe('内置短日期格式 locale 重映射(WPS 1:1)', () => {
     expect(model.sheets[0].cells.get(cellKey(5, 5))).toBeUndefined()
   })
 
+  it('合并区锚点格的四边边框解析存活(合并边框存锚点)', async () => {
+    const wb = new ExcelJS.Workbook()
+    const ws = wb.addWorksheet('S')
+    ws.mergeCells('A1:C1')
+    ws.getCell('A1').value = '标题'
+    ws.getCell('A1').border = { top: { style: 'thin' }, bottom: { style: 'medium' }, left: { style: 'thin' }, right: { style: 'thin' } }
+    const buf = await wb.xlsx.writeBuffer()
+    const model = await parseWorkbook(buf as ArrayBuffer)
+    const s = model.sheets[0]
+    const a1 = s.cells.get(cellKey(0, 0))!
+    const b = s.styles[a1.styleId].borders
+    expect(b.top?.style).toBe('thin')
+    expect(b.bottom?.style).toBe('medium')
+    expect(b.left?.style).toBe('thin')
+    expect(b.right?.style).toBe('thin')
+    expect(s.merges.some((m) => m.top === 0 && m.left === 0 && m.right === 2)).toBe(true)
+  })
+
   it('普通自定义/货币格式不受影响', async () => {
     const wb = new ExcelJS.Workbook()
     const ws = wb.addWorksheet('S')
