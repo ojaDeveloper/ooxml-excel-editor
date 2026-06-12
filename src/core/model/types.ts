@@ -246,6 +246,8 @@ export interface SheetModel {
   autoFilterRange?: MergeRange
   /** 含"列表"型数据验证的区域(选中时画下拉箭头) */
   dataValidations: MergeRange[]
+  /** 列表型数据验证的可选值(点下拉箭头弹选;range 内任一格命中即用 options)。可选 —— 老数据/无选项时缺省 */
+  dataValidationLists?: { range: MergeRange; options: string[] }[]
   images: ImageAnchor[]
   charts: ChartSpec[]
   /** 形状 / 文本框(DrawingML sp) */

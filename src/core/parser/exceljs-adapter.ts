@@ -133,8 +133,8 @@ function buildSheet(ws: ExcelJS.Worksheet, index: number, theme: CssColor[], onR
   // 自动筛选
   const autoFilterRange = parseAutoFilter(ws)
 
-  // 数据验证(只取 list 型，用于画下拉)
-  const dataValidations = parseDataValidations(ws)
+  // 数据验证(list 型):区域画下拉箭头 + 可选值供点选
+  const { ranges: dataValidations, lists: dataValidationLists } = parseDataValidations(ws)
 
   // 原生页面设置(导出/打印默认值)
   const pageSetup = parsePageSetup(ws)
@@ -161,6 +161,7 @@ function buildSheet(ws: ExcelJS.Worksheet, index: number, theme: CssColor[], onR
     conditional,
     autoFilterRange,
     dataValidations,
+    dataValidationLists,
     images: [],
     charts: [],
     shapes: [],
@@ -250,17 +251,43 @@ function parseColSpan(spec: any): [number, number] | undefined {
   return [Math.min(a, b), Math.max(a, b)]
 }
 
-function parseDataValidations(ws: ExcelJS.Worksheet): MergeRange[] {
+function parseDataValidations(ws: ExcelJS.Worksheet): { ranges: MergeRange[]; lists: { range: MergeRange; options: string[] }[] } {
   const model: any = (ws as any).dataValidations?.model
-  if (!model) return []
-  const out: MergeRange[] = []
+  const ranges: MergeRange[] = []
+  const lists: { range: MergeRange; options: string[] }[] = []
+  if (!model) return { ranges, lists }
   for (const [addr, rule] of Object.entries(model)) {
     if ((rule as any)?.type !== 'list') continue
+    const options = listOptionsOf((rule as any).formulae, ws)
     for (const part of addr.split(/\s+/)) {
       const rg = parseA1Range(part)
-      if (rg) out.push(rg)
+      if (!rg) continue
+      ranges.push(rg)
+      if (options.length) lists.push({ range: rg, options })
     }
   }
+  return { ranges, lists }
+}
+
+/** 列表型数据验证的可选值:① 内联 `"a,b,c"` 直接拆;② 同表区域引用 `$A$1:$A$5` → 读那几格的文本。 */
+function listOptionsOf(formulae: any, ws: ExcelJS.Worksheet): string[] {
+  const f = Array.isArray(formulae) ? formulae[0] : formulae
+  if (typeof f !== 'string' || !f) return []
+  const inline = f.match(/^\s*"(.*)"\s*$/s)
+  if (inline) return inline[1].split(',').map((s) => s.trim()).filter((s) => s !== '')
+  // 区域引用(去掉前导 = 和工作表名;仅同表简单解析)
+  const ref = f.replace(/^=/, '').replace(/^[^!]+!/, '')
+  const rg = parseA1Range(ref)
+  if (!rg) return []
+  const out: string[] = []
+  for (let r = rg.top; r <= rg.bottom; r++)
+    for (let c = rg.left; c <= rg.right; c++) {
+      const v = ws.getCell(r + 1, c + 1).value
+      if (v == null) continue
+      const t = typeof v === 'object' ? (v as any).text ?? (v as any).result ?? '' : v
+      const s = String(t).trim()
+      if (s !== '') out.push(s)
+    }
   return out
 }
 

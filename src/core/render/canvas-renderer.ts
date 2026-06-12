@@ -273,6 +273,21 @@ export class CanvasRenderer {
     return null
   }
 
+  /** 点击是否落在"活动格的数据验证下拉箭头"上(箭头只画在选区左上的列表验证格);是则返回该格。 */
+  dataValidationButtonAt(view: ViewState, px: number, py: number): { row: number; col: number } | null {
+    const sel = this.selection
+    if (!sel) return null
+    const row = sel.top, col = sel.left
+    if (!this.inDataValidation(row, col)) return null
+    const cell = this.cellAtScreen(view, px, py)
+    if (!cell || cell.row !== row || cell.col !== col) return null
+    const rect = this.cellScreenRect(view, row, col)
+    const box = filterButtonBox(rect.x, rect.y, rect.w, rect.h)
+    if (!box) return null
+    if (px >= box.x && px <= box.x + box.size && py >= box.y && py <= box.y + box.size) return { row, col }
+    return null
+  }
+
   /** 屏幕坐标 → 单元格(0-based)。落在表头或越界返回 null。 */
   cellAtScreen(view: ViewState, x: number, y: number): { row: number; col: number } | null {
     const hw = this.metrics.rowHeaderWidth

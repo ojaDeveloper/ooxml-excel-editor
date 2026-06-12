@@ -54,6 +54,19 @@ describe('内置短日期格式 locale 重映射(WPS 1:1)', () => {
     expect(s.merges.some((m) => m.top === 0 && m.left === 0 && m.right === 2)).toBe(true)
   })
 
+  it('列表型数据验证:内联选项被解析进 dataValidationLists', async () => {
+    const wb = new ExcelJS.Workbook()
+    const ws = wb.addWorksheet('S')
+    ws.getCell('A1').dataValidation = { type: 'list', allowBlank: true, formulae: ['"苹果,香蕉,橙子"'] }
+    const buf = await wb.xlsx.writeBuffer()
+    const model = await parseWorkbook(buf as ArrayBuffer)
+    const lists = model.sheets[0].dataValidationLists
+    expect(lists?.length).toBeGreaterThan(0)
+    const hit = lists?.find((l) => l.range.top === 0 && l.range.left === 0)
+    expect(hit?.options).toEqual(['苹果', '香蕉', '橙子'])
+    expect(model.sheets[0].dataValidations.some((r) => r.top === 0 && r.left === 0)).toBe(true) // 箭头区域仍在
+  })
+
   it('普通自定义/货币格式不受影响', async () => {
     const wb = new ExcelJS.Workbook()
     const ws = wb.addWorksheet('S')

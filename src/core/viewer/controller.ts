@@ -804,6 +804,12 @@ export class ViewerController {
         this.openFilterPopup(fcol)
         return
       }
+      // 数据验证下拉(列表型):编辑模式 + 可编辑 → 弹可选值菜单,点选即填(undo 可回退)
+      const dv = r.dataValidationButtonAt(this.view, p.x, p.y)
+      if (dv && this.editCfg.editable && this.isCellEditable(dv.row, dv.col)) {
+        this.openDataValidationPicker(dv, e)
+        return
+      }
     }
     // 透视表行分组折叠/展开按钮(功能开启时)
     if (r && p && this.editCfg.pivotTable) {
@@ -1784,6 +1790,16 @@ export class ViewerController {
   }
 
   /** 点中下拉按钮 / 命令式: 打开某列筛选浮层(算去重值 + 已选 + 屏幕位置) */
+  /** 列表型数据验证下拉:在箭头处弹可选值菜单(复用右键菜单宿主),点选 → editCell(undo 可回退)。 */
+  private openDataValidationPicker(cell: { row: number; col: number }, e: MouseEvent): void {
+    const list = this.sheet?.dataValidationLists?.find(
+      (l) => cell.row >= l.range.top && cell.row <= l.range.bottom && cell.col >= l.range.left && cell.col <= l.range.right,
+    )
+    if (!list || !list.options.length) return
+    const items: MenuItem[] = list.options.map((o) => ({ label: o, action: () => this.editCell(cell.row, cell.col, o) }))
+    this.menuHost.show(e.clientX, e.clientY, items)
+  }
+
   openFilterPopup(col: number): void {
     const r = this.renderer
     const s = this.sheet
