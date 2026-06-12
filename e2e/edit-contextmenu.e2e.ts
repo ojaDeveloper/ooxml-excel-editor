@@ -60,7 +60,29 @@ function run(label: string, url: string, canvasSel: string, renderAreaSel: strin
   })
 }
 
+// 只读模式右键:复制不改数据 → 菜单仍给「复制」,但不出现编辑项(粘贴/合并/清除)
+function runReadOnlyCopy(label: string, url: string, canvasSel: string, renderAreaSel: string, handle: string) {
+  test(`${label}: 只读模式右键 → 有「复制」、无编辑项`, async ({ page }) => {
+    await page.goto(url)
+    // 不点「编辑模式」:保持只读
+    await page.getByRole('button', { name: '加载示例' }).click()
+    await expect(page.locator(canvasSel)).toBeVisible({ timeout: 20_000 })
+    await page.waitForFunction((h) => (window as any)[h] != null, handle, { timeout: 20_000 })
+    await page.waitForFunction((h) => (window as any)[h].rectOf?.(2, 1) != null, handle, { timeout: 20_000 }) // 等表加载完
+    const menu = page.locator('.ooxml-context-menu')
+    const c = await cellCenter(page, renderAreaSel, handle, 2, 1)
+    await page.mouse.click(c.x, c.y, { button: 'right' })
+    await expect(menu).toBeVisible()
+    await expect(menu).toContainText('复制')
+    await expect(menu).not.toContainText('粘贴')
+    await expect(menu).not.toContainText('清除内容')
+    await expect(menu).not.toContainText('合并单元格')
+  })
+}
+
 test.describe('右键菜单 e2e(G3:插入/删除/合并/清除)', () => {
   run('Vue', '/', 'canvas.grid-canvas', '.render-area', '__excelViewer')
   run('React', '/react.html', 'canvas.rxl-canvas', '.rxl-render-area', '__excelViewerReact')
+  runReadOnlyCopy('Vue', '/', 'canvas.grid-canvas', '.render-area', '__excelViewer')
+  runReadOnlyCopy('React', '/react.html', 'canvas.rxl-canvas', '.rxl-render-area', '__excelViewerReact')
 })

@@ -29,3 +29,6 @@ opencode.json
 
 # WPS 剪贴板 HTML 抓样(含大图 base64,勿提交)
 docs/wps粘贴.txt
+
+# 调试用真实 .xlsx 样本(用户提供、含真实业务数据、体积大,勿提交)
+docs/*.xlsx

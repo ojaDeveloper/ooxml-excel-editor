@@ -16,6 +16,7 @@ new Vue({
       src: undefined as string | File | undefined,
       jsonItems: null as unknown as null | Array<Record<string, unknown>>,
       fileName: '',
+      dragOver: false,
       editMode: false,
       highlightReadOnly: false,
       cellImageFit: 'contain' as 'contain' | 'fill' | 'cover',
@@ -125,6 +126,14 @@ new Vue({
   methods: {
     onFileInput(e: Event) {
       const f = (e.target as HTMLInputElement).files?.[0]
+      if (!f) return
+      this.fileName = f.name
+      this.jsonItems = null
+      ;(this as any).src = f
+    },
+    onDrop(e: DragEvent) {
+      this.dragOver = false
+      const f = e.dataTransfer?.files?.[0]
       if (!f) return
       this.fileName = f.name
       this.jsonItems = null
@@ -283,7 +292,8 @@ new Vue({
     },
   },
   template: `
-    <div style="display:flex;flex-direction:column;height:100vh">
+    <div style="display:flex;flex-direction:column;height:100vh" :class="{ dragging: dragOver }"
+         @dragover.prevent="dragOver = true" @dragleave.prevent="dragOver = false" @drop.prevent="onDrop">
       <header ref="demoBarEl" class="app-bar">
         <div class="app-bar-fixed">
           <strong>OOXML Excel 预览器</strong>

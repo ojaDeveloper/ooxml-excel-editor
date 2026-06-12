@@ -77,6 +77,13 @@ function Demo() {
   const [src, setSrc] = useState<ExcelSource | undefined>(undefined)
   const [jsonItems, setJsonItems] = useState<Array<Record<string, unknown>> | null>(null)
   const [fileName, setFileName] = useState('')
+  const [dragOver, setDragOver] = useState(false)
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragOver(false)
+    const f = e.dataTransfer?.files?.[0]
+    if (f) { setJsonItems(null); setSrc(f); setFileName(f.name) }
+  }
   const [editMode, setEditMode] = useState(false) // E0: 编辑模式闸门
   const [fit, setFit] = useState<'fill' | 'contain' | 'cover'>('contain') // WPS 内嵌图贴合方式(默认 contain 同 WPS)
   const [highlightReadOnly, setHighlightReadOnly] = useState(false)
@@ -277,7 +284,13 @@ function Demo() {
   const overflowItems = items.slice(visibleCount)
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}>
+    <div
+      style={{ display: 'flex', flexDirection: 'column', height: '100vh' }}
+      className={dragOver ? 'dragging' : undefined}
+      onDragOver={(e) => { e.preventDefault(); setDragOver(true) }}
+      onDragLeave={(e) => { e.preventDefault(); setDragOver(false) }}
+      onDrop={onDrop}
+    >
       {/* demo 顶栏:固定区(标题/选 xlsx/加载示例/编辑模式)+ 演示按钮区(自动溢出收进「⋯ 更多」) */}
       <div ref={barRef} className="app-bar">
         <div ref={fixedRef} className="app-bar-fixed">

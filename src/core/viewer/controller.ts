@@ -1028,7 +1028,7 @@ export class ViewerController {
   onContextMenu(e: MouseEvent): void {
     const ctx = this.buildContextMenuCtx(e)
     if (!ctx) return
-    let items = this.editCfg.editable ? this.buildBuiltinContextMenuItems(ctx) : []
+    let items = this.buildBuiltinContextMenuItems(ctx) // 只读模式也给(只含复制等不改数据的项),编辑模式给全套
     if (this.ctxMenuTransform) {
       const next = this.ctxMenuTransform(ctx, items)
       if (Array.isArray(next)) items = next
@@ -1073,9 +1073,13 @@ export class ViewerController {
     }
   }
 
-  /** 编辑模式下的内置菜单项(独立提取,便于 transform 回调拿到再二次加工) */
+  /** 内置右键菜单项(独立提取,便于 transform 回调拿到再二次加工)。
+   *  只读模式:只返回**不改数据**的项(复制) —— 复制不修改数据源,只读也该能用;编辑模式给全套。 */
   buildBuiltinContextMenuItems(ctx: ContextMenuCtx): MenuItem[] {
     const range = ctx.range
+    // 复制不改数据 → 任何模式都给
+    const copyItem: MenuItem = { label: '复制', action: () => void this.copySelection() }
+    if (!ctx.editable) return [copyItem]
     const rows = range.bottom - range.top + 1
     const cols = range.right - range.left + 1
     const single = ctx.single
@@ -1091,7 +1095,7 @@ export class ViewerController {
       }
     }
     const items: MenuItem[] = [
-      { label: '复制', action: () => void this.copySelection() },
+      copyItem,
       { label: '粘贴', disabled: !anyEditable, action: () => void this.pasteFromClipboard() },
       {
         label: '选择性粘贴',

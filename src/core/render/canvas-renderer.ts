@@ -1214,30 +1214,49 @@ export class CanvasRenderer {
     const pad = CELL_PADDING * zoom
     const runs = cell.rich || []
     const baseFont = style.font
+    const hAlign = resolveHAlign(style.hAlign, false)
+    const availW = w - 2 * pad
 
-    // 预测总宽(用于水平对齐)
-    let totalW = 0
+    // 每个 run 预算字体串 + 颜色
+    type Seg = { text: string; fontCss: string; color: string }
     const fontCache: string[] = []
+    const colorOf: string[] = []
     for (let i = 0; i < runs.length; i++) {
-      const f = fontToCss({ ...baseFont, ...runs[i].font } as any, zoom)
-      fontCache[i] = f
-      ctx.font = f
-      totalW += ctx.measureText(runs[i].text).width
+      fontCache[i] = fontToCss({ ...baseFont, ...runs[i].font } as any, zoom)
+      colorOf[i] = (runs[i].font?.color as string) || baseFont.color
     }
 
-    // 水平起点(尊重 hAlign;富文本默认按文本左对齐)
-    const hAlign = resolveHAlign(style.hAlign, false)
-    let tx = x + pad
-    if (hAlign === 'center') tx = x + (w - totalW) / 2
-    else if (hAlign === 'right') tx = x + w - pad - totalW
+    // 排版成行:wrapText 时逐字符按列宽折行(保留各 run 字体/颜色,跟 WPS 一致);否则单行
+    const lines: Seg[][] = []
+    if (style.wrapText && availW > 0) {
+      let line: Seg[] = []
+      let lineW = 0
+      const flush = () => { lines.push(line); line = []; lineW = 0 }
+      for (let i = 0; i < runs.length; i++) {
+        ctx.font = fontCache[i]
+        for (const ch of runs[i].text) {
+          if (ch === '\n') { flush(); continue }
+          const cw = ctx.measureText(ch).width
+          if (lineW + cw > availW && lineW > 0) flush()
+          const last = line[line.length - 1]
+          if (last && last.fontCss === fontCache[i] && last.color === colorOf[i]) last.text += ch
+          else line.push({ text: ch, fontCss: fontCache[i], color: colorOf[i] })
+          lineW += cw
+        }
+      }
+      flush()
+    } else {
+      lines.push(runs.map((r, i) => ({ text: r.text, fontCss: fontCache[i], color: colorOf[i] })))
+    }
 
-    // 垂直基线(尊重 vAlign)
-    const asc = baseFont.size * zoom * (96 / 72) * 0.72
+    // 垂直对齐 + 溢出顶对齐(跟普通文本 drawText 完全一致:超出格高 → 顶对齐显示文头,WPS 行为)
     const lineH = baseFont.size * zoom * (96 / 72) * LINE_HEIGHT_FACTOR
-    let ty: number
-    if (style.vAlign === 'top') ty = y + pad + asc
-    else if (style.vAlign === 'middle') ty = y + (h - lineH) / 2 + asc
-    else ty = y + h - pad - lineH + asc
+    const totalH = lineH * lines.length
+    const overflowsCell = totalH > h - 2 * pad
+    let startY: number
+    if (style.vAlign === 'top' || overflowsCell) startY = y + pad + lineH * 0.78
+    else if (style.vAlign === 'middle') startY = y + (h - totalH) / 2 + lineH * 0.78
+    else startY = y + h - pad - totalH + lineH * 0.78
 
     ctx.save()
     ctx.beginPath()
@@ -1245,12 +1264,21 @@ export class CanvasRenderer {
     ctx.clip()
     ctx.textBaseline = 'alphabetic'
     ctx.textAlign = 'left'
-    for (let i = 0; i < runs.length; i++) {
-      ctx.font = fontCache[i]
-      ctx.fillStyle = (runs[i].font?.color as string) || baseFont.color
-      ctx.fillText(runs[i].text, tx, ty)
-      tx += ctx.measureText(runs[i].text).width
-      if (tx > x + w + 50) break
+    for (let li = 0; li < lines.length; li++) {
+      const segs = lines[li]
+      let lineW = 0
+      for (const s of segs) { ctx.font = s.fontCss; lineW += ctx.measureText(s.text).width }
+      let tx = x + pad
+      if (hAlign === 'center') tx = x + (w - lineW) / 2
+      else if (hAlign === 'right') tx = x + w - pad - lineW
+      const ty = startY + li * lineH
+      for (const s of segs) {
+        ctx.font = s.fontCss
+        ctx.fillStyle = s.color
+        ctx.fillText(s.text, tx, ty)
+        tx += ctx.measureText(s.text).width
+        if (tx > x + w + 50) break // 非折行的超长单行:画出格外即停
+      }
     }
     ctx.restore()
   }

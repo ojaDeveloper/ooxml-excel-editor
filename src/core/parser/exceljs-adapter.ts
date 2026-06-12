@@ -69,8 +69,11 @@ function buildSheet(ws: ExcelJS.Worksheet, index: number, theme: CssColor[], onR
   let maxRow = 0
   let maxCol = 0
 
-  ws.eachRow({ includeEmpty: false }, (row, rowNumber) => {
-    row.eachCell({ includeEmpty: false }, (cell, colNumber) => {
+  // includeEmpty:true —— 必须连**空但带样式**的格也遍历(只有边框/填充的结构格),否则它们的边框/底色会丢
+  // (ExcelJS includeEmpty:false 跳过 value 为空的格)。toCellModel 对"空且无可见样式(无边框/填充)"的格返 null,
+  // 不入模型,避免把真正空白格也塞进来。eachCell 只到该行最右有格的列,不会扫到无限远。
+  ws.eachRow({ includeEmpty: true }, (row, rowNumber) => {
+    row.eachCell({ includeEmpty: true }, (cell, colNumber) => {
       const r = rowNumber - 1
       const c = colNumber - 1
       const model = toCellModel(cell, r, c, theme, internStyle)
@@ -270,8 +273,11 @@ function toCellModel(
 ): CellModel | null {
   const value = cell.value
   if (value === null || value === undefined) {
-    // 仍可能有样式(空单元格带边框/填充)
+    // 空格只有"带可见样式(边框/填充)"才入模型 —— 结构格的边框/底色靠这条保住;真正空白格(无边框无填充)返 null 跳过,不膨胀
     const style = extractStyle(cell, theme)
+    const hasBorder = !!(style.borders.top || style.borders.bottom || style.borders.left || style.borders.right || style.borders.diagonal)
+    const hasFill = style.fill.type !== 'none'
+    if (!hasBorder && !hasFill) return null
     return { row, col, type: 'empty', raw: null, styleId: internStyle(style) }
   }
 
@@ -338,9 +344,21 @@ function extractComment(note: any): string | undefined {
   return undefined
 }
 
+/**
+ * OOXML 内置日期/时间格式(numFmtId 14-22 等)的"显示"本应跟随区域设置,但 ExcelJS 把它们**硬编码成美式串**
+ * (如内置 14 → `mm-dd-yy` → 渲染 `04-01-26`)。WPS/Excel 中文环境显示的是 `2026/4/1`。这里把 ExcelJS 这些
+ * 内置串重映射成中文 locale 习惯,跟 WPS 渲染对齐(本组件主要服务中文/WPS 文件)。
+ * 仅命中 ExcelJS 内置串的"日期类",纯时间(h:mm 等)和带英文月名的(d-mmm-yy)保留不动。
+ */
+const EXCELJS_BUILTIN_DATE_LOCALE: Record<string, string> = {
+  'mm-dd-yy': 'yyyy/m/d', // 内置 14 短日期
+  'm/d/yy h:mm': 'yyyy/m/d h:mm', // 内置 22 日期+时间
+}
+
 function extractStyle(cell: ExcelJS.Cell, theme: CssColor[]): CellStyle {
   const s: any = cell.style || {}
   const align = s.alignment || {}
+  const numFmt = s.numFmt || 'General'
   return {
     font: toFont(s.font, theme),
     fill: toFill(s.fill, theme),
@@ -352,7 +370,7 @@ function extractStyle(cell: ExcelJS.Cell, theme: CssColor[]): CellStyle {
     // ExcelJS: 竖排返回 'vertical' → 255(渲染器据此走竖排堆叠);其余是 -90..90
     textRotation: align.textRotation === 'vertical' ? 255 : typeof align.textRotation === 'number' ? align.textRotation : 0,
     indent: align.indent || 0,
-    numFmt: s.numFmt || 'General',
+    numFmt: EXCELJS_BUILTIN_DATE_LOCALE[numFmt] ?? numFmt, // 内置短日期 locale 重映射(见上)
   }
 }
 
