@@ -225,6 +225,34 @@ export interface ChartSeries {
   color?: CssColor
 }
 
+/**
+ * 数据验证规则(完整版,1.8.0):承载校验语义 —— 编辑时拦截非法输入 + 输入/出错提示。
+ * 渲染层只用 list 型画下拉箭头(见 SheetModel.dataValidations / dataValidationLists,从这里派生)。
+ * formulae 已尽量解析成字面量:整数/小数/文本长度 → number;日期/时间 → number(序列值)或原始串;
+ * list → 选项数组在 options;custom → 公式串(暂不求值,放行)。
+ */
+export interface DataValidationRule {
+  range: MergeRange
+  type: 'list' | 'whole' | 'decimal' | 'date' | 'time' | 'textLength' | 'custom'
+  /** 比较运算符(whole/decimal/date/time/textLength 用;list/custom 不用) */
+  operator?: 'between' | 'notBetween' | 'equal' | 'notEqual' | 'greaterThan' | 'lessThan' | 'greaterThanOrEqual' | 'lessThanOrEqual'
+  /** 约束操作数(between 用前两个;单目用第一个)。原样保留,校验时按 type 解析 */
+  formulae: (string | number)[]
+  /** 允许留空(空值不校验) */
+  allowBlank: boolean
+  /** list 型可选值(= dataValidationLists 同源) */
+  options?: string[]
+  /** 出错提示(showErrorMessage 时,非法输入弹) */
+  showErrorMessage?: boolean
+  errorStyle?: 'stop' | 'warning' | 'information'
+  errorTitle?: string
+  error?: string
+  /** 输入提示(showInputMessage 时,选中该格弹气泡) */
+  showInputMessage?: boolean
+  promptTitle?: string
+  prompt?: string
+}
+
 export interface SheetModel {
   name: string
   index: number
@@ -248,6 +276,8 @@ export interface SheetModel {
   dataValidations: MergeRange[]
   /** 列表型数据验证的可选值(点下拉箭头弹选;range 内任一格命中即用 options)。可选 —— 老数据/无选项时缺省 */
   dataValidationLists?: { range: MergeRange; options: string[] }[]
+  /** 完整数据验证规则(校验语义:编辑拦截 + 输入/出错提示)。1.8.0 起;上面两个字段从这里派生 */
+  dataValidationRules?: DataValidationRule[]
   images: ImageAnchor[]
   charts: ChartSpec[]
   /** 形状 / 文本框(DrawingML sp) */

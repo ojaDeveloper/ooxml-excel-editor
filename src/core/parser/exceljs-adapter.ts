@@ -8,6 +8,7 @@ import type {
   CellModel,
   CellStyle,
   ConditionalRule,
+  DataValidationRule,
   Fill,
   Font,
   MergeRange,
@@ -133,8 +134,8 @@ function buildSheet(ws: ExcelJS.Worksheet, index: number, theme: CssColor[], onR
   // 自动筛选
   const autoFilterRange = parseAutoFilter(ws)
 
-  // 数据验证(list 型):区域画下拉箭头 + 可选值供点选
-  const { ranges: dataValidations, lists: dataValidationLists } = parseDataValidations(ws)
+  // 数据验证:list 型区域画下拉箭头 + 可选值供点选;全类型规则供编辑拦截/提示
+  const { ranges: dataValidations, lists: dataValidationLists, rules: dataValidationRules } = parseDataValidations(ws)
 
   // 原生页面设置(导出/打印默认值)
   const pageSetup = parsePageSetup(ws)
@@ -162,6 +163,7 @@ function buildSheet(ws: ExcelJS.Worksheet, index: number, theme: CssColor[], onR
     autoFilterRange,
     dataValidations,
     dataValidationLists,
+    dataValidationRules,
     images: [],
     charts: [],
     shapes: [],
@@ -251,22 +253,55 @@ function parseColSpan(spec: any): [number, number] | undefined {
   return [Math.min(a, b), Math.max(a, b)]
 }
 
-function parseDataValidations(ws: ExcelJS.Worksheet): { ranges: MergeRange[]; lists: { range: MergeRange; options: string[] }[] } {
+const DV_TYPES = new Set(['list', 'whole', 'decimal', 'date', 'time', 'textLength', 'custom'])
+
+function parseDataValidations(ws: ExcelJS.Worksheet): {
+  ranges: MergeRange[]
+  lists: { range: MergeRange; options: string[] }[]
+  rules: DataValidationRule[]
+} {
   const model: any = (ws as any).dataValidations?.model
   const ranges: MergeRange[] = []
   const lists: { range: MergeRange; options: string[] }[] = []
-  if (!model) return { ranges, lists }
-  for (const [addr, rule] of Object.entries(model)) {
-    if ((rule as any)?.type !== 'list') continue
-    const options = listOptionsOf((rule as any).formulae, ws)
+  const rules: DataValidationRule[] = []
+  if (!model) return { ranges, lists, rules }
+  for (const [addr, raw] of Object.entries(model)) {
+    const type = (raw as any)?.type
+    if (!DV_TYPES.has(type)) continue
+    const options = type === 'list' ? listOptionsOf((raw as any).formulae, ws) : []
+    const formulae = ((raw as any).formulae ?? []).map(normalizeDvOperand)
     for (const part of addr.split(/\s+/)) {
       const rg = parseA1Range(part)
       if (!rg) continue
-      ranges.push(rg)
-      if (options.length) lists.push({ range: rg, options })
+      if (type === 'list') {
+        ranges.push(rg) // 仅 list 画下拉箭头
+        if (options.length) lists.push({ range: rg, options })
+      }
+      rules.push({
+        range: rg,
+        type,
+        operator: (raw as any).operator,
+        formulae,
+        allowBlank: !!(raw as any).allowBlank, // OOXML 默认 false;ExcelJS writer 仅 truthy 时写 allowBlank="1"
+        options: options.length ? options : undefined,
+        showErrorMessage: (raw as any).showErrorMessage,
+        errorStyle: (raw as any).errorStyle,
+        errorTitle: (raw as any).errorTitle,
+        error: (raw as any).error,
+        showInputMessage: (raw as any).showInputMessage,
+        promptTitle: (raw as any).promptTitle,
+        prompt: (raw as any).prompt,
+      })
     }
   }
-  return { ranges, lists }
+  return { ranges, lists, rules }
+}
+
+/** dv 操作数归一:Date → 序列值字符串保原始;数字串保原样;其余转字符串。校验时按 type 再解析 */
+function normalizeDvOperand(f: any): string | number {
+  if (f instanceof Date) return f.toISOString()
+  if (typeof f === 'number') return f
+  return String(f ?? '')
 }
 
 /** 列表型数据验证的可选值:① 内联 `"a,b,c"` 直接拆;② 同表区域引用 `$A$1:$A$5` → 读那几格的文本。 */

@@ -23,8 +23,11 @@ export interface CellEditorContext {
   permission: EditPermission
   /** 进入编辑的初始文本(打字进入时为该字符;否则 undefined → editor 用 snapshot.text) */
   initialText?: string
-  /** 提交编辑(走命令栈 + 事件);move 指示提交后活动格移动方向 */
-  commit(value: EditorCommitValue, move?: 'down' | 'right'): void
+  /**
+   * 提交编辑(走命令栈 + 事件);move 指示提交后活动格移动方向。
+   * 返回 false = 提交被拒(如数据验证拦截),编辑器应保持打开让用户改正;void/true = 已提交。
+   */
+  commit(value: EditorCommitValue, move?: 'down' | 'right'): boolean | void
   /** 取消编辑(不改模型) */
   cancel(): void
   /**

@@ -53,8 +53,18 @@ export default defineConfig(({ mode, command }) => {
     ? fileURLToPath(new URL('./vue2-demo', import.meta.url))
     : undefined
 
+  // 反代/内网穿透挂到子路径时 (例 https://host:port/ooxml-excel/), 给 dev server 配 base 前缀,
+  // 否则 index.html 里的 /src/main.ts /@vite/client 绝对路径打不到反代的子路径 location → 回退 HTML → MIME 报错.
+  // 用法: DEV_BASE=/ooxml-excel/ DEV_PUBLIC_HOST=frp-cat.com DEV_PUBLIC_PORT=59400 npm run dev
+  // (HMR WebSocket 也要走同样的对外 host/port + wss, 否则热更连不上.)
+  const devBase = isDev && process.env.DEV_BASE ? process.env.DEV_BASE : '/'
+  const publicHost = process.env.DEV_PUBLIC_HOST
+  const hmr = isDev && publicHost
+    ? { protocol: 'wss' as const, host: publicHost, clientPort: Number(process.env.DEV_PUBLIC_PORT) || 443 }
+    : undefined
+
   return {
-    base: isDemoSite ? './' : '/',
+    base: isDemoSite ? './' : devBase,
     root: rootDir,
     publicDir: devTarget === 'vue2'
       ? fileURLToPath(new URL('./public', import.meta.url))
@@ -65,6 +75,10 @@ export default defineConfig(({ mode, command }) => {
       host: true,
       port,
       strictPort: true,
+      // 放行经内网穿透/反代域名 (frp-cat.com 等) 访问 dev server —— Vite 默认只放行 localhost.
+      // 仅本地开发用; 不影响 lib/demo 构建产物.
+      allowedHosts: true,
+      ...(hmr ? { hmr } : {}),
       open: devTarget === 'react' ? '/react.html' : '/',
     },
     resolve: {

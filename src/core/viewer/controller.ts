@@ -31,6 +31,8 @@ import { ContextMenuHost, type MenuItem } from '../edit/context-menu'
 import { PivotDialogHost, PivotFieldPanelHost, type PivotFieldOption, type PivotOutputChoice } from './pivot-dialog-host'
 import { PasteConfigDialogHost } from './paste-config-host'
 import { ReadOnlyPromptHost } from './readonly-prompt-host'
+import { ValidationPromptHost } from './validation-prompt-host'
+import { findValidationRuleAt, validateCellValue } from '../edit/data-validation'
 import { parseClipboardHtml } from '../edit/clipboard-html'
 import { serializeSnapshot, encodeSnapshot, parseSnapshotHtml, withoutImages, bytesToB64, CLIP_IMAGE_BUDGET_BYTES } from '../edit/clipboard-snapshot'
 import { type PasteBehavior, DEFAULT_PASTE_BEHAVIOR, PASTE_PRESET_VALUES_ONLY } from '../edit/paste-behavior'
@@ -172,6 +174,9 @@ export class ViewerController {
   private pivotPanel = new PivotFieldPanelHost()
   private pasteConfigDialog = new PasteConfigDialogHost()
   private readonlyPrompt = new ReadOnlyPromptHost()
+  private validationPrompt = new ValidationPromptHost()
+  /** 当前输入提示气泡的签名(格+位置),变了才重建,避免每帧 render 抖动 */
+  private bubbleSig = ''
   /** 透视表"活刷新"重入兜底:recompute 内部 setCellValue 不再触发 onModelChange,此旗保险。 */
   private pivotRefreshing = false
   private lightboxEnabled = true
@@ -334,6 +339,7 @@ export class ViewerController {
     r.render(this.view)
     if (this.sheet) this.overlays.position(this.sheet, r, this.view)
     this.editorHost.position() // 活动编辑器随滚动/缩放跟随(无则 no-op)
+    this.updateValidationBubble() // 输入提示气泡随选区/滚动跟手(无则 no-op)
     this.hooks.onRenderTick()
   }
 
@@ -551,6 +557,7 @@ export class ViewerController {
     this.pivotPanel.dispose()
     this.pasteConfigDialog.dispose()
     this.readonlyPrompt.dispose()
+    this.validationPrompt.dispose()
     this.edit.disposeEngine()
   }
 
@@ -652,7 +659,10 @@ export class ViewerController {
     // 若正有内嵌编辑器开着,先取消(避免双重提交打架)
     if (this.editorHost.isActive()) this.cancelEdit()
     // 仅当值真变化才入命令栈(避免把格式化显示文本当字符串回写、避免空提交污染 undo 栈)
-    if (value !== this.getCellEditString(a.row, a.col)) this.edit.editCell(a.row, a.col, value)
+    if (value !== this.getCellEditString(a.row, a.col)) {
+      if (!this.passValidation(a.row, a.col, value)) return false // 数据验证拦截(stop)→ 不写入
+      this.edit.editCell(a.row, a.col, value)
+    }
     if (move === 'down' && this.renderer) {
       const nr = Math.min(a.row + 1, this.renderer.metrics.rows - 1)
       this.selectCell(nr, a.col) // selectCell 内含滚动到视图
@@ -1800,6 +1810,44 @@ export class ViewerController {
     this.menuHost.show(e.clientX, e.clientY, items)
   }
 
+  /**
+   * 数据验证拦截:提交某值前校验。返回 true=放行(可写入),false=拦截(stop,不写入)。
+   * stop → 弹模态拒绝;warning/information → 弹 toast 但放行;公式串(=开头)不拦(结果未知,交引擎)。
+   */
+  private passValidation(row: number, col: number, value: CellValue): boolean {
+    if (!this.sheet) return true
+    if (typeof value === 'string' && value[0] === '=') return true // 公式不拦
+    const rule = findValidationRuleAt(this.sheet, row, col)
+    if (!rule) return true
+    const v = validateCellValue(rule, value)
+    if (!v) return true
+    this.validationPrompt.showError(v.errorStyle, v.message, v.title)
+    return v.errorStyle !== 'stop'
+  }
+
+  /** 选中带"输入提示"的数据验证格时,在格旁弹黄色气泡;否则隐藏。render() 末尾调用(随滚动跟手)。 */
+  private updateValidationBubble(): void {
+    const a = this.selActive
+    const sheet = this.sheet
+    if (!a || !sheet) return this.hideValidationBubble()
+    const rule = findValidationRuleAt(sheet, a.row, a.col)
+    if (!rule || !rule.showInputMessage || (!rule.prompt && !rule.promptTitle)) return this.hideValidationBubble()
+    const rect = this.rectOf(a.row, a.col)
+    const host = this.els.renderArea.getBoundingClientRect()
+    if (!rect) return this.hideValidationBubble()
+    // 出视口(滚走)→ 隐藏
+    if (rect.x + rect.w < 0 || rect.y + rect.h < 0 || rect.x > this.view.width || rect.y > this.view.height) return this.hideValidationBubble()
+    const x = host.left + rect.x + rect.w
+    const y = host.top + rect.y + rect.h
+    const sig = `${a.row}:${a.col}:${Math.round(x)}:${Math.round(y)}`
+    if (sig === this.bubbleSig) return
+    this.bubbleSig = sig
+    this.validationPrompt.showInputBubble(x, y, rule.prompt ?? '', rule.promptTitle)
+  }
+  private hideValidationBubble(): void {
+    if (this.bubbleSig) { this.bubbleSig = ''; this.validationPrompt.hideInputBubble() }
+  }
+
   openFilterPopup(col: number): void {
     const r = this.renderer
     const s = this.sheet
@@ -2676,12 +2724,14 @@ export class ViewerController {
    * 提交当前编辑(取值 → 命令栈 → 卸编辑器)。value 可为裸值或 {value,style}(样式 E5 起生效)。
    * move 指示提交后活动格移动(Enter→down / Tab→right)。
    */
-  commitEdit(value: EditorCommitValue, move?: 'down' | 'right'): void {
+  commitEdit(value: EditorCommitValue, move?: 'down' | 'right'): boolean {
     const editing = this.edit.getEditingCell()
-    if (!editing) return
+    if (!editing) return false
     const wrapped = value !== null && typeof value === 'object' && !(value instanceof Date) && 'value' in value
     const val: CellValue = wrapped ? (value as { value: CellValue }).value : (value as CellValue)
     const style = wrapped ? (value as { style?: CellStyleOverride }).style : undefined
+    // 数据验证拦截(stop)→ 不提交,保留编辑器让用户改正(返 false 让编辑器解除提交锁)
+    if (!this.passValidation(editing.row, editing.col, val)) return false
     this.edit.editCell(editing.row, editing.col, val)
     // E5:编辑器可返 { value, style } → 顺带套自定义编辑样式(要求 2 端到端)
     if (style) this.edit.setStyle({ top: editing.row, left: editing.col, bottom: editing.row, right: editing.col }, style)
@@ -2696,6 +2746,7 @@ export class ViewerController {
       this.selectCell(nr, nc)
     }
     this.els.scroller.focus()
+    return true
   }
 
   /** 取消当前编辑(不改模型) */

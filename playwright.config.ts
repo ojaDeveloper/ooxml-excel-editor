@@ -20,10 +20,19 @@ export default defineConfig({
     acceptDownloads: true,
     viewport: { width: 1280, height: 800 },
   },
-  webServer: {
-    command: 'npm run dev',
-    port: 5300,
-    reuseExistingServer: true,
-    timeout: 120_000,
-  },
+  // 两个 dev server:Vue3/React 共用 5300(plugin-vue + plugin-react),Vue2 独立 5302(plugin-vue2,SFC 编译器隔离)
+  webServer: [
+    {
+      command: 'npm run dev',
+      port: 5300,
+      reuseExistingServer: true,
+      timeout: 120_000,
+    },
+    {
+      command: 'npm run dev:vue2',
+      port: 5302,
+      reuseExistingServer: true,
+      timeout: 120_000,
+    },
+  ],
 })

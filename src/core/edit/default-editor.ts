@@ -53,10 +53,14 @@ export const defaultCellEditor: CellEditorFactory = (ctx: CellEditorContext) => 
   ta.style.textAlign = st?.hAlign === 'center' ? 'center' : st?.hAlign === 'right' ? 'right' : 'left'
 
   let done = false
+  // 上一次被拒的值:blur(点提示弹窗)会再触发 commit,同一被拒值不重复提交 → 避免弹窗叠弹
+  let lastRejected: string | null = null
   const commit = (move?: 'down' | 'right') => {
     if (done) return
+    if (ta.value === lastRejected) return // 同一被拒值不重复提交(Enter/blur 二次触发)
     done = true
-    ctx.commit(ta.value, move)
+    // commit 返 false = 被拒(数据验证拦截等)→ 解除锁,记住被拒值,编辑器留开让用户改正
+    if (ctx.commit(ta.value, move) === false) { done = false; lastRejected = ta.value }
   }
   const cancel = () => {
     if (done) return
@@ -80,8 +84,9 @@ export const defaultCellEditor: CellEditorFactory = (ctx: CellEditorContext) => 
   })
   ta.addEventListener('blur', () => commit())
 
-  // 内容变化 → 通知 host 重撑高 (Phase 1 撑高核心入口)
+  // 内容变化 → 清除"被拒值"记忆(改了内容就能再次提交) + 通知 host 重撑高 (Phase 1 撑高核心入口)
   ta.addEventListener('input', () => {
+    lastRejected = null
     ctx.reposition?.()
   })
 

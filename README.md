@@ -42,7 +42,7 @@ const src = ref<File>() // 绑个 <input type="file" @change> 给它即可
 - 🗓 **日期序列号**:含 Excel 1900 闰年 bug、1904 系统
 - 🎨 **主题色 + tint**、indexed 调色板、合并单元格、边框(细/粗/虚/双线)、填充(纯色/图案/渐变)
 - 🌈 **条件格式**:色阶 / 数据条 / 图标集 / cellIs / top10
-- 🖼 **图片 + 图表**(DrawingML → ECharts 近似还原)、**形状/文本框**、**迷你图**(sparklines)、**批注**、**数据验证下拉**(编辑模式点格内箭头 → 弹可选值菜单选填,可撤销)、**自动筛选**样式
+- 🖼 **图片 + 图表**(DrawingML → ECharts 近似还原)、**形状/文本框**、**迷你图**(sparklines)、**批注**、**数据验证**(列表型点格内箭头弹选可撤销;整数/小数/日期/文本长度等在编辑模式**拦截非法输入** + WPS 式出错/输入提示)、**自动筛选**样式
 - 📌 **WPS 单元格内嵌图(DISPIMG)**:识别并展示 WPS 私有的"嵌在格里的图"(普通工具会缺图);编辑模式下支持**一键浮动 ⇄ 嵌入互转**。见 [WPS 单元格内嵌图](#wps-单元格内嵌图dispimg)
 - 🔍 **图片点击放大 + 下载原图**:网格里的图(内嵌图/浮动图)点开看大图、下载原件。只读模式单击图放大、编辑模式右键「查看大图」。`imageLightbox` prop 控制(默认开),`openImageLightbox(src)` 命令式打开。
 - 📋 **从 Excel/WPS 富粘贴**:`Ctrl+V` 解析剪贴板 HTML → 还原字体/颜色/填充/边框/对齐/合并单元格,整块单次撤销。**Excel/WPS 把格式放在 `<style>` 块的 CSS 类里(`<td class="xl65">`),解析时会把类规则合并进每格** —— 不只读内联 `style=`。**`Ctrl+V` 走 `paste` 事件拿原始 HTML**;`navigator.clipboard.read()`(右键菜单粘贴用)会**净化**删掉 `<style>`/注释,所以右键粘贴从 WPS 拿的格式不如 `Ctrl+V` 全。图片走多通道:data-uri `<img>` / **WPS VML `o:gfxdata`**(区域复制的内嵌图藏在 VML 里,是个 zip,解出来落格)/ 单图 blob / 拖文件;**数字格式**(日期/货币)也从 `mso-number-format` 解析还原,不再变成裸序列号。**注**:Excel 某些版本只给 `file:///` 本地路径的 `<img>`(浏览器读不到)而不带 `o:gfxdata`,那种区域图仍救不回。
@@ -691,7 +691,7 @@ npm run build          # 构建组件库(dist/)
 npm run build:demo     # 构建 demo 站点
 ```
 
-> **e2e 说明**:`npm run test:e2e` 用 Playwright 起 dev 服务 + 无头 Chromium,加载示例 → 渲染 → 导出 PNG/位图PDF/矢量PDF,校验产物(PNG 魔数、`%PDF`、矢量 PDF 的文字操作符数量多于位图)。覆盖 node 单测做不到的真实 canvas/jsPDF 绘制。首次需 `npx playwright install chromium` 下载浏览器(本仓库 `@playwright/test` 固定 `1.58.0` 对应 chromium-1208)。Vue demo 在 `/`、React demo 在 `/react.html`。
+> **e2e 说明**:`npm run test:e2e` 用 Playwright 起 dev 服务 + 无头 Chromium,加载示例 → 渲染 → 导出 PNG/位图PDF/矢量PDF,校验产物(PNG 魔数、`%PDF`、矢量 PDF 的文字操作符数量多于位图)。覆盖 node 单测做不到的真实 canvas/jsPDF 绘制。首次需 `npx playwright install chromium` 下载浏览器(本仓库 `@playwright/test` 固定 `1.58.0` 对应 chromium-1208)。**Vue 3 / React demo 在 5300**(`/` 与 `/react.html`),**Vue 2 demo 在独立 5302**(plugin-vue2 SFC 隔离);两个 dev server 都由 Playwright 自动拉起。三壳均有 e2e 覆盖。
 
 ## 文档 / 二开
 

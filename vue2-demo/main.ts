@@ -51,6 +51,10 @@ new Vue({
     inst._demoRo?.disconnect()
     if (inst._onDocClick) document.removeEventListener('mousedown', inst._onDocClick)
   },
+  updated() {
+    // DEV: 把命令式 API 挂 window 供 e2e 取几何/读数据(与 Vue3 __excelViewer / React __excelViewerReact 对齐)
+    if ((import.meta as any).env?.DEV) (window as any).__excelViewerVue2 = (this.$refs.viewer as any) || null
+  },
   watch: {
     // 内容/编辑态变 → 重新测量 (用 watch 而非 updated, 避免 demoRemeasure 改 reactive 触发的死循环)
     editMode() { this.$nextTick(() => this.demoRemeasure()) },

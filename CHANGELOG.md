@@ -2,6 +2,26 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.8.0] - 2026-06-14
+
+> 路线图「保真/编辑完整化」第一阶段:① 把 1.7.0 起步的数据验证**做完整**(从"只能选值"到"编辑拦截非法输入 + 输入/出错提示");② 补上 **Vue 2 壳的 e2e 回归网**(此前 Vue 2 零 e2e,改 Vue 2 全靠手测,是 CLAUDE.md 点名的空洞)。
+
+### 新增 — 数据验证完整化:编辑时拦截非法输入 + WPS 式提示
+
+- **解析全类型规则**(`SheetModel.dataValidationRules`):list / 整数(whole)/ 小数(decimal)/ 日期(date)/ 时间(time)/ 文本长度(textLength)/ 自定义(custom),连同 operator(between/greaterThan/…)、约束操作数、`allowBlank`、出错信息(errorStyle/errorTitle/error)、输入提示(promptTitle/prompt)。1.7.0 的 `dataValidations`(下拉箭头区域)/`dataValidationLists`(选项)从这里派生,**零回归**。
+- **编辑时拦截**(框架无关引擎 `edit/data-validation.ts`,纯函数可单测):内置编辑器提交 / 公式栏提交时校验。`errorStyle='stop'`(默认)→ **硬拒,不写入**,弹模态出错提示,**编辑器保持打开让用户改正**;`warning`/`information` → toast 软提示但放行;`custom` 公式与以 `=` 开头的公式不拦(结果未知);空值放行(允许清空)。
+- **提示 UI**(框架无关 DOM,三壳共用 `viewer/validation-prompt-host.ts`):出错模态 / toast + 选中带"输入提示"的格时格旁弹黄色气泡(随选区/滚动跟手)。
+- **顺手修一个编辑器 UX bug**:校验拒绝后,内置编辑器的"已提交"锁(`done`)曾被卡死 → 用户改正后回车无反应。现 `commit()` 返回成功与否,拒绝时解锁并记住被拒值(避免点弹窗按钮的 blur 二次触发叠弹),改内容即可再次提交;弹窗关闭后焦点还给编辑器。
+- 测试:`edit/__tests__/data-validation.test.ts`(12 例:各类型/operator/空值/坏约束/软提示/自定义信息)+ `date-locale.test.ts` 加全类型规则解析;`data-validation.e2e.ts` 加"整数 1-100 校验:输入 999 → 弹拒、值不变、改 80 → 写入"(Vue + React + **Vue 2** 三壳)。
+
+### 新增 — Vue 2 壳 e2e 回归网
+
+- 此前 Vue 2 壳**完全没有 e2e**(只有 Vue 3 + React 双覆盖),改 Vue 2 只能手测 → 高风险点(patch 复用 controller 持有的 DOM 致 stale、Vue 2.6 函数 ref 被忽略)迟早回归。现补上:
+  - `playwright.config.ts` 加**第二个 dev server**(端口 5302,`npm run dev:vue2`,plugin-vue2 SFC 编译器隔离);`vue2-demo` DEV 下把命令式 API 挂 `window.__excelViewerVue2`(对齐 Vue3 `__excelViewer` / React `__excelViewerReact`)。
+  - `e2e/vue2-smoke.e2e.ts`:加载示例→canvas 渲染+模型有 sheet、编辑模式 editCell+undo、rectOf 几何、demo 顶栏按钮 1:1 —— 把"只有真 Vue 2 浏览器才暴露"的 DOM 复用/imperative DOM 回归钉死。
+  - `data-validation.e2e.ts` 加 Vue 2 行,数据验证下拉 + 整数拦截在 Vue 2 上同样覆盖。
+- 基线更新:**368 单测 + 159 e2e**(Vue 3 / React / Vue 2 三壳)。
+
 ## [1.7.0] - 2026-06-12
 
 ### 新增 — 列表型数据验证:点下拉箭头选值(B4,审计后续专项)

@@ -13,6 +13,12 @@ test.beforeAll(async () => {
   ws.getCell('A1').value = '产品'
   ws.getCell('C6').value = '苹果'
   ws.getCell('C6').dataValidation = { type: 'list', allowBlank: true, formulae: ['"苹果,香蕉,橙子"'] }
+  // E2:整数 1-100 校验(stop)→ 编辑拦截非法输入
+  ws.getCell('E6').value = 50
+  ws.getCell('E6').dataValidation = {
+    type: 'whole', operator: 'between', allowBlank: true, formulae: [1, 100],
+    showErrorMessage: true, errorStyle: 'stop', errorTitle: '越界', error: '请输入 1 到 100 的整数',
+  }
   const buf = await wb.xlsx.writeBuffer()
   writeFileSync(FIXTURE, Buffer.from(buf as ArrayBuffer))
 })
@@ -45,9 +51,41 @@ function run(label: string, url: string, canvasSel: string, renderAreaSel: strin
     await call(page, handle, 'undo')
     expect(await call(page, handle, 'getCellValue', 5, 2)).toBe('苹果') // 可撤销
   })
+
+  test(`${label}: 整数校验拦截非法输入(stop)→ 弹出错提示、值不变;改合法值后写入`, async ({ page }) => {
+    await page.goto(url)
+    await page.locator('input[type="file"]').first().setInputFiles(FIXTURE)
+    await expect(page.locator(canvasSel)).toBeVisible({ timeout: 20_000 })
+    await page.waitForFunction((h) => { const v = (window as any)[h]; const s = v?.getWorkbook()?.sheets?.[v.getActiveSheet()]; return !!s?.dataValidationRules?.length }, handle, { timeout: 20_000 })
+    await page.locator('.edit-toggle').click()
+
+    // E6(行5列4)= 整数 1-100 校验,初值 50。双击进编辑 → 输入 999(越界)
+    await call(page, handle, 'setSelection', { top: 5, left: 4, bottom: 5, right: 4 })
+    const box = (await page.locator(renderAreaSel).boundingBox())!
+    const rect = (await call(page, handle, 'rectOf', 5, 4)) as { x: number; y: number; w: number; h: number }
+    await page.mouse.dblclick(box.x + rect.x + rect.w / 2, box.y + rect.y + rect.h / 2)
+    const editor = page.locator('textarea.ooxml-cell-editor')
+    await expect(editor).toBeVisible()
+    await editor.fill('999')
+    await editor.press('Enter')
+
+    // 弹出错模态,值仍为 50(未写入)
+    const mask = page.locator('.ooxml-validation-mask')
+    await expect(mask).toBeVisible()
+    await expect(mask).toContainText('请输入 1 到 100 的整数')
+    expect(await call(page, handle, 'getCellValue', 5, 4)).toBe(50)
+    await mask.locator('[data-ok]').click() // 关提示,编辑器仍在
+
+    // 改成合法值 80 → 提交成功写入
+    await editor.fill('80')
+    await editor.press('Enter')
+    await expect(editor).toBeHidden()
+    expect(await call(page, handle, 'getCellValue', 5, 4)).toBe(80)
+  })
 }
 
 test.describe('数据验证列表下拉 e2e', () => {
   run('Vue', '/', 'canvas.grid-canvas', '.render-area', '__excelViewer')
   run('React', '/react.html', 'canvas.rxl-canvas', '.rxl-render-area', '__excelViewerReact')
+  run('Vue2', 'http://localhost:5302/', 'canvas.ov-grid-canvas', '.ov-render-area', '__excelViewerVue2')
 })
