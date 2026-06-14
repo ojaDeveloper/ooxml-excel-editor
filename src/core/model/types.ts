@@ -157,20 +157,34 @@ export interface FreezeInfo {
 
 /** 条件格式规则(简化版，覆盖常见 4 类) */
 export interface ConditionalRule {
+  /** 稳定 id(解析:`cf-p<n>`;用户新建:`cf-u<n>`)。编辑/删除/导出对账用。1.9.0 起;老数据缺省 */
+  id?: string
+  /** 来源:'parsed' 从文件解析;'user' app 内新建。overlay 导出据此决定原样回写还是按模型写。缺省按 parsed */
+  origin?: 'parsed' | 'user'
+  /** app 内被编辑过(parsed 规则改过后置 true)。导出:parsed && !dirty → 原样回写 raw;否则按模型写 */
+  dirty?: boolean
   ranges: MergeRange[]
   priority: number
   type: 'cellIs' | 'colorScale' | 'dataBar' | 'iconSet' | 'expression' | 'top10' | 'unsupported'
   /** cellIs */
   operator?: string
   formulae?: string[]
-  /** 命中时套用的样式(cellIs / expression) */
-  style?: Partial<CellStyle>
+  /** 命中时套用的样式(cellIs / expression / top10)。dxf 各字段都可缺,故 font 也是 Partial */
+  style?: Omit<Partial<CellStyle>, 'font'> & { font?: Partial<Font> }
   /** colorScale: 2~3 个色标 */
   colorScale?: { min: CssColor; mid?: CssColor; max: CssColor }
   /** dataBar */
   dataBar?: { color: CssColor; gradient: boolean }
   /** iconSet */
-  iconSet?: { name: string }
+  iconSet?: { name: string; reverse?: boolean }
+  /** top10: rank 个 / percent 百分比 / bottom 底部 */
+  top10?: { rank: number; percent: boolean; bottom: boolean }
+  /**
+   * 导出专用:解析时原始 ExcelJS rule 对象(含 cfvo 阈值等我们不全建模的字段)。
+   * overlay 导出对"未编辑的 parsed 规则"原样回写保真;编辑色阶/数据条/图标集时尽量改这里的颜色/名称、留住阈值。
+   * 框架无关模型刻意只放它作不透明透传载体,渲染/编辑逻辑不读它。
+   */
+  raw?: unknown
 }
 
 /** 图片锚定(像素矩形由 layout 阶段最终算出，这里给逻辑锚点) */

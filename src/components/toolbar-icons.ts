@@ -13,6 +13,8 @@ export const TOOLBAR_ICONS: Record<string, string> = {
   sort: '<path d="M7 16l3 3 3-3"/><line x1="10" y1="19" x2="10" y2="5"/><path d="M17 8l-3-3-3 3"/><line x1="14" y1="5" x2="14" y2="19"/>',
   // 透视表: 小表格 + 汇总箭头
   'pivot-table': '<rect x="3" y="4" width="13" height="13" rx="1.5"/><line x1="3" y1="8" x2="16" y2="8"/><line x1="7" y1="4" x2="7" y2="17"/><path d="M14 14h7"/><path d="M18 11l3 3-3 3"/>',
+  // 条件格式: 渐变色块 + 小滴
+  'conditional-format': '<rect x="3" y="4" width="13" height="13" rx="1.5"/><path d="M3 9h13"/><path d="M3 13h13"/><circle cx="18.5" cy="15" r="3"/><path d="M18.5 9.5c1.2 1.4 2 2.7 2 3.8a2 2 0 0 1-4 0c0-1.1.8-2.4 2-3.8z"/>',
   // 下载(导出)
   export: '<line x1="12" y1="3" x2="12" y2="15"/><path d="M8 11l4 4 4-4"/><path d="M4 19h16"/>',
   // 放大镜带 +

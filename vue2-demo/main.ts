@@ -21,7 +21,7 @@ new Vue({
       highlightReadOnly: false,
       cellImageFit: 'contain' as 'contain' | 'fill' | 'cover',
       lastEvent: '',
-      toolbarItems: ['find', 'filter', 'sort', 'clear-filter', 'separator', 'copy', 'pivot-table', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export'],
+      toolbarItems: ['find', 'filter', 'sort', 'clear-filter', 'separator', 'copy', 'pivot-table', 'conditional-format', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export'],
       editableTargetsApplied: undefined as any,
       editTargetsDialogOpen: false,
       editTargetsCells: {} as Record<string, true>,
@@ -348,6 +348,7 @@ new Vue({
           :cell-image-fit="cellImageFit"
           :editable="editMode"
           :pivot-table="true"
+          :conditional-format="true"
           :recalc="editMode"
           :editable-targets="editableTargetsApplied"
           :read-only-cell-style="highlightReadOnly"

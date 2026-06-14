@@ -2,6 +2,20 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.9.0] - 2026-06-14
+
+> 路线图「保真/编辑完整化」第二阶段:**条件格式从只读渲染 → 可编辑**。整个功能由 `conditionalFormat` prop 开启(三壳同名,默认 false = 关闭、与历史一致;三 demo 已开启)。支持全 6 类规则的新建/编辑/删除 + 导出回写,overlay 模式保留原件未编辑规则原样。
+
+### 新增 — 条件格式可编辑(全类型)
+
+- **模型 + 解析**:`ConditionalRule` 加 `id` / `origin`('parsed'|'user')/ `dirty` / `raw`(原始 ExcelJS rule,导出原样回写用)+ `top10`(rank/percent/bottom)/ `iconSet.reverse`。`parseConditional` 给每条规则派 id、存 raw、补全 top10/iconSet 字段。
+- **命令栈**:新增 `set-conditional` 命令(整张 `conditional` 数组不可变替换,逆=换回前态)→ 新建/编辑/删除规则**整体单次撤销**。
+- **编程 API**(控制器 + 插件 viewer + 三壳句柄):`getConditionalRules` / `addConditionalRule` / `updateConditionalRule` / `removeConditionalRule` / `setConditionalRules` / `openConditionalFormatDialog`。改完即 live 重渲。需 `conditionalFormat` + `editable`。
+- **管理对话框**(框架无关 DOM `viewer/conditional-format-dialog-host.ts`,三壳共用一份 → UI 天然 1:1):列出当前表所有规则(可删/可编辑)+ 新建。6 类编辑器:突出显示单元格(cellIs:大于/小于/介于/等于… + 填充/字体色/加粗)、公式(expression)、色阶(colorScale 2/3 色)、数据条(dataBar 颜色 + 渐变)、图标集(iconSet 7 种 + 反向)、项目选取(top10 前/后 N + 百分比)。新建默认套到当前选区。
+- **工具栏入口** `conditional-format`(三壳 + 三 demo,`conditionalFormat` 关时不渲染)。
+- **导出回写**(rebuild + overlay 共用 `xlsx-writer` 的 `writeConditionalFormatting`):清空 ExcelJS 现有 CF 后按模型重建 —— **未编辑的 parsed 规则用 `raw` 原样回写**(含 cfvo 阈值,零退化);用户新建/编辑过的按模型 `buildExcelCfRule` 构造(全 6 类)。**1.9.0 起 rebuild 也回写条件格式**(此前 rebuild 丢弃);overlay 满足"原件规则原样留、只增改用户改的"。
+- 测试:`edit/__tests__/conditional-format.test.ts`(解析保真 / 命令撤销 / rebuild + overlay 往返 5 例)+ `e2e/conditional-format.e2e.ts`(API 新增+撤销、对话框新建 cellIs,Vue + React + Vue 2 三壳)。基线:**373 单测 + 165 e2e**。
+
 ## [1.8.0] - 2026-06-14
 
 > 路线图「保真/编辑完整化」第一阶段:① 把 1.7.0 起步的数据验证**做完整**(从"只能选值"到"编辑拦截非法输入 + 输入/出错提示");② 补上 **Vue 2 壳的 e2e 回归网**(此前 Vue 2 零 e2e,改 Vue 2 全靠手测,是 CLAUDE.md 点名的空洞)。

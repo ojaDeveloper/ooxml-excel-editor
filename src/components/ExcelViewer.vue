@@ -96,6 +96,12 @@ const props = withDefaults(
      * (overlay 模式同时保留原文件透视表)。
      */
     pivotTable?: boolean
+    /**
+     * 条件格式编辑开关:默认 false = 关闭(只读渲染)。开启后(还需 `editable`)工具栏 `conditional-format`
+     * 入口可见、`openConditionalFormatDialog`/`addConditionalRule` 等 API 生效、导出 .xlsx 回写条件格式
+     * (overlay 模式保留原件未编辑规则原样,只增改用户改的)。
+     */
+    conditionalFormat?: boolean
     /** 按格只读判定:返回 true = 只读(cell 为空格时传 null) */
     cellReadOnly?: (cell: CellModel | null, pos: { row: number; col: number }) => boolean | void
     /** 只读区域(0-based 闭区间);命中即只读 */
@@ -186,6 +192,7 @@ function effectiveTransform(wb: WorkbookModel): WorkbookModel {
 const effectiveEditConfig = computed<EditConfig>(() => ({
   editable: props.editable,
   pivotTable: props.pivotTable,
+  conditionalFormat: props.conditionalFormat,
   cellReadOnly: props.cellReadOnly,
   readOnlyRanges: props.readOnlyRanges,
   editableTargets: props.editableTargets,
@@ -838,6 +845,12 @@ const viewerApi: ViewerApi = {
   createPivotTable: (opts) => controller?.createPivotTable(opts) ?? false,
   createPivotTableFromSelection: (opts) => controller?.createPivotTableFromSelection(opts) ?? false,
   openPivotTableDialog: () => controller?.openPivotTableDialog() ?? false,
+  getConditionalRules: () => controller?.getConditionalRules() ?? [],
+  addConditionalRule: (rule) => controller?.addConditionalRule(rule) ?? false,
+  updateConditionalRule: (ruleId, patch) => controller?.updateConditionalRule(ruleId, patch) ?? false,
+  removeConditionalRule: (ruleId) => controller?.removeConditionalRule(ruleId) ?? false,
+  setConditionalRules: (rules) => controller?.setConditionalRules(rules) ?? false,
+  openConditionalFormatDialog: () => controller?.openConditionalFormatDialog() ?? false,
   editCell: (row, col, value) => controller?.editCell(row, col, value) ?? false,
   editRange: (range, values) => controller?.editRange(range, values) ?? false,
   clearRange: (range) => controller?.clearRange(range) ?? false,
@@ -1033,6 +1046,16 @@ function builtinTool(id: string): ResolvedToolbarItem | null {
         title: '选择字段并基于当前选区创建静态透视汇总表',
         disabled: !selection.value || !props.editable,
         onClick: () => controller?.openPivotTableDialog(),
+      })
+    case 'conditional-format':
+      if (!props.conditionalFormat) return null // 功能未开启(默认):不渲染入口
+      return bi({
+        id,
+        iconSvg: I('conditional-format'),
+        label: '条件格式',
+        title: '管理条件格式规则(新建/编辑/删除;新建套到当前选区)',
+        disabled: !props.editable,
+        onClick: () => controller?.openConditionalFormatDialog(),
       })
     case 'wrap-text': {
       const wrapState = controller?.getSelectionWrapState() ?? 'none'

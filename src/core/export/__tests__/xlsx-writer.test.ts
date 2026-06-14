@@ -120,7 +120,7 @@ describe('xlsx-writer 往返(从模型重建 → 重解析,值/样式/合并/几
 })
 
 describe('xlsx-writer overlay 高保真(重载原件叠加;F3)', () => {
-  it('overlay 保留原件条件格式;rebuild 丢失;两者都反映编辑值', async () => {
+  it('overlay 与 rebuild 都保留原件条件格式(1.9.0 起 rebuild 也按模型回写);两者都反映编辑值', async () => {
     const src = loadSample()
     const model = await parseWorkbook(src) // 样例首表有 2 条条件格式
     model.sheets[0].cells.set(cellKey(2, 1), { row: 2, col: 1, type: 'number', raw: 88888, styleId: 0 } as never)
@@ -132,11 +132,11 @@ describe('xlsx-writer overlay 高保真(重载原件叠加;F3)', () => {
     expect(ovCF.length).toBeGreaterThan(0) // 条件格式存活
     expect(ov.worksheets[0].getCell(3, 2).value).toBe(88888) // 编辑值叠加生效
 
-    // rebuild:CF 丢失(我们不建模 CF),但编辑值仍在
+    // rebuild:1.9.0 起也回写条件格式(parsed 规则用 raw 原样写),编辑值仍在
     const rb = new ExcelJS.Workbook()
     await rb.xlsx.load(await (await workbookToXlsxBlob(model, {})).arrayBuffer())
     const rbCF = (rb.worksheets[0] as unknown as { conditionalFormattings?: unknown[] }).conditionalFormattings ?? []
-    expect(rbCF.length).toBe(0) // rebuild 丢条件格式
+    expect(rbCF.length).toBeGreaterThan(0) // rebuild 不再丢条件格式
     expect(rb.worksheets[0].getCell(3, 2).value).toBe(88888)
   })
 

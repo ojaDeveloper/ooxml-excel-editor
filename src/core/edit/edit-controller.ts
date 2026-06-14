@@ -3,7 +3,7 @@
  * 发"前后完整快照"事件、暴露命令式编辑 API + 查询 API。组合进 ViewerController(非继承)。
  * 这是要求 5("一切都有 API/事件")的承重墙:UI/公式/导出都建在它上面。
  */
-import type { CellModel, CellStyle, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
+import type { CellModel, CellStyle, CellStyleOverride, ColumnInfo, ConditionalRule, ImageAnchor, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
 import type { CellValue } from '../model/data-access'
 import { buildCellSnapshot, type CellSnapshot } from '../model/snapshot'
@@ -245,6 +245,19 @@ export class EditController {
     if (!cells.length) return false
     this.ensureBaseline()
     const inv = this.exec({ kind: 'set-cells', cells }, 'api')
+    if (inv) {
+      this.pushUndo(inv)
+      this.markDirty()
+    }
+    return !!inv
+  }
+
+  /** 替换整张表的条件格式规则集(1.9.0,整体单次撤销)。规则对象不可变 → 直接换数组。 */
+  setConditionalRules(rules: ConditionalRule[]): boolean {
+    if (!this.host.isEditingEnabled()) return false
+    if (!this.host.getSheet()) return false
+    this.ensureBaseline()
+    const inv = this.exec({ kind: 'set-conditional', rules }, 'api')
     if (inv) {
       this.pushUndo(inv)
       this.markDirty()

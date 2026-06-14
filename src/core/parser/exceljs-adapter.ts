@@ -519,10 +519,14 @@ function parseMerges(ws: ExcelJS.Worksheet): MergeRange[] {
 function parseConditional(ws: ExcelJS.Worksheet, theme: CssColor[]): ConditionalRule[] {
   const cfs: any[] = (ws as any).conditionalFormattings || []
   const out: ConditionalRule[] = []
+  let pid = 0
   for (const cf of cfs) {
     const ranges = parseRefRanges(cf.ref)
     for (const rule of cf.rules || []) {
       const base: ConditionalRule = {
+        id: `cf-p${pid++}`,
+        origin: 'parsed',
+        raw: rule, // 原始 ExcelJS rule:overlay 未编辑时原样回写保真(含 cfvo 阈值)
         ranges,
         priority: rule.priority ?? 0,
         type: 'unsupported',
@@ -555,10 +559,11 @@ function parseConditional(ws: ExcelJS.Worksheet, theme: CssColor[]): Conditional
           break
         case 'iconSet':
           base.type = 'iconSet'
-          base.iconSet = { name: rule.iconSet || '3TrafficLights1' }
+          base.iconSet = { name: rule.iconSet || '3TrafficLights1', reverse: !!rule.reverse }
           break
         case 'top10':
           base.type = 'top10'
+          base.top10 = { rank: rule.rank ?? 10, percent: !!rule.percent, bottom: !!rule.bottom }
           base.style = rule.style ? cfStyle(rule.style, theme) : undefined
           break
       }

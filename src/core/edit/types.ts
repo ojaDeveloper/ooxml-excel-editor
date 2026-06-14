@@ -53,6 +53,12 @@ export interface EditConfig {
    * (含 overlay 模式保留原文件透视表)。关闭时上述行为全部不生效,与历史版本一致。
    */
   pivotTable?: boolean
+  /**
+   * 条件格式编辑开关(默认 false = 关闭,只读渲染)。开启后(还需 `editable`):工具栏 `conditional-format`
+   * 入口可见、`openConditionalFormatDialog` / `addConditionalRule` 等 API 生效、导出 .xlsx 回写条件格式
+   * (rebuild 按模型写全类型;overlay 保留原件未编辑规则原样,只增改用户改的)。关闭时与历史版本一致。
+   */
+  conditionalFormat?: boolean
   /** 按格只读判定:返回 true = 该格只读。cell 为空格时传 null。pos 为 0-based 行列。 */
   cellReadOnly?: (cell: CellModel | null, pos: { row: number; col: number }) => boolean | void
   /** 只读区域(0-based 闭区间);命中即只读 */

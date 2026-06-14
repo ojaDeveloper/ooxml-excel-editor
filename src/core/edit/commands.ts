@@ -2,7 +2,7 @@
  * 编辑命令(框架无关)。每个命令 apply 时**捕获逆向载荷**,逆向统一为 restore-cells
  * (精确还原一组格的底层 CellModel),于是 undo/redo 跨 值/区域/清空(及后续样式/图片)同一套栈。
  */
-import type { CellModel, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
+import type { CellModel, CellStyleOverride, ColumnInfo, ConditionalRule, ImageAnchor, MergeRange, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
 import type { CellValue } from '../model/data-access'
 import { cloneCell } from '../model/snapshot'
@@ -36,6 +36,8 @@ export type EditCommand =
   | { kind: 'restore-wb'; snapshot: WorkbookModel }
   | { kind: 'merge-cells'; range: MergeRange }
   | { kind: 'unmerge-cells'; range: MergeRange }
+  // 条件格式(1.9.0):整张 conditional 数组替换式,逆=换回前态数组。规则不可变替换,不原地改
+  | { kind: 'set-conditional'; rules: ConditionalRule[] }
   | { kind: 'restore-merges'; merges: MergeRange[]; cells: { row: number; col: number; cell: CellModel | null }[] }
   // WPS 内嵌图 ⇄ 浮动图互转(第二期):由 EditController.exec 直接处理(需 workbook 级快照逆),不走 applyCommand
   | { kind: 'convert-to-cell'; imageIndex: number; row: number; col: number }
@@ -91,6 +93,7 @@ export function affectedOf(cmd: EditCommand): CellPos[] {
     case 'struct-edit':
     case 'restore-wb':
     case 'unmerge-cells':
+    case 'set-conditional':
     case 'convert-to-cell':
     case 'convert-to-cells':
     case 'convert-to-float':
@@ -174,6 +177,12 @@ export function applyCommand(sheet: SheetModel, cmd: EditCommand): ApplyResult {
     sheet.merges = cmd.merges.map((m) => ({ ...m }))
     for (const { row, col, cell } of cmd.cells) restoreCell(sheet, row, col, cell)
     return { inverse: { kind: 'restore-merges', merges: curMerges, cells: curCells }, affected }
+  }
+  // 条件格式:整张数组替换,逆=换回前态。规则对象不可变(编辑产新对象),故浅存前态数组即可
+  if (cmd.kind === 'set-conditional') {
+    const prior = sheet.conditional
+    sheet.conditional = cmd.rules
+    return { inverse: { kind: 'set-conditional', rules: prior }, affected }
   }
   // 结构族(增删行列)由 EditController.exec 直接处理(需 workbook 级快照 + 跨表公式重写),不走这里
   // 单元格族:逆=restore-cells(捕获前态;set-style 也走它 → 空格上色的逆=删格)

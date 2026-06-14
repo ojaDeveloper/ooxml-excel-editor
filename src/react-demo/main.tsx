@@ -355,13 +355,14 @@ function Demo() {
           plugins={plugins}
           editable={editMode}
           pivotTable={true}
+          conditionalFormat={true}
           cellImageFit={fit}
           recalc={editMode}
           readOnlyRanges={readOnlyRanges}
           editableTargets={editableTargetsApplied}
           readOnlyCellStyle={highlightReadOnly}
           editor={demoSelectEditor}
-          toolbar={['find', 'filter', 'sort', 'clear-filter', 'separator', 'copy', 'pivot-table', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export']}
+          toolbar={['find', 'filter', 'sort', 'clear-filter', 'separator', 'copy', 'pivot-table', 'conditional-format', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export']}
           onSelectionChange={() => bumpSel()}
           onCellChange={(p) => {
             bumpSel() // 颜色回显随内容/样式变更刷新

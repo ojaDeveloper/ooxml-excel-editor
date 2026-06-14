@@ -116,6 +116,8 @@ export default defineComponent({
     editable: { type: Boolean, default: false },
     /** 透视表功能开关:默认 false 关闭。开启后(还需 editable)工具栏入口/API/导出回注真实 OOXML 零件才生效 */
     pivotTable: { type: Boolean, default: false },
+    /** 条件格式编辑开关:默认 false 关闭(只读渲染)。开启后(还需 editable)工具栏入口/API/导出回写才生效 */
+    conditionalFormat: { type: Boolean, default: false },
     cellReadOnly: { type: Function as PropType<(cell: CellModel | null, pos: { row: number; col: number }) => boolean | void>, default: undefined },
     readOnlyRanges: { type: Array as PropType<MergeRange[]>, default: undefined },
     editableTargets: { type: [Array, Object] as PropType<EditableTarget | EditableTarget[]>, default: undefined },
@@ -247,6 +249,7 @@ export default defineComponent({
     const effectiveEditConfig = computed<EditConfig>(() => ({
       editable: props.editable,
       pivotTable: props.pivotTable,
+      conditionalFormat: props.conditionalFormat,
       cellReadOnly: props.cellReadOnly,
       readOnlyRanges: props.readOnlyRanges,
       editableTargets: props.editableTargets,
@@ -658,6 +661,12 @@ export default defineComponent({
       createPivotTable: (opts: any) => controllerRef.value?.createPivotTable(opts) ?? false,
       createPivotTableFromSelection: (opts?: { rowFieldIndex?: number; valueFieldIndex?: number; output?: { kind: 'current-sheet'; cell: string } | { kind: 'new-sheet' } }) => controllerRef.value?.createPivotTableFromSelection(opts) ?? false,
       openPivotTableDialog: () => controllerRef.value?.openPivotTableDialog() ?? false,
+      getConditionalRules: () => controllerRef.value?.getConditionalRules() ?? [],
+      addConditionalRule: (rule: any) => controllerRef.value?.addConditionalRule(rule) ?? false,
+      updateConditionalRule: (ruleId: string, patch: any) => controllerRef.value?.updateConditionalRule(ruleId, patch) ?? false,
+      removeConditionalRule: (ruleId: string) => controllerRef.value?.removeConditionalRule(ruleId) ?? false,
+      setConditionalRules: (rules: any) => controllerRef.value?.setConditionalRules(rules) ?? false,
+      openConditionalFormatDialog: () => controllerRef.value?.openConditionalFormatDialog() ?? false,
       editCell: (row: number, col: number, value: any) => controllerRef.value?.editCell(row, col, value) ?? false,
       editRange: (range: MergeRange, values: any[][]) => controllerRef.value?.editRange(range, values) ?? false,
       clearRange: (range: MergeRange) => controllerRef.value?.clearRange(range) ?? false,
@@ -796,6 +805,8 @@ export default defineComponent({
           return bi({ id, iconSvg: I('copy'), label: '复制', title: '复制选区 (Ctrl+C)', disabled: !selection.value, onClick: () => void controller?.copySelection() })
         case 'pivot-table': // 功能未开启(默认):不渲染入口
           return props.pivotTable ? bi({ id, iconSvg: I('pivot-table'), label: '透视表', title: '选择字段并基于当前选区创建静态透视汇总表', disabled: !selection.value || !props.editable, onClick: () => controller?.openPivotTableDialog() }) : null
+        case 'conditional-format': // 功能未开启(默认):不渲染入口
+          return props.conditionalFormat ? bi({ id, iconSvg: I('conditional-format'), label: '条件格式', title: '管理条件格式规则(新建/编辑/删除;新建套到当前选区)', disabled: !props.editable, onClick: () => controller?.openConditionalFormatDialog() }) : null
         case 'wrap-text': {
           const wrapState = controller?.getSelectionWrapState() ?? 'none'
           return bi({ id, iconSvg: I('wrap-text'), label: '自动换行', title: '自动换行(选区,WPS 风格 toggle)', active: wrapState === 'all', disabled: !selection.value || !props.editable, onClick: () => void controller?.toggleWrapTextOnSelection() })

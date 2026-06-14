@@ -13,7 +13,7 @@
  *   <ExcelViewer :plugins="[myPlugin]" />   // Vue
  *   <ExcelViewer plugins={[myPlugin]} />    // React —— 同一插件,两框架通用
  */
-import type { CellStyleFn, CellStyleOverride, ImageAnchor, MergeRange, PivotTableLayout, TransformModelFn, WorkbookModel } from './model/types'
+import type { CellStyleFn, CellStyleOverride, ConditionalRule, ImageAnchor, MergeRange, PivotTableLayout, TransformModelFn, WorkbookModel } from './model/types'
 import type { CellValue, ReadOptions, SheetToJSONOptions } from './model/data-access'
 import type { CellSnapshot } from './model/snapshot'
 import type { CellInspection } from './model/inspect'
@@ -116,6 +116,19 @@ export interface ViewerApi {
   }): boolean
   /** 打开透视表字段选择对话框,再从当前选区创建静态透视汇总表。需 `pivotTable` + `editable`。 */
   openPivotTableDialog(): boolean
+  // ===== 条件格式编辑(1.9.0)需 `conditionalFormat` + `editable` =====
+  /** 当前表的条件格式规则集(只读副本)。 */
+  getConditionalRules(): ConditionalRule[]
+  /** 新增一条规则(未给 id 自动派、origin 默认 'user');返回新 id 或 false。 */
+  addConditionalRule(rule: Partial<ConditionalRule> & Pick<ConditionalRule, 'ranges' | 'type'>): string | false
+  /** 按 id 改一条规则(浅合并)。 */
+  updateConditionalRule(ruleId: string, patch: Partial<ConditionalRule>): boolean
+  /** 按 id 删一条规则。 */
+  removeConditionalRule(ruleId: string): boolean
+  /** 整表替换规则集。 */
+  setConditionalRules(rules: ConditionalRule[]): boolean
+  /** 打开条件格式管理对话框(框架无关 DOM,三壳共用)。 */
+  openConditionalFormatDialog(): boolean
   /** 导出当前/指定表为图片 Blob(默认 png) */
   exportImage(opts?: ImageExportOptions): Promise<Blob>
   /** 导出为图片并触发下载 */

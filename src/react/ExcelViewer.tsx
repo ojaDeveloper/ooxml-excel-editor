@@ -121,6 +121,11 @@ export interface ExcelViewerProps {
    * (overlay 模式同时保留原文件透视表)。
    */
   pivotTable?: boolean
+  /**
+   * 条件格式编辑开关:默认 false = 关闭(只读渲染)。开启后(还需 `editable`)工具栏 `conditional-format`
+   * 入口可见、`openConditionalFormatDialog`/`addConditionalRule` 等 API 生效、导出 .xlsx 回写条件格式。
+   */
+  conditionalFormat?: boolean
   /** 按格只读判定:返回 true = 只读(cell 为空格时传 null) */
   cellReadOnly?: (cell: CellModel | null, pos: { row: number; col: number }) => boolean | void
   /** 只读区域(0-based 闭区间);命中即只读 */
@@ -205,6 +210,12 @@ export interface ExcelViewerHandle {
   createPivotTable: ViewerApi['createPivotTable']
   createPivotTableFromSelection: ViewerApi['createPivotTableFromSelection']
   openPivotTableDialog: ViewerApi['openPivotTableDialog']
+  getConditionalRules: ViewerApi['getConditionalRules']
+  addConditionalRule: ViewerApi['addConditionalRule']
+  updateConditionalRule: ViewerApi['updateConditionalRule']
+  removeConditionalRule: ViewerApi['removeConditionalRule']
+  setConditionalRules: ViewerApi['setConditionalRules']
+  openConditionalFormatDialog: ViewerApi['openConditionalFormatDialog']
   editCell: (row: number, col: number, value: CellValue) => boolean
   editRange: (range: MergeRange, values: CellValue[][]) => boolean
   clearRange: (range: MergeRange) => boolean
@@ -397,6 +408,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     return {
       editable: p.editable,
       pivotTable: p.pivotTable,
+      conditionalFormat: p.conditionalFormat,
       cellReadOnly: p.cellReadOnly,
       readOnlyRanges: p.readOnlyRanges,
       editableTargets: p.editableTargets,
@@ -719,6 +731,12 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       createPivotTable: (opts) => controllerRef.current?.createPivotTable(opts) ?? false,
       createPivotTableFromSelection: (opts) => controllerRef.current?.createPivotTableFromSelection(opts) ?? false,
       openPivotTableDialog: () => controllerRef.current?.openPivotTableDialog() ?? false,
+      getConditionalRules: () => controllerRef.current?.getConditionalRules() ?? [],
+      addConditionalRule: (rule) => controllerRef.current?.addConditionalRule(rule) ?? false,
+      updateConditionalRule: (ruleId, patch) => controllerRef.current?.updateConditionalRule(ruleId, patch) ?? false,
+      removeConditionalRule: (ruleId) => controllerRef.current?.removeConditionalRule(ruleId) ?? false,
+      setConditionalRules: (rules) => controllerRef.current?.setConditionalRules(rules) ?? false,
+      openConditionalFormatDialog: () => controllerRef.current?.openConditionalFormatDialog() ?? false,
       editCell: (row, col, value) => controllerRef.current?.editCell(row, col, value) ?? false,
       editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
       clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
@@ -840,6 +858,12 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     createPivotTable: (opts) => controllerRef.current?.createPivotTable(opts) ?? false,
     createPivotTableFromSelection: (opts) => controllerRef.current?.createPivotTableFromSelection(opts) ?? false,
     openPivotTableDialog: () => controllerRef.current?.openPivotTableDialog() ?? false,
+    getConditionalRules: () => controllerRef.current?.getConditionalRules() ?? [],
+    addConditionalRule: (rule) => controllerRef.current?.addConditionalRule(rule) ?? false,
+    updateConditionalRule: (ruleId, patch) => controllerRef.current?.updateConditionalRule(ruleId, patch) ?? false,
+    removeConditionalRule: (ruleId) => controllerRef.current?.removeConditionalRule(ruleId) ?? false,
+    setConditionalRules: (rules) => controllerRef.current?.setConditionalRules(rules) ?? false,
+    openConditionalFormatDialog: () => controllerRef.current?.openConditionalFormatDialog() ?? false,
     editCell: (row, col, value) => controllerRef.current?.editCell(row, col, value) ?? false,
     editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
     clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
@@ -1063,6 +1087,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       }
       case 'copy': return bi({ id, iconSvg: I('copy'), label: '复制', title: '复制选区 (Ctrl+C)', disabled: !selection, onClick: () => void ctrl?.copySelection() })
       case 'pivot-table': return props.pivotTable ? bi({ id, iconSvg: I('pivot-table'), label: '透视表', title: '选择字段并基于当前选区创建静态透视汇总表', disabled: !selection || !props.editable, onClick: () => ctrl?.openPivotTableDialog() }) : null // 功能未开启(默认):不渲染入口
+      case 'conditional-format': return props.conditionalFormat ? bi({ id, iconSvg: I('conditional-format'), label: '条件格式', title: '管理条件格式规则(新建/编辑/删除;新建套到当前选区)', disabled: !props.editable, onClick: () => ctrl?.openConditionalFormatDialog() }) : null // 功能未开启(默认):不渲染入口
       case 'wrap-text': {
         const wrapState = ctrl?.getSelectionWrapState() ?? 'none'
         return bi({ id, iconSvg: I('wrap-text'), label: '自动换行', title: '自动换行(选区,WPS 风格 toggle)', active: wrapState === 'all', disabled: !selection || !props.editable, onClick: () => void ctrl?.toggleWrapTextOnSelection() })

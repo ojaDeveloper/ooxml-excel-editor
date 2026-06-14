@@ -10,7 +10,7 @@
  * onSelectionChange(壳据此 +1 让选区相关计算属性重算)、onCellClick/onCellDblClick/onHyperlink/onFilterButton/onTooltip
  * (交互回调,壳决定 emit / 插件派发 / 策略)。壳不需镜像 contentSize/selection —— 直接读控制器。
  */
-import type { CellModel, CellStyle, CellStyleOverride, ColumnInfo, ImageAnchor, MergeRange, PivotFilterRule, PivotSummary, PivotTableLayout, PivotTableModel, RowInfo, SheetModel, WorkbookModel } from '../model/types'
+import type { CellModel, CellStyle, CellStyleOverride, ColumnInfo, ConditionalRule, ImageAnchor, MergeRange, PivotFilterRule, PivotSummary, PivotTableLayout, PivotTableModel, RowInfo, SheetModel, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
 import { setCellValue, setImageRect, cloneImageAnchor } from '../model/mutations'
 import { pxToEmu, emuToPx } from '../layout/units'
@@ -33,6 +33,7 @@ import { PasteConfigDialogHost } from './paste-config-host'
 import { ReadOnlyPromptHost } from './readonly-prompt-host'
 import { ValidationPromptHost } from './validation-prompt-host'
 import { findValidationRuleAt, validateCellValue } from '../edit/data-validation'
+import { ConditionalFormatDialogHost } from './conditional-format-dialog-host'
 import { parseClipboardHtml } from '../edit/clipboard-html'
 import { serializeSnapshot, encodeSnapshot, parseSnapshotHtml, withoutImages, bytesToB64, CLIP_IMAGE_BUDGET_BYTES } from '../edit/clipboard-snapshot'
 import { type PasteBehavior, DEFAULT_PASTE_BEHAVIOR, PASTE_PRESET_VALUES_ONLY } from '../edit/paste-behavior'
@@ -175,8 +176,11 @@ export class ViewerController {
   private pasteConfigDialog = new PasteConfigDialogHost()
   private readonlyPrompt = new ReadOnlyPromptHost()
   private validationPrompt = new ValidationPromptHost()
+  private cfDialog = new ConditionalFormatDialogHost()
   /** 当前输入提示气泡的签名(格+位置),变了才重建,避免每帧 render 抖动 */
   private bubbleSig = ''
+  /** 用户新建条件格式规则的自增序号(派 id `cf-u<n>`,只增不减,session 内唯一) */
+  private cfSeq = 0
   /** 透视表"活刷新"重入兜底:recompute 内部 setCellValue 不再触发 onModelChange,此旗保险。 */
   private pivotRefreshing = false
   private lightboxEnabled = true
@@ -558,6 +562,7 @@ export class ViewerController {
     this.pasteConfigDialog.dispose()
     this.readonlyPrompt.dispose()
     this.validationPrompt.dispose()
+    this.cfDialog.dispose()
     this.edit.disposeEngine()
   }
 
@@ -1964,6 +1969,60 @@ export class ViewerController {
     if (!s.autoFilterRange || active.col < s.autoFilterRange.left || active.col > s.autoFilterRange.right) return false
     this.sortColumn(active.col, dir)
     return this.sortCol === active.col && this.sortDir === dir
+  }
+
+  // ===== 条件格式编辑(1.9.0)需 `conditionalFormat` + `editable` 配置 =====
+  /** 当前表的条件格式规则集(只读副本)。 */
+  getConditionalRules(): ConditionalRule[] {
+    return this.sheet ? this.sheet.conditional.slice() : []
+  }
+  /** 新增一条规则;未给 id 自动派 `cf-u<n>`、origin 默认 'user'。返回新 id 或 false。 */
+  addConditionalRule(rule: Partial<ConditionalRule> & Pick<ConditionalRule, 'ranges' | 'type'>): string | false {
+    if (!this.editCfg.conditionalFormat || !this.sheet) return false
+    const id = rule.id ?? `cf-u${this.cfSeq++}`
+    const priorMax = this.sheet.conditional.reduce((m, r) => Math.max(m, r.priority || 0), 0)
+    const full: ConditionalRule = { priority: priorMax + 1, ...rule, id, origin: rule.origin ?? 'user' }
+    if (!this.edit.setConditionalRules([...this.sheet.conditional, full])) return false
+    this.render()
+    return id
+  }
+  /** 按 id 改一条规则(浅合并 patch);编辑 parsed 规则会改其 raw 中的可视字段(色/名)以留住阈值。 */
+  updateConditionalRule(id: string, patch: Partial<ConditionalRule>): boolean {
+    if (!this.editCfg.conditionalFormat || !this.sheet) return false
+    const idx = this.sheet.conditional.findIndex((r) => r.id === id)
+    if (idx < 0) return false
+    const next = this.sheet.conditional.slice()
+    next[idx] = { ...next[idx], ...patch, dirty: true } // 编辑过 → dirty,导出按模型写(不再原样回写 raw)
+    if (!this.edit.setConditionalRules(next)) return false
+    this.render()
+    return true
+  }
+  /** 按 id 删一条规则。 */
+  removeConditionalRule(id: string): boolean {
+    if (!this.editCfg.conditionalFormat || !this.sheet) return false
+    const next = this.sheet.conditional.filter((r) => r.id !== id)
+    if (next.length === this.sheet.conditional.length) return false
+    if (!this.edit.setConditionalRules(next)) return false
+    this.render()
+    return true
+  }
+  /** 整表替换规则集(对话框"应用"用)。 */
+  setConditionalRules(rules: ConditionalRule[]): boolean {
+    if (!this.editCfg.conditionalFormat || !this.sheet) return false
+    if (!this.edit.setConditionalRules(rules)) return false
+    this.render()
+    return true
+  }
+  /** 打开条件格式管理对话框(框架无关 DOM,三壳共用)。需 `conditionalFormat` + `editable`。 */
+  openConditionalFormatDialog(): boolean {
+    if (!this.editCfg.conditionalFormat || !this.editCfg.editable || !this.sheet) return false
+    this.cfDialog.show({
+      rules: this.sheet.conditional,
+      selection: this.getSelection(),
+      genId: () => `cf-u${this.cfSeq++}`,
+      onApply: (rules) => { this.setConditionalRules(rules) },
+    })
+    return true
   }
 
   /** 打开 WPS 式透视表入口:确认选区字段后生成静态透视汇总表。需 `pivotTable` + `editable` 配置。 */

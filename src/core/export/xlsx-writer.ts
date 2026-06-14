@@ -6,7 +6,7 @@
  * 冻结/图片;**丢失** VBA、工作表保护、复杂 DrawingML(图表/形状按位图另算)、条件格式细节。
  * 接口留口 `fidelity`:日后可加"重载原 ArrayBuffer 叠加"高保真模式,API 不破。
  */
-import type { CellModel, CellStyle, ImageAnchor, SheetModel, WorkbookModel } from '../model/types'
+import type { CellModel, CellStyle, ConditionalRule, ImageAnchor, MergeRange, SheetModel, WorkbookModel } from '../model/types'
 import { cellKey } from '../model/types'
 import { GridMetrics } from '../layout/grid-metrics'
 import { anchorRect } from '../overlay/anchor'
@@ -119,6 +119,103 @@ function applyStyle(ec: { font?: unknown; fill?: unknown; border?: unknown; alig
   if (st.numFmt && st.numFmt !== 'General') ec.numFmt = st.numFmt
 }
 
+// ===== 条件格式导出(1.9.0) =====
+// 策略(rebuild + overlay 统一):清空 ExcelJS 现有 CF(overlay 重载原件带进来的),按模型重建。
+//  - parsed 且未编辑(origin!=='user' && !dirty)→ 原样回写解析时存下的原始 ExcelJS rule(raw),
+//    含 cfvo 阈值等我们不全建模的字段 → 未动的原规则零退化。
+//  - user 新建 / 编辑过(dirty)→ 按模型 buildExcelCfRule 重建。
+
+function colLetters(col: number): string {
+  let s = ''
+  let n = col
+  do { s = String.fromCharCode(65 + (n % 26)) + s; n = Math.floor(n / 26) - 1 } while (n >= 0)
+  return s
+}
+function rangeRef(r: MergeRange): string {
+  return `${colLetters(r.left)}${r.top + 1}:${colLetters(r.right)}${r.bottom + 1}`
+}
+function rangesToRef(ranges: MergeRange[]): string {
+  return (ranges || []).map(rangeRef).join(' ')
+}
+
+/** 我们的条件格式样式 → ExcelJS 条件格式 dxf 样式(font/fill);只写出现的字段。 */
+function cfStyleToExcel(style?: ConditionalRule['style']): Record<string, unknown> | undefined {
+  if (!style) return undefined
+  const out: Record<string, unknown> = {}
+  const f = style.font
+  if (f) {
+    const font: Record<string, unknown> = {}
+    if (f.bold) font.bold = true
+    if (f.italic) font.italic = true
+    if (f.underline) font.underline = true
+    if (f.strike) font.strike = true
+    const color = cssToArgb(f.color)
+    if (color) font.color = { argb: color }
+    if (Object.keys(font).length) out.font = font
+  }
+  if (style.fill && style.fill.type !== 'none') {
+    const fg = cssToArgb(style.fill.fgColor)
+    if (fg) out.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: fg } }
+  }
+  return Object.keys(out).length ? out : undefined
+}
+
+/** 模型规则 → ExcelJS addConditionalFormatting 的 rule(用户新建/编辑过的规则用)。无法构造返 null。 */
+function buildExcelCfRule(rule: ConditionalRule): Record<string, unknown> | null {
+  const priority = rule.priority || 1
+  const style = cfStyleToExcel(rule.style)
+  switch (rule.type) {
+    case 'cellIs':
+      return { type: 'cellIs', operator: rule.operator || 'greaterThan', formulae: rule.formulae || [], priority, style }
+    case 'expression':
+      return { type: 'expression', formulae: rule.formulae || [], priority, style }
+    case 'colorScale': {
+      const cs = rule.colorScale
+      if (!cs) return null
+      const cfvo = cs.mid ? [{ type: 'min' }, { type: 'percentile', value: 50 }, { type: 'max' }] : [{ type: 'min' }, { type: 'max' }]
+      const cols = (cs.mid ? [cs.min, cs.mid, cs.max] : [cs.min, cs.max]).map((c) => ({ argb: cssToArgb(c) || 'FF000000' }))
+      return { type: 'colorScale', cfvo, color: cols, priority }
+    }
+    case 'dataBar': {
+      const db = rule.dataBar
+      if (!db) return null
+      return { type: 'dataBar', cfvo: [{ type: 'min' }, { type: 'max' }], color: { argb: cssToArgb(db.color) || 'FF638EC6' }, priority }
+    }
+    case 'iconSet': {
+      const ic = rule.iconSet
+      if (!ic) return null
+      return { type: 'iconSet', iconSet: ic.name, reverse: !!ic.reverse, cfvo: [{ type: 'percent', value: 0 }, { type: 'percent', value: 33 }, { type: 'percent', value: 67 }], priority }
+    }
+    case 'top10': {
+      const t = rule.top10 || { rank: 10, percent: false, bottom: false }
+      return { type: 'top10', rank: t.rank, percent: t.percent, bottom: t.bottom, priority, style }
+    }
+    default:
+      return null
+  }
+}
+
+/** 把模型的条件格式写到 ExcelJS 工作表(rebuild + overlay 共用)。 */
+function writeConditionalFormatting(ws: any, sheet: SheetModel): void {
+  const rules = sheet.conditional
+  // overlay 重载原件后 ws 上已有原 CF;无论有没有规则都先清空,再按模型统一重建(含"用户删光"的情况)
+  if (Array.isArray(ws.conditionalFormattings)) ws.conditionalFormattings = []
+  if (!rules || !rules.length) return
+  for (const rule of rules) {
+    if (rule.type === 'unsupported') continue
+    const ref = rangesToRef(rule.ranges)
+    if (!ref) continue
+    const useRaw = rule.origin !== 'user' && !rule.dirty && rule.raw
+    const built = useRaw ? (rule.raw as Record<string, unknown>) : buildExcelCfRule(rule)
+    if (!built) continue
+    try {
+      ws.addConditionalFormatting({ ref, rules: [built] })
+    } catch {
+      /* 单条规则构造失败不致命,跳过 */
+    }
+  }
+}
+
 /** 模型 cell → ExcelJS value(按类型)。 */
 function cellValue(cell: CellModel): unknown {
   switch (cell.type) {
@@ -229,6 +326,8 @@ function writeSheet(ws: any, sheet: SheetModel, wb: any): void {
   if (sheet.freeze && (sheet.freeze.frozenRows || sheet.freeze.frozenCols)) {
     ws.views = [{ state: 'frozen', xSplit: sheet.freeze.frozenCols, ySplit: sheet.freeze.frozenRows }]
   }
+  // 条件格式(1.9.0:rebuild 也回写,从模型重建;parsed 未编辑的用 raw 原样回写)
+  writeConditionalFormatting(ws, sheet)
   // 图片(best-effort,单张失败跳过)
   const metrics = new GridMetrics(sheet, 1)
   for (const anchor of sheet.images) {
@@ -286,6 +385,9 @@ function applyModelOntoSheet(ws: any, sheet: SheetModel): void {
   if (sheet.freeze && (sheet.freeze.frozenRows || sheet.freeze.frozenCols)) {
     ws.views = [{ state: 'frozen', xSplit: sheet.freeze.frozenCols, ySplit: sheet.freeze.frozenRows }]
   }
+  // 条件格式(1.9.0:overlay 也按模型重建 —— 未编辑的 parsed 规则用 raw 原样回写,不退化;
+  // 用户新建/编辑/删除的反映进去)。注:清空 ws 原 CF 再重建,所以即便全删也对。
+  writeConditionalFormatting(ws, sheet)
 }
 
 /** WorkbookModel → .xlsx Blob(懒加载 exceljs)。overlay 模式重载原件叠加编辑,否则从模型重建。 */
