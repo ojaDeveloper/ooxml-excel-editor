@@ -219,6 +219,13 @@ export class CanvasRenderer {
   setSelection(sel: MergeRange | null): void {
     this.selection = sel
   }
+  /** 自动填充柄可见(= editable;1.10.0)。控制器创建后设置。 */
+  showFillHandle = false
+  /** 自动填充拖拽预览区(目标范围;拖拽中由控制器设)。 */
+  private fillPreview: MergeRange | null = null
+  setFillPreview(range: MergeRange | null): void {
+    this.fillPreview = range
+  }
 
   // ---------------- 查找 ----------------
   private findHits: { row: number; col: number }[] = []
@@ -569,6 +576,7 @@ export class CanvasRenderer {
     if (flags.selection) this.drawPivotToggles(view) // 折叠按钮只在实时视图画,导出件不画
     if (flags.selection && this.findHits.length) this.drawFind(view)
     if (flags.selection) this.drawSelection(view)
+    if (flags.selection) this.drawFillPreview(view)
   }
 
   /** 画各透视表的行分组折叠/展开按钮(贴在分组表头格最左)。 */
@@ -789,6 +797,59 @@ export class CanvasRenderer {
     ctx.strokeStyle = this.theme.selBorder
     ctx.lineWidth = 2
     ctx.strokeRect(Math.round(x) + 1, Math.round(y) + 1, Math.round(w) - 2, Math.round(h) - 2)
+    // 自动填充柄:选区右下角的小方块(editable 才画;1.10.0)
+    if (this.showFillHandle) {
+      const hr = this.fillHandleRect(view)
+      if (hr) {
+        ctx.fillStyle = this.theme.selBorder
+        ctx.strokeStyle = '#fff'
+        ctx.lineWidth = 1
+        ctx.fillRect(hr.x, hr.y, hr.w, hr.h)
+        ctx.strokeRect(hr.x + 0.5, hr.y + 0.5, hr.w - 1, hr.h - 1)
+      }
+    }
+    ctx.restore()
+  }
+
+  /** 自动填充柄的屏幕矩形(选区右下角的小方块);选区不可见/无选区返 null。 */
+  fillHandleRect(view: ViewState): { x: number; y: number; w: number; h: number } | null {
+    const sel = this.selection
+    if (!sel) return null
+    const br = this.screenRectOfCell(view, sel.bottom, sel.right)
+    const hw = this.metrics.rowHeaderWidth
+    const hh = this.metrics.colHeaderHeight
+    const cx = br.x + br.w
+    const cy = br.y + br.h
+    if (cx < hw || cy < hh || cx > view.width || cy > view.height) return null // 角不在可视区
+    const s = 7
+    return { x: Math.round(cx - s / 2 - 1), y: Math.round(cy - s / 2 - 1), w: s, h: s }
+  }
+  /** 点 (px,py) 是否落在填充柄上(命中区比绘制略大,好点中)。 */
+  fillHandleAt(view: ViewState, px: number, py: number): boolean {
+    if (!this.showFillHandle) return false
+    const hr = this.fillHandleRect(view)
+    if (!hr) return false
+    const pad = 3
+    return px >= hr.x - pad && px <= hr.x + hr.w + pad && py >= hr.y - pad && py <= hr.y + hr.h + pad
+  }
+
+  /** 拖拽预览:目标范围的虚线框(超出源选区的部分)。 */
+  private drawFillPreview(view: ViewState): void {
+    const pv = this.fillPreview
+    if (!pv) return
+    const ctx = this.ctx
+    const hw = this.metrics.rowHeaderWidth
+    const hh = this.metrics.colHeaderHeight
+    const tl = this.screenRectOfCell(view, pv.top, pv.left)
+    const br = this.screenRectOfCell(view, pv.bottom, pv.right)
+    ctx.save()
+    ctx.beginPath()
+    ctx.rect(hw, hh, view.width - hw, view.height - hh)
+    ctx.clip()
+    ctx.strokeStyle = this.theme.selBorder
+    ctx.lineWidth = 1
+    ctx.setLineDash([4, 3])
+    ctx.strokeRect(Math.round(tl.x) + 0.5, Math.round(tl.y) + 0.5, Math.round(br.x + br.w - tl.x) - 1, Math.round(br.y + br.h - tl.y) - 1)
     ctx.restore()
   }
 

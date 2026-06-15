@@ -47,7 +47,7 @@ src/demo-shared(三 demo 共享 CSS / 工具)→ demo-bar.css (绿色头) + demo
 
 ## 不可破坏的硬约束
 
-- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **373 单测 + 165 e2e(Vue 3 / React / Vue 2 三壳覆盖;Vue 2 e2e 跑独立 5302 dev server,见 `e2e/vue2-smoke.e2e.ts`)**。
+- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **386 单测 + 171 e2e(Vue 3 / React / Vue 2 三壳覆盖;Vue 2 e2e 跑独立 5302 dev server,见 `e2e/vue2-smoke.e2e.ts`)**。
 - **core 不依赖框架**:`src/core/**` 不得出现 `from 'vue'` / `'react'`(构建后 `dist/core.js` 也不得 import vue/react/hyperformula/exceljs —— 重依赖全动态懒加载)。
 - **三壳同构**:给 `ViewerController` 加能力后,Vue 3 壳(components/ExcelViewer.vue)、React 壳(react/ExcelViewer.tsx)、Vue 2 壳(vue2/ExcelViewer.ts)都要接上,各自 e2e 覆盖。**任何 UI 变更先 Vue 3 落地, 再 1:1 复刻到 Vue 2 + React**(详见第 7 中心原则)。
 - **默认只读、零回归**:`editable` 关闭时行为与历史完全一致;编辑能力(单元格/样式/列宽行高/图片/增删行列/公式重算/导出回写)是 **opt-in**,全建在框架无关 core 的命令栈 + 前后快照事件上(见 README「编辑」章节)。
@@ -68,7 +68,7 @@ npm run dev          # Vue 3 demo (port 5300, 默认)
 npm run dev:vue3     # Vue 3 demo (alias)
 npm run dev:react    # React demo (port 5301)
 npm run dev:vue2     # Vue 2 demo (port 5302, root=vue2-demo/)
-npm test             # 单元测试(node, 368 个)
+npm test             # 单元测试(node, 386 个)
 npm run test:e2e     # 真浏览器 e2e(Playwright;先 npx playwright install chromium)
 npm run typecheck    # vue-tsc --noEmit
 npm run build        # 构建库(dist/ 四入口 core.js+index.js+react.js+vue2.js + style.css/vue2.css + .d.ts;不打包 vue/react/exceljs/echarts/jspdf)
@@ -120,6 +120,7 @@ node scripts/gen-sample.mjs   # 重新生成 public/sample.xlsx
 - **透视表完整闭环 ✅(1.4.0)** **整个功能由 `pivotTable` prop 开启(三壳同名,默认 false 关闭 = 零回归;三 demo 已开启)**。① WPS 式创建入口:工具栏 `pivot-table`(开关关闭时不渲染)→ 选区 → 生成位置对话框(现有表单元格 / 新建表)→ 静态透视汇总表入命令栈;② 右侧「数据透视表」字段面板(core 框架无关 DOM,`viewer/pivot-dialog-host.ts`):搜索 + 按钮/拖拽进 筛选器/列/行/值 四区 + 筛选值下拉 + 汇总方式切换,每次变更重建结果;③ 编程 API `createPivotTable`/`createPivotTableFromSelection`/`openPivotTableDialog`,三壳 + 插件 viewer 暴露(开关关闭时返 false + 提示);④ **导出回注真实 OOXML pivot 零件**(`export/pivot-tables.ts`,同 cellimages 模式):pivotCacheDefinition/Records + pivotTableDefinition + workbook pivotCaches + 全套 rels + Content_Types,`refreshOnLoad=1` 让 Excel/WPS 打开即识别真透视表;筛选语义对齐 WPS("=值"写 pageField@item 还原选中、"非空"=多选+隐藏空白项);**overlay 导出从原件 zip 原样搬运原有透视表零件**(`restoreOriginalPivotPartsIntoZip`,按表名重挂 worksheet 关系,编号/cacheId 与新建的自动避让);⑤ pivot-parser 支持标准 rels 隐式关联(真 Excel 文件 + 导出件往返);⑥ **活刷新**(源数据编辑/撤销后透视表按 source 自动重算,唯一入口 recomputePivot,派生态不入命令栈)+ **行分组折叠/展开**(≥2 行字段产出大纲,canvas [−]/[+] 按钮 + pivotToggleAt 命中)+ **多选筛选**(PivotFilterMode include,面板勾选 + 导出 multipleItemSelectionAllowed/item@h)。
 - **数据验证完整化 + Vue 2 e2e 回归网 ✅(1.8.0)** ① 数据验证从"只读取/list 选值"做到**编辑拦截**:解析全类型规则(list/whole/decimal/date/time/textLength/custom + operator + 出错/输入提示)进 `SheetModel.dataValidationRules`,框架无关引擎 `edit/data-validation.ts` 在提交时校验(stop 硬拒+模态、warning/info 软提示、空值/公式放行),框架无关 `validation-prompt-host` 出错模态/toast + 输入提示气泡(三壳共用);顺手修内置编辑器拒绝后 `done` 锁卡死的 UX bug(`commit()` 返成功与否)。② Vue 2 壳补 e2e(此前零覆盖):`playwright.config.ts` 加 5302 第二 dev server,`vue2-demo` 挂 `window.__excelViewerVue2`,`e2e/vue2-smoke.e2e.ts` + data-validation 加 Vue 2 行。
 - **条件格式可编辑 ✅(1.9.0)** 整个功能由 `conditionalFormat` prop 开启(三壳同名,默认 false = 只读渲染、零回归;三 demo 已开启)。① 模型 `ConditionalRule` 加 id/origin/dirty/raw + top10/iconSet.reverse,`parseConditional` 派 id+存 raw;② 命令 `set-conditional`(整张数组替换,整体单次撤销);③ 编程 API getConditionalRules/add/update/remove/setConditionalRules/openConditionalFormatDialog(控制器+插件+三壳);④ 框架无关管理对话框 `viewer/conditional-format-dialog-host.ts`(三壳共用,6 类编辑器:cellIs/expression/colorScale/dataBar/iconSet/top10)+ 工具栏入口 `conditional-format`;⑤ 导出回写 `xlsx-writer` 的 writeConditionalFormatting:**未编辑的 parsed 规则用 raw 原样回写(零退化)**,用户新建/编辑的按模型 buildExcelCfRule 构造;rebuild + overlay 都回写(rebuild 此前丢弃)。
-- 仍未做:真正 workspace 多包拆分;Vue 2 子入口体积优化 (现 423 KB, 共享 chunk 需自定义 rollup);rebuild 导出模式不搬运原文件只读透视表(仅 overlay);大文件编辑性能
+- **自动填充柄 ✅(1.10.0)** Excel/WPS 拖拽填充。纯框架无关 core canvas 交互(`edit/autofill.ts` 序列引擎 + `canvas-renderer` 画柄/命中/虚线预览 + 控制器 `fill` 拖拽模式 `setCellsBatch` 单次撤销),三壳零改动自动获得;需 `editable`。序列:数值等差/日期/前缀+末尾整数文本/星期月份循环/兜底复制 + Ctrl 翻转复制↔序列。v1 填值不复制格式。
+- 仍未做(用户已挑但暂缓):大文件编辑性能(需用户给真实大文件 profiling)。下一批候选:查找替换补全 / 数字格式编辑器 / 批注编辑(用户已选,合并成 1.11.0)。其它:真正 workspace 多包拆分;Vue 2 子入口体积优化 (现 423 KB);rebuild 导出不搬运原文件只读透视表(仅 overlay)。
 
 每阶段测试 green + 提交,不破坏现有三壳、不破坏「默认只读零回归」、**不破坏 UI 1:1 复刻**。

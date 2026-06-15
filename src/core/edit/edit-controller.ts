@@ -252,6 +252,20 @@ export class EditController {
     return !!inv
   }
 
+  /** 批量设一组散列格(自动填充用,1.10.0):跳过只读格,整体单次撤销。 */
+  setCellsBatch(cells: { row: number; col: number; value: CellValue }[]): boolean {
+    if (!this.host.isEditingEnabled()) return false
+    const editable = cells.filter((c) => this.host.isEditable(c.row, c.col))
+    if (!editable.length) return false
+    this.ensureBaseline()
+    const inv = this.exec({ kind: 'set-cells', cells: editable }, 'api')
+    if (inv) {
+      this.pushUndo(inv)
+      this.markDirty()
+    }
+    return !!inv
+  }
+
   /** 替换整张表的条件格式规则集(1.9.0,整体单次撤销)。规则对象不可变 → 直接换数组。 */
   setConditionalRules(rules: ConditionalRule[]): boolean {
     if (!this.host.isEditingEnabled()) return false

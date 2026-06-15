@@ -22,6 +22,8 @@ import { cloneWorkbook } from '../model/clone'
 import { EditController, type EditControllerHost, type EditEventName } from '../edit/edit-controller'
 import { defaultFormulaEngineFactory } from '../formula/hyperformula-adapter'
 import type { CellValue, SheetToJSONOptions } from '../model/data-access'
+import { getCellValue } from '../model/data-access'
+import { computeFillSeries } from '../edit/autofill'
 import type { CellSnapshot } from '../model/snapshot'
 import { inspectCell, type CellInspection } from '../model/inspect'
 // 模板样式 overlay 在壳层做(controller 不直接持有),保留 import 给类型链或后续重新接入用
@@ -200,7 +202,11 @@ export class ViewerController {
   private selMode: 'range' | 'rows' | 'cols' = 'range'
 
   // ---- 拖拽态 ----
-  private dragMode: 'none' | 'cell' | 'row' | 'col' | 'resize-col' | 'resize-row' | 'image' = 'none'
+  private dragMode: 'none' | 'cell' | 'row' | 'col' | 'resize-col' | 'resize-row' | 'image' | 'fill' = 'none'
+  /** 自动填充(1.10.0):拖拽起点的源选区 + 当前目标范围 + 方向 */
+  private fillBase: MergeRange | null = null
+  private fillRange: MergeRange | null = null
+  private fillDir: 'down' | 'up' | 'right' | 'left' = 'down'
   private resizeTarget = -1 // 正在拖拽改宽高的列/行索引
   // 图片拖拽态(E6)
   private imageDragIdx = -1
@@ -316,6 +322,7 @@ export class ViewerController {
       onNeedsRedraw: () => this.scheduleRender(), // WPS 内嵌图异步解码完触发重绘
       isEditable: (r, c) => this.isCellEditable(r, c), // Phase C 2026-06-08: 让渲染层感知 editable
     })
+    this.renderer.showFillHandle = !!this.editCfg.editable // 自动填充柄(1.10.0):editable 才画
     this.hooks.onRenderer(this.renderer)
     this.view.zoom = zoom
     this.view.scrollX = 0
@@ -847,6 +854,15 @@ export class ViewerController {
         return
       }
     }
+    // 自动填充柄(1.10.0):命中选区右下角小方块 → 进入 fill 拖拽(优先于选择/resize)
+    if (r && p && this.editCfg.editable && this.selActive && r.fillHandleAt(this.view, p.x, p.y)) {
+      this.dragMode = 'fill'
+      this.fillBase = this.getSelection()
+      this.fillRange = this.fillBase
+      this.dragMoved = false
+      this.dragStartXY = p
+      return
+    }
     // 表头边界拖拽改宽高(优先于选择)
     if (r && p) {
       if (p.y < r.metrics.colHeaderHeight) {
@@ -926,6 +942,10 @@ export class ViewerController {
         this.setRowHeightPx(this.resizeTarget, this.resizeStartSize + (p.y - this.resizeStartPos))
         return
       }
+      if (this.dragMode === 'fill') {
+        this.updateFillPreview(p)
+        return
+      }
       if (this.dragMode === 'cell') {
         const cell = r.cellAtScreen(this.view, p.x, p.y)
         if (cell) {
@@ -986,8 +1006,83 @@ export class ViewerController {
       this.imageDragBefore = null
       this.imageDragStartRect = null
       this.imageDragIdx = -1
+    } else if (this.dragMode === 'fill') {
+      this.applyFill(e.ctrlKey || e.metaKey) // Ctrl/⌘ 翻转 复制↔序列(对齐 Excel)
+      this.renderer?.setFillPreview(null)
+      this.fillBase = null
+      this.fillRange = null
+      this.render()
     }
     this.dragMode = 'none'
+  }
+
+  // ===== 自动填充(1.10.0)=====
+  /** 拖拽填充柄时:按鼠标位置算目标范围(主轴 = 偏移更大的方向),设预览。 */
+  private updateFillPreview(p: { x: number; y: number }): void {
+    const r = this.renderer
+    const base = this.fillBase
+    if (!r || !base) return
+    const cell = r.cellAtScreen(this.view, p.x, p.y)
+    if (!cell) return
+    const down = cell.row - base.bottom
+    const up = base.top - cell.row
+    const right = cell.col - base.right
+    const left = base.left - cell.col
+    const vExt = Math.max(down, up, 0)
+    const hExt = Math.max(right, left, 0)
+    if (vExt === 0 && hExt === 0) { this.fillRange = base; this.fillDir = 'down'; r.setFillPreview(null); this.scheduleRender(); return }
+    if (vExt >= hExt) {
+      if (down >= up) { this.fillDir = 'down'; this.fillRange = { top: base.top, left: base.left, bottom: cell.row, right: base.right } }
+      else { this.fillDir = 'up'; this.fillRange = { top: cell.row, left: base.left, bottom: base.bottom, right: base.right } }
+    } else {
+      if (right >= left) { this.fillDir = 'right'; this.fillRange = { top: base.top, left: base.left, bottom: base.bottom, right: cell.col } }
+      else { this.fillDir = 'left'; this.fillRange = { top: base.top, left: cell.col, bottom: base.bottom, right: base.right } }
+    }
+    r.setFillPreview(this.fillRange)
+    this.scheduleRender()
+  }
+
+  /** 松手:用源选区接续序列填进新增格(整体单次撤销),并把选区扩到合并范围。ctrl 翻转复制↔序列。 */
+  private applyFill(ctrl = false): void {
+    const base = this.fillBase
+    const fill = this.fillRange
+    const sheet = this.sheet
+    if (!base || !fill || !sheet) return
+    const read = (row: number, col: number) => getCellValue(sheet, row, col)
+    const vertical = this.fillDir === 'down' || this.fillDir === 'up'
+    const down = this.fillDir === 'down', right = this.fillDir === 'right'
+    const cells: { row: number; col: number; value: CellValue }[] = []
+    if (vertical) {
+      const count = down ? fill.bottom - base.bottom : base.top - fill.top
+      if (count <= 0) return
+      for (let col = base.left; col <= base.right; col++) {
+        const srcRows: number[] = []
+        for (let row = base.top; row <= base.bottom; row++) srcRows.push(row)
+        const source = (down ? srcRows : srcRows.slice().reverse()).map((row) => read(row, col))
+        const series = computeFillSeries(source, count, ctrl)
+        for (let i = 0; i < count; i++) {
+          const row = down ? base.bottom + 1 + i : base.top - 1 - i
+          cells.push({ row, col, value: series[i] })
+        }
+      }
+    } else {
+      const count = right ? fill.right - base.right : base.left - fill.left
+      if (count <= 0) return
+      for (let row = base.top; row <= base.bottom; row++) {
+        const srcCols: number[] = []
+        for (let col = base.left; col <= base.right; col++) srcCols.push(col)
+        const source = (right ? srcCols : srcCols.slice().reverse()).map((col) => read(row, col))
+        const series = computeFillSeries(source, count, ctrl)
+        for (let i = 0; i < count; i++) {
+          const col = right ? base.right + 1 + i : base.left - 1 - i
+          cells.push({ row, col, value: series[i] })
+        }
+      }
+    }
+    if (!cells.length) return
+    if (this.edit.setCellsBatch(cells)) {
+      this.setSelectionRange(fill) // 选区扩到填充后的整片
+    }
   }
 
   /** 命中最上层浮动图(editable;p 为 render-area 坐标含表头);返回 index 或 -1。 */
@@ -1231,6 +1326,12 @@ export class ViewerController {
     const sc = this.els.scroller
     const p = this.localXY(e)
     if (!r || !p) {
+      this.hooks.onTooltip(null)
+      return
+    }
+    // 自动填充柄 → 十字光标(1.10.0)
+    if (this.editCfg.editable && this.selActive && r.fillHandleAt(this.view, p.x, p.y)) {
+      sc.style.cursor = 'crosshair'
       this.hooks.onTooltip(null)
       return
     }
@@ -2450,6 +2551,7 @@ export class ViewerController {
     this.editCfg = cfg ?? {}
     this.edit.setPasteBehavior(this.editCfg.pasteBehavior ?? null) // 粘贴行为默认(缺项回落默认)
     this.edit.refreshEngine() // recalc/formulaEngine 可能变了 → 重置引擎并按需点火
+    if (this.renderer) { this.renderer.showFillHandle = !!this.editCfg.editable; this.render() } // 填充柄随 editable 实时显隐
   }
 
   /** 该格当前是否可编辑(综合 editable + editableTargets 白名单 + readOnlyRanges + cellReadOnly) */
