@@ -252,6 +252,18 @@ export class EditController {
     return !!inv
   }
 
+  /** 设/清单元格批注(1.11.0,单次撤销)。 */
+  setCellComment(row: number, col: number, comment: string): boolean {
+    if (!this.host.isEditable(row, col)) return false
+    this.ensureBaseline()
+    const inv = this.exec({ kind: 'set-comment', row, col, comment }, 'api')
+    if (inv) {
+      this.pushUndo(inv)
+      this.markDirty()
+    }
+    return !!inv
+  }
+
   /** 批量设一组散列格(自动填充用,1.10.0):跳过只读格,整体单次撤销。 */
   setCellsBatch(cells: { row: number; col: number; value: CellValue }[]): boolean {
     if (!this.host.isEditingEnabled()) return false

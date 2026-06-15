@@ -394,10 +394,26 @@
   padding: 4px 8px;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
   display: flex;
-  align-items: center;
+  flex-direction: column;
   gap: 4px;
   font-size: 12px;
 }
+.ooxml-excel-viewer .ov-find-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.ooxml-excel-viewer .ov-rep {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid #d0d3d6;
+  background: #f7f8fa;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #444;
+}
+.ooxml-excel-viewer .ov-rep:disabled { color: #bbb; cursor: default; }
 .ooxml-excel-viewer .ov-findbar input {
   border: none;
   outline: none;

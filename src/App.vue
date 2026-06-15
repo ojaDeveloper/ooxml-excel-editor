@@ -523,7 +523,7 @@ function badgeStyle(rectOf: (r: number, c: number) => Rect, _tick: number) {
         :editable-targets="editableTargetsApplied"
         :read-only-cell-style="highlightReadOnly"
         :editor="demoSelectEditor"
-        :toolbar="['find', 'filter', 'sort', 'clear-filter', 'separator', 'copy', 'pivot-table', 'conditional-format', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export']"
+        :toolbar="['find', 'filter', 'sort', 'clear-filter', 'separator', 'copy', 'pivot-table', 'conditional-format', 'number-format', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export']"
         @selection-change="(s) => { lastEvent = `选区 ${s.range.top + 1},${s.range.left + 1} → ${s.range.bottom + 1},${s.range.right + 1}`; selTick++ }"
         @cell-change="onCellChange"
         @dim-change="onDimChange"

@@ -45,6 +45,24 @@ export function clearCell(sheet: SheetModel, row: number, col: number): void {
   sheet.cells.delete(cellKey(row, col))
 }
 
+/** 设/清单元格批注(1.11.0):空批注清除;格不存在且有批注 → 建空格挂批注。 */
+export function setCellComment(sheet: SheetModel, row: number, col: number, comment: string): void {
+  const key = cellKey(row, col)
+  const cell = sheet.cells.get(key)
+  const text = comment.trim()
+  if (cell) {
+    if (text) cell.comment = text
+    else {
+      delete cell.comment
+      // 空格(无值/无批注/无可见样式)清掉,避免膨胀;有值/样式的格保留
+      if (cell.type === 'empty' && !cell.comment) sheet.cells.delete(key)
+    }
+  } else if (text) {
+    sheet.cells.set(key, { row, col, type: 'empty', raw: null, comment: text, styleId: 0 })
+    growDimension(sheet, row, col)
+  }
+}
+
 /** 区域批量设值(2D,左上对齐 range.top/left)。 */
 export function setRangeValues(sheet: SheetModel, range: MergeRange, values: CellValue[][]): void {
   for (let r = 0; r < values.length; r++) {

@@ -51,7 +51,7 @@ test.describe('操作工具栏(可配置/可插件/响应式)', () => {
   test('响应式溢出: 窄屏出现「更多」并能展开,宽屏收起', async ({ page }) => {
     await loadSample(page)
     const bar = page.locator('.action-toolbar')
-    await page.setViewportSize({ width: 1280, height: 800 })
+    await page.setViewportSize({ width: 1680, height: 800 })
     await expect(bar.locator('.more')).toHaveCount(0)
 
     await page.setViewportSize({ width: 400, height: 800 })
@@ -59,7 +59,7 @@ test.describe('操作工具栏(可配置/可插件/响应式)', () => {
     await bar.locator('.more .tool').click()
     await expect(page.locator('.tb-menu')).toBeVisible()
 
-    await page.setViewportSize({ width: 1280, height: 800 })
+    await page.setViewportSize({ width: 1680, height: 800 })
     await expect(bar.locator('.more')).toHaveCount(0)
   })
 })

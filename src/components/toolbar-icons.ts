@@ -15,6 +15,8 @@ export const TOOLBAR_ICONS: Record<string, string> = {
   'pivot-table': '<rect x="3" y="4" width="13" height="13" rx="1.5"/><line x1="3" y1="8" x2="16" y2="8"/><line x1="7" y1="4" x2="7" y2="17"/><path d="M14 14h7"/><path d="M18 11l3 3-3 3"/>',
   // 条件格式: 渐变色块 + 小滴
   'conditional-format': '<rect x="3" y="4" width="13" height="13" rx="1.5"/><path d="M3 9h13"/><path d="M3 13h13"/><circle cx="18.5" cy="15" r="3"/><path d="M18.5 9.5c1.2 1.4 2 2.7 2 3.8a2 2 0 0 1-4 0c0-1.1.8-2.4 2-3.8z"/>',
+  // 数字格式: 百分号 + 小数点(123)
+  'number-format': '<text x="2" y="11" font-size="9" font-family="sans-serif" fill="currentColor" stroke="none">123</text><circle cx="5" cy="17" r="1" fill="currentColor" stroke="none"/><path d="M21 6l-7 12"/><circle cx="14.5" cy="8" r="2"/><circle cx="20.5" cy="16" r="2"/>',
   // 下载(导出)
   export: '<line x1="12" y1="3" x2="12" y2="15"/><path d="M8 11l4 4 4-4"/><path d="M4 19h16"/>',
   // 放大镜带 +

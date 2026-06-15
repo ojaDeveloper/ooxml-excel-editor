@@ -129,6 +129,16 @@ export interface ViewerApi {
   setConditionalRules(rules: ConditionalRule[]): boolean
   /** 打开条件格式管理对话框(框架无关 DOM,三壳共用)。 */
   openConditionalFormatDialog(): boolean
+  /** 给当前选区设数字格式代码(numFmt)。需 editable。1.11.0 */
+  setSelectionNumberFormat(code: string): boolean
+  /** 打开数字格式编辑对话框(框架无关 DOM,三壳共用)。需 editable + 选区。1.11.0 */
+  openNumberFormatDialog(): boolean
+  /** 读某格批注(无则 '')。1.11.0 */
+  getCellComment(row: number, col: number): string
+  /** 设/清某格批注(空串 = 删除)。需 editable。1.11.0 */
+  setCellComment(row: number, col: number, comment: string): boolean
+  /** 打开批注编辑对话框(默认活动格)。需 editable。1.11.0 */
+  openCommentEditor(row?: number, col?: number): boolean
   /** 导出当前/指定表为图片 Blob(默认 png) */
   exportImage(opts?: ImageExportOptions): Promise<Blob>
   /** 导出为图片并触发下载 */

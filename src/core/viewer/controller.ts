@@ -36,6 +36,8 @@ import { ReadOnlyPromptHost } from './readonly-prompt-host'
 import { ValidationPromptHost } from './validation-prompt-host'
 import { findValidationRuleAt, validateCellValue } from '../edit/data-validation'
 import { ConditionalFormatDialogHost } from './conditional-format-dialog-host'
+import { NumberFormatDialogHost } from './number-format-dialog-host'
+import { CommentDialogHost } from './comment-dialog-host'
 import { parseClipboardHtml } from '../edit/clipboard-html'
 import { serializeSnapshot, encodeSnapshot, parseSnapshotHtml, withoutImages, bytesToB64, CLIP_IMAGE_BUDGET_BYTES } from '../edit/clipboard-snapshot'
 import { type PasteBehavior, DEFAULT_PASTE_BEHAVIOR, PASTE_PRESET_VALUES_ONLY } from '../edit/paste-behavior'
@@ -67,6 +69,8 @@ export interface FindState {
   wholeCell: boolean
   count: number
   index: number
+  /** 替换文本(1.11.0;替换功能需 editable) */
+  replace: string
 }
 
 /** 自动筛选下拉浮层(列去重值 + 已选 + 屏幕位置) */
@@ -179,6 +183,8 @@ export class ViewerController {
   private readonlyPrompt = new ReadOnlyPromptHost()
   private validationPrompt = new ValidationPromptHost()
   private cfDialog = new ConditionalFormatDialogHost()
+  private numFmtDialog = new NumberFormatDialogHost()
+  private commentDialog = new CommentDialogHost()
   /** 当前输入提示气泡的签名(格+位置),变了才重建,避免每帧 render 抖动 */
   private bubbleSig = ''
   /** 用户新建条件格式规则的自增序号(派 id `cf-u<n>`,只增不减,session 内唯一) */
@@ -222,6 +228,7 @@ export class ViewerController {
 
   // ---- 查找态 ----
   private findQuery = ''
+  private findReplace = ''
   private findMatchCase = false
   private findWholeCell = false
   private findHits: Cell[] = []
@@ -570,6 +577,8 @@ export class ViewerController {
     this.readonlyPrompt.dispose()
     this.validationPrompt.dispose()
     this.cfDialog.dispose()
+    this.numFmtDialog.dispose()
+    this.commentDialog.dispose()
     this.edit.disposeEngine()
   }
 
@@ -1237,6 +1246,13 @@ export class ViewerController {
       { separator: true },
       { label: '清除内容', disabled: !anyEditable, action: () => this.clearRange(range) },
     ]
+    // 批注(单格;1.11.0)
+    if (single) {
+      const hasComment = !!this.getCellComment(range.top, range.left)
+      items.push({ separator: true })
+      items.push({ label: hasComment ? '编辑批注' : '插入批注', disabled: !anyEditable, action: () => this.openCommentEditor(range.top, range.left) })
+      if (hasComment) items.push({ label: '删除批注', action: () => this.setCellComment(range.top, range.left, '') })
+    }
     // 选区批量(多格)— 浮动图批量嵌入 / 嵌入图批量浮动化
     if (!single) {
       const imgs = ctx.sheet.images ?? []
@@ -1779,6 +1795,7 @@ export class ViewerController {
       wholeCell: this.findWholeCell,
       count: this.findHits.length,
       index: this.findIndex,
+      replace: this.findReplace,
     }
   }
 
@@ -1841,6 +1858,48 @@ export class ViewerController {
     this.renderer?.setFind([], -1)
     this.hooks.onFindChange()
     this.render()
+  }
+
+  // ====================== 替换(1.11.0,需 editable)======================
+  setFindReplace(text: string): void {
+    this.findReplace = text
+  }
+  /** 按当前查找选项把字符串里的命中换掉;无命中返 null。 */
+  private replaceInString(s: string): string | null {
+    if (this.findWholeCell) {
+      const eq = this.findMatchCase ? s === this.findQuery : s.toLowerCase() === this.findQuery.toLowerCase()
+      return eq ? this.findReplace : null
+    }
+    const re = new RegExp(escapeRegExp(this.findQuery), this.findMatchCase ? 'g' : 'gi')
+    return re.test(s) ? s.replace(re, this.findReplace) : null
+  }
+  /** 替换当前命中格(替换后重算命中并定位下一个);返回是否替换了。 */
+  replaceCurrent(): boolean {
+    if (!this.editCfg.editable || !this.findQuery) return false
+    const hit = this.findHits[this.findIndex]
+    if (!hit) return false
+    if (!this.isCellEditable(hit.row, hit.col)) { this.findNext(); return false }
+    const next = this.replaceInString(this.getCellEditString(hit.row, hit.col))
+    if (next == null) { this.findNext(); return false }
+    this.editCell(hit.row, hit.col, next)
+    this.recomputeFind() // 该格替换后可能不再命中 → 重算
+    return true
+  }
+  /** 全部替换;返回替换的格数(整体单次撤销)。 */
+  replaceAll(): number {
+    const r = this.renderer
+    if (!this.editCfg.editable || !this.findQuery || !r) return 0
+    const hits = r.searchCells(this.findQuery, { matchCase: this.findMatchCase, wholeCell: this.findWholeCell })
+    const cells: { row: number; col: number; value: CellValue }[] = []
+    for (const h of hits) {
+      if (!this.isCellEditable(h.row, h.col)) continue
+      const next = this.replaceInString(this.getCellEditString(h.row, h.col))
+      if (next != null) cells.push({ row: h.row, col: h.col, value: next })
+    }
+    if (!cells.length) return 0
+    this.edit.setCellsBatch(cells)
+    this.recomputeFind()
+    return cells.length
   }
 
   // ====================== 自动筛选 ======================
@@ -2615,6 +2674,51 @@ export class ViewerController {
     if (!sel) return false
     return this.setStyle(sel, { font: { color } })
   }
+  /** 给当前选区设数字格式代码(numFmt);editable 时入命令栈。1.11.0 */
+  setSelectionNumberFormat(code: string): boolean {
+    const sel = this.getSelection()
+    if (!sel) return false
+    return this.setStyle(sel, { numFmt: code })
+  }
+  /** 打开数字格式编辑对话框(框架无关 DOM,三壳共用)。需 editable + 选区。1.11.0 */
+  openNumberFormatDialog(): boolean {
+    const sel = this.getSelection()
+    const a = this.selActive
+    if (!this.editCfg.editable || !sel || !a || !this.sheet) return false
+    const snap = this.edit.getCellSnapshot(a.row, a.col)
+    this.numFmtDialog.show({
+      sampleValue: getCellValue(this.sheet, a.row, a.col),
+      currentCode: snap?.style?.numFmt ?? 'General',
+      date1904: !!this.workbook?.date1904,
+      onApply: (code) => { this.setSelectionNumberFormat(code) },
+    })
+    return true
+  }
+  // ===== 批注编辑(1.11.0,需 editable)=====
+  /** 读某格批注(无则 ''). */
+  getCellComment(row: number, col: number): string {
+    return this.sheet?.cells.get(cellKey(row, col))?.comment ?? ''
+  }
+  /** 设/清某格批注(空串 = 删除);单次撤销。 */
+  setCellComment(row: number, col: number, comment: string): boolean {
+    if (!this.editCfg.editable) return false
+    const ok = this.edit.setCellComment(row, col, comment)
+    if (ok) this.render()
+    return ok
+  }
+  /** 打开批注编辑对话框(默认活动格);需 editable。 */
+  openCommentEditor(row?: number, col?: number): boolean {
+    const a = this.selActive
+    const r = row ?? a?.row
+    const c = col ?? a?.col
+    if (!this.editCfg.editable || r == null || c == null || !this.isCellEditable(r, c)) return false
+    this.commentDialog.show({
+      cellRef: `${colLabel(c)}${r + 1}`,
+      current: this.getCellComment(r, c),
+      onApply: (text) => { this.setCellComment(r, c, text) },
+    })
+    return true
+  }
 
   // ---- 自动换行(WPS 风格 toggle) ----
   /** 当前选区里 wrapText 的整体态:'all' 全开 / 'none' 全关 / 'mixed' 混合。空选区→'none'。 */
@@ -3105,6 +3209,10 @@ function defaultPivotStyle(): CellStyle {
 
 function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 /** 剪贴板文本 → 2D 网格(行用换行、列用制表符;去掉末尾换行)。空文本 → []。 */

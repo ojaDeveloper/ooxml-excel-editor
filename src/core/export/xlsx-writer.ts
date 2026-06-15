@@ -307,12 +307,13 @@ function writeSheet(ws: any, sheet: SheetModel, wb: any): void {
     row.height = info.height / PX_PER_POINT
     if (info.hidden) row.hidden = true
   }
-  // 单元格:值 + 样式(空格也套样式,E5 空格上色保真)
+  // 单元格:值 + 样式(空格也套样式,E5 空格上色保真)+ 批注(1.11.0)
   for (const cell of sheet.cells.values()) {
     const ec = ws.getCell(cell.row + 1, cell.col + 1)
     if (cell.type !== 'empty') ec.value = cellValue(cell)
     const st = sheet.styles[cell.styleId]
     if (st) applyStyle(ec, st)
+    if (cell.comment) ec.note = cell.comment
   }
   // 合并(1-based;重叠/越界吞掉不致命)
   for (const m of sheet.merges) {
@@ -350,12 +351,13 @@ function applyModelOntoSheet(ws: any, sheet: SheetModel): void {
       if (!live.has(cellKey(rNum - 1, cNum - 1))) cell.value = null
     })
   })
-  // 套模型格(值 + 样式)
+  // 套模型格(值 + 样式 + 批注)
   for (const cell of sheet.cells.values()) {
     const ec = ws.getCell(cell.row + 1, cell.col + 1)
     ec.value = cell.type !== 'empty' ? cellValue(cell) : null
     const st = sheet.styles[cell.styleId]
     if (st) applyStyle(ec, st)
+    if (cell.comment) ec.note = cell.comment
   }
   // 合并:先拆原有,再按模型合
   for (const m of [...(ws.model?.merges ?? [])]) {

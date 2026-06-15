@@ -558,7 +558,7 @@ export default defineComponent({
 
     // ---- 查找 / 筛选 ----
     const findOpen = ref(false)
-    const findState = computed<FindState>(() => { void findVersion.value; return controllerRef.value?.getFindState() ?? { query: '', matchCase: false, wholeCell: false, count: 0, index: -1 } })
+    const findState = computed<FindState>(() => { void findVersion.value; return controllerRef.value?.getFindState() ?? { query: '', matchCase: false, wholeCell: false, count: 0, index: -1, replace: '' } })
     function openFind() { findOpen.value = true }
     function closeFind() { findOpen.value = false; controllerRef.value?.clearFind(); scrollerEl?.focus() }
     function toggleAutoFilter() { controllerRef.value?.toggleAutoFilter() }
@@ -667,6 +667,11 @@ export default defineComponent({
       removeConditionalRule: (ruleId: string) => controllerRef.value?.removeConditionalRule(ruleId) ?? false,
       setConditionalRules: (rules: any) => controllerRef.value?.setConditionalRules(rules) ?? false,
       openConditionalFormatDialog: () => controllerRef.value?.openConditionalFormatDialog() ?? false,
+      setSelectionNumberFormat: (code: string) => controllerRef.value?.setSelectionNumberFormat(code) ?? false,
+      openNumberFormatDialog: () => controllerRef.value?.openNumberFormatDialog() ?? false,
+      getCellComment: (row: number, col: number) => controllerRef.value?.getCellComment(row, col) ?? '',
+      setCellComment: (row: number, col: number, comment: string) => controllerRef.value?.setCellComment(row, col, comment) ?? false,
+      openCommentEditor: (row?: number, col?: number) => controllerRef.value?.openCommentEditor(row, col) ?? false,
       editCell: (row: number, col: number, value: any) => controllerRef.value?.editCell(row, col, value) ?? false,
       editRange: (range: MergeRange, values: any[][]) => controllerRef.value?.editRange(range, values) ?? false,
       clearRange: (range: MergeRange) => controllerRef.value?.clearRange(range) ?? false,
@@ -807,6 +812,8 @@ export default defineComponent({
           return props.pivotTable ? bi({ id, iconSvg: I('pivot-table'), label: '透视表', title: '选择字段并基于当前选区创建静态透视汇总表', disabled: !selection.value || !props.editable, onClick: () => controller?.openPivotTableDialog() }) : null
         case 'conditional-format': // 功能未开启(默认):不渲染入口
           return props.conditionalFormat ? bi({ id, iconSvg: I('conditional-format'), label: '条件格式', title: '管理条件格式规则(新建/编辑/删除;新建套到当前选区)', disabled: !props.editable, onClick: () => controller?.openConditionalFormatDialog() }) : null
+        case 'number-format':
+          return bi({ id, iconSvg: I('number-format'), label: '数字格式', title: '设置单元格数字格式(数值/货币/百分比/日期/自定义)', disabled: !selection.value || !props.editable, onClick: () => controller?.openNumberFormatDialog() })
         case 'wrap-text': {
           const wrapState = controller?.getSelectionWrapState() ?? 'none'
           return bi({ id, iconSvg: I('wrap-text'), label: '自动换行', title: '自动换行(选区,WPS 风格 toggle)', active: wrapState === 'all', disabled: !selection.value || !props.editable, onClick: () => void controller?.toggleWrapTextOnSelection() })
@@ -1033,8 +1040,9 @@ export default defineComponent({
       if (!workbook.value || !findOpen.value) return null
       const st = findState.value
       const controller = controllerRef.value
-      return h('div', { key: 'findbar', class: 'ov-findbar' }, [
+      const findRow = h('div', { key: 'find-row', class: 'ov-find-row' }, [
         h('input', {
+          key: 'q',
           attrs: { placeholder: '查找…', autofocus: true },
           domProps: { value: st.query },
           on: {
@@ -1045,11 +1053,28 @@ export default defineComponent({
             },
           },
         }),
-        h('span', { class: 'count' }, st.count ? `${st.index + 1}/${st.count}` : '无结果'),
-        h('button', { on: { click: () => controller?.findPrev() } }, '↑'),
-        h('button', { on: { click: () => controller?.findNext() } }, '↓'),
-        h('button', { on: { click: closeFind } }, '✕'),
+        h('span', { key: 'c', class: 'count' }, st.count ? `${st.index + 1}/${st.count}` : '无结果'),
+        h('button', { key: 'p', on: { click: () => controller?.findPrev() } }, '↑'),
+        h('button', { key: 'n', on: { click: () => controller?.findNext() } }, '↓'),
+        h('button', { key: 'x', on: { click: closeFind } }, '✕'),
       ])
+      const rows: VNode[] = [findRow]
+      if (props.editable) {
+        rows.push(h('div', { key: 'rep-row', class: 'ov-find-row' }, [
+          h('input', {
+            key: 'r',
+            attrs: { placeholder: '替换为…' },
+            domProps: { value: st.replace },
+            on: {
+              input: (e: Event) => controller?.setFindReplace((e.target as HTMLInputElement).value),
+              keydown: (e: KeyboardEvent) => { if (e.key === 'Enter') controller?.replaceCurrent(); else if (e.key === 'Escape') closeFind() },
+            },
+          }),
+          h('button', { key: 'r1', class: 'ov-rep', attrs: { disabled: !st.count }, on: { click: () => controller?.replaceCurrent() } }, '替换'),
+          h('button', { key: 'ra', class: 'ov-rep', attrs: { disabled: !st.count }, on: { click: () => controller?.replaceAll() } }, '全部替换'),
+        ]))
+      }
+      return h('div', { key: 'findbar', class: 'ov-findbar' }, rows)
     }
 
     function renderStatusBar(): VNode | null {

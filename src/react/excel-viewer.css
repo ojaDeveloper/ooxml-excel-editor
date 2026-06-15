@@ -279,14 +279,30 @@
   right: 16px;
   z-index: 7;
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  gap: 4px;
   padding: 6px 8px;
   background: #fff;
   border: 1px solid #d0d3d6;
   border-radius: 6px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.15);
 }
+.rxl-find-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.rxl-rep {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid #d0d3d6;
+  background: #f7f8fa;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #444;
+}
+.rxl-rep:disabled { color: #bbb; cursor: default; }
 .rxl-findbar input {
   height: 24px;
   border: 1px solid #d0d3d6;

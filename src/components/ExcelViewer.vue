@@ -746,7 +746,7 @@ const findOpen = ref(false) // 纯 UI: FindBar 是否展开
 const findVersion = ref(0) // 控制器 onFindChange 回调 +1
 const findState = computed<FindState>(() => {
   void findVersion.value
-  return controller?.getFindState() ?? { query: '', matchCase: false, wholeCell: false, count: 0, index: -1 }
+  return controller?.getFindState() ?? { query: '', matchCase: false, wholeCell: false, count: 0, index: -1, replace: '' }
 })
 function openFind() {
   findOpen.value = true
@@ -851,6 +851,11 @@ const viewerApi: ViewerApi = {
   removeConditionalRule: (ruleId) => controller?.removeConditionalRule(ruleId) ?? false,
   setConditionalRules: (rules) => controller?.setConditionalRules(rules) ?? false,
   openConditionalFormatDialog: () => controller?.openConditionalFormatDialog() ?? false,
+  setSelectionNumberFormat: (code) => controller?.setSelectionNumberFormat(code) ?? false,
+  openNumberFormatDialog: () => controller?.openNumberFormatDialog() ?? false,
+  getCellComment: (row, col) => controller?.getCellComment(row, col) ?? '',
+  setCellComment: (row, col, comment) => controller?.setCellComment(row, col, comment) ?? false,
+  openCommentEditor: (row, col) => controller?.openCommentEditor(row, col) ?? false,
   editCell: (row, col, value) => controller?.editCell(row, col, value) ?? false,
   editRange: (range, values) => controller?.editRange(range, values) ?? false,
   clearRange: (range) => controller?.clearRange(range) ?? false,
@@ -1056,6 +1061,15 @@ function builtinTool(id: string): ResolvedToolbarItem | null {
         title: '管理条件格式规则(新建/编辑/删除;新建套到当前选区)',
         disabled: !props.editable,
         onClick: () => controller?.openConditionalFormatDialog(),
+      })
+    case 'number-format':
+      return bi({
+        id,
+        iconSvg: I('number-format'),
+        label: '数字格式',
+        title: '设置单元格数字格式(数值/货币/百分比/日期/自定义)',
+        disabled: !selection.value || !props.editable,
+        onClick: () => controller?.openNumberFormatDialog(),
       })
     case 'wrap-text': {
       const wrapState = controller?.getSelectionWrapState() ?? 'none'
@@ -1358,11 +1372,16 @@ watch([renderTick, normalizedPlugins], renderPluginOverlays, { flush: 'post' })
         :current="findState.index"
         :match-case="findState.matchCase"
         :whole-cell="findState.wholeCell"
+        :editable="!!props.editable"
+        :replace="findState.replace"
         @update:query="controller?.setFindQuery($event)"
         @update:match-case="controller?.setFindMatchCase($event)"
         @update:whole-cell="controller?.setFindWholeCell($event)"
+        @update:replace="controller?.setFindReplace($event)"
         @next="controller?.findNext()"
         @prev="controller?.findPrev()"
+        @replace-one="controller?.replaceCurrent()"
+        @replace-all="controller?.replaceAll()"
         @close="closeFind"
       />
 

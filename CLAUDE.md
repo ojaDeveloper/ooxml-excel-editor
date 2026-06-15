@@ -47,7 +47,7 @@ src/demo-shared(三 demo 共享 CSS / 工具)→ demo-bar.css (绿色头) + demo
 
 ## 不可破坏的硬约束
 
-- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **386 单测 + 171 e2e(Vue 3 / React / Vue 2 三壳覆盖;Vue 2 e2e 跑独立 5302 dev server,见 `e2e/vue2-smoke.e2e.ts`)**。
+- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **389 单测 + 183 e2e(Vue 3 / React / Vue 2 三壳覆盖;Vue 2 e2e 跑独立 5302 dev server,见 `e2e/vue2-smoke.e2e.ts`)**。
 - **core 不依赖框架**:`src/core/**` 不得出现 `from 'vue'` / `'react'`(构建后 `dist/core.js` 也不得 import vue/react/hyperformula/exceljs —— 重依赖全动态懒加载)。
 - **三壳同构**:给 `ViewerController` 加能力后,Vue 3 壳(components/ExcelViewer.vue)、React 壳(react/ExcelViewer.tsx)、Vue 2 壳(vue2/ExcelViewer.ts)都要接上,各自 e2e 覆盖。**任何 UI 变更先 Vue 3 落地, 再 1:1 复刻到 Vue 2 + React**(详见第 7 中心原则)。
 - **默认只读、零回归**:`editable` 关闭时行为与历史完全一致;编辑能力(单元格/样式/列宽行高/图片/增删行列/公式重算/导出回写)是 **opt-in**,全建在框架无关 core 的命令栈 + 前后快照事件上(见 README「编辑」章节)。
@@ -68,7 +68,7 @@ npm run dev          # Vue 3 demo (port 5300, 默认)
 npm run dev:vue3     # Vue 3 demo (alias)
 npm run dev:react    # React demo (port 5301)
 npm run dev:vue2     # Vue 2 demo (port 5302, root=vue2-demo/)
-npm test             # 单元测试(node, 386 个)
+npm test             # 单元测试(node, 389 个)
 npm run test:e2e     # 真浏览器 e2e(Playwright;先 npx playwright install chromium)
 npm run typecheck    # vue-tsc --noEmit
 npm run build        # 构建库(dist/ 四入口 core.js+index.js+react.js+vue2.js + style.css/vue2.css + .d.ts;不打包 vue/react/exceljs/echarts/jspdf)
@@ -121,6 +121,7 @@ node scripts/gen-sample.mjs   # 重新生成 public/sample.xlsx
 - **数据验证完整化 + Vue 2 e2e 回归网 ✅(1.8.0)** ① 数据验证从"只读取/list 选值"做到**编辑拦截**:解析全类型规则(list/whole/decimal/date/time/textLength/custom + operator + 出错/输入提示)进 `SheetModel.dataValidationRules`,框架无关引擎 `edit/data-validation.ts` 在提交时校验(stop 硬拒+模态、warning/info 软提示、空值/公式放行),框架无关 `validation-prompt-host` 出错模态/toast + 输入提示气泡(三壳共用);顺手修内置编辑器拒绝后 `done` 锁卡死的 UX bug(`commit()` 返成功与否)。② Vue 2 壳补 e2e(此前零覆盖):`playwright.config.ts` 加 5302 第二 dev server,`vue2-demo` 挂 `window.__excelViewerVue2`,`e2e/vue2-smoke.e2e.ts` + data-validation 加 Vue 2 行。
 - **条件格式可编辑 ✅(1.9.0)** 整个功能由 `conditionalFormat` prop 开启(三壳同名,默认 false = 只读渲染、零回归;三 demo 已开启)。① 模型 `ConditionalRule` 加 id/origin/dirty/raw + top10/iconSet.reverse,`parseConditional` 派 id+存 raw;② 命令 `set-conditional`(整张数组替换,整体单次撤销);③ 编程 API getConditionalRules/add/update/remove/setConditionalRules/openConditionalFormatDialog(控制器+插件+三壳);④ 框架无关管理对话框 `viewer/conditional-format-dialog-host.ts`(三壳共用,6 类编辑器:cellIs/expression/colorScale/dataBar/iconSet/top10)+ 工具栏入口 `conditional-format`;⑤ 导出回写 `xlsx-writer` 的 writeConditionalFormatting:**未编辑的 parsed 规则用 raw 原样回写(零退化)**,用户新建/编辑的按模型 buildExcelCfRule 构造;rebuild + overlay 都回写(rebuild 此前丢弃)。
 - **自动填充柄 ✅(1.10.0)** Excel/WPS 拖拽填充。纯框架无关 core canvas 交互(`edit/autofill.ts` 序列引擎 + `canvas-renderer` 画柄/命中/虚线预览 + 控制器 `fill` 拖拽模式 `setCellsBatch` 单次撤销),三壳零改动自动获得;需 `editable`。序列:数值等差/日期/前缀+末尾整数文本/星期月份循环/兜底复制 + Ctrl 翻转复制↔序列。v1 填值不复制格式。
-- 仍未做(用户已挑但暂缓):大文件编辑性能(需用户给真实大文件 profiling)。下一批候选:查找替换补全 / 数字格式编辑器 / 批注编辑(用户已选,合并成 1.11.0)。其它:真正 workspace 多包拆分;Vue 2 子入口体积优化 (现 423 KB);rebuild 导出不搬运原文件只读透视表(仅 overlay)。
+- **查找替换 + 数字格式编辑器 + 批注编辑 ✅(1.11.0)** 三个编辑小件合并。① 查找替换:控制器 setFindReplace/replaceCurrent/replaceAll(全部替换单次撤销),三壳查找栏加替换行(editable 才显示);② 数字格式编辑器:框架无关 `viewer/number-format-dialog-host.ts`(分类 + 预览复用 number-format 引擎 + 自定义代码)+ 工具栏 `number-format` 入口 + setSelectionNumberFormat;③ 批注编辑:`set-comment` 命令 + `model/mutations.ts` setCellComment + 框架无关 `viewer/comment-dialog-host.ts` + 右键菜单 + 导出回写 ExcelJS note(rebuild + overlay)。
+- 仍未做(用户已挑但暂缓):大文件编辑性能(需用户给真实大文件 profiling)。其它:真正 workspace 多包拆分;Vue 2 子入口体积优化 (现 423 KB);rebuild 导出不搬运原文件只读透视表(仅 overlay)。
 
 每阶段测试 green + 提交,不破坏现有三壳、不破坏「默认只读零回归」、**不破坏 UI 1:1 复刻**。

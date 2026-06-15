@@ -8,6 +8,7 @@ import type { CellValue } from '../model/data-access'
 import { cloneCell } from '../model/snapshot'
 import {
   setCellValue,
+  setCellComment,
   restoreCell,
   setColumnWidth,
   setRowHeight,
@@ -38,6 +39,8 @@ export type EditCommand =
   | { kind: 'unmerge-cells'; range: MergeRange }
   // 条件格式(1.9.0):整张 conditional 数组替换式,逆=换回前态数组。规则不可变替换,不原地改
   | { kind: 'set-conditional'; rules: ConditionalRule[] }
+  // 批注(1.11.0):设/清单元格批注,逆=restore-cells(精确还原前态格)
+  | { kind: 'set-comment'; row: number; col: number; comment: string }
   | { kind: 'restore-merges'; merges: MergeRange[]; cells: { row: number; col: number; cell: CellModel | null }[] }
   // WPS 内嵌图 ⇄ 浮动图互转(第二期):由 EditController.exec 直接处理(需 workbook 级快照逆),不走 applyCommand
   | { kind: 'convert-to-cell'; imageIndex: number; row: number; col: number }
@@ -81,6 +84,8 @@ export function affectedOf(cmd: EditCommand): CellPos[] {
       return cmd.cells.map((c) => ({ row: c.row, col: c.col }))
     case 'set-style':
       return cmd.cells.map((c) => ({ row: c.row, col: c.col }))
+    case 'set-comment':
+      return [{ row: cmd.row, col: cmd.col }]
     case 'merge-cells':
       return coveredOf(cmd.range) // 合并清空的被覆盖格 → 发 cell-change
     case 'restore-merges':
@@ -183,6 +188,12 @@ export function applyCommand(sheet: SheetModel, cmd: EditCommand): ApplyResult {
     const prior = sheet.conditional
     sheet.conditional = cmd.rules
     return { inverse: { kind: 'set-conditional', rules: prior }, affected }
+  }
+  // 批注:设/清,逆=restore-cells 精确还原前态格
+  if (cmd.kind === 'set-comment') {
+    const prior = capture(sheet, [{ row: cmd.row, col: cmd.col }])
+    setCellComment(sheet, cmd.row, cmd.col, cmd.comment)
+    return { inverse: { kind: 'restore-cells', cells: prior }, affected }
   }
   // 结构族(增删行列)由 EditController.exec 直接处理(需 workbook 级快照 + 跨表公式重写),不走这里
   // 单元格族:逆=restore-cells(捕获前态;set-style 也走它 → 空格上色的逆=删格)

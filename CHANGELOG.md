@@ -2,6 +2,24 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.11.0] - 2026-06-15
+
+> 三个编辑小件合并:**查找替换补全 + 数字格式编辑器 + 批注编辑**。都复用已有引擎/对话框套路;对话框均为框架无关 DOM(三壳共用一份,UI 天然 1:1)。
+
+### 新增 — 查找替换
+
+- 此前只有「查找」(高亮定位),现补「替换」:查找栏开 `editable` 时多出替换行(替换输入 + 替换 / 全部替换);控制器 `setFindReplace` / `replaceCurrent`(替换当前并查找下一个,替换后重算命中)/ `replaceAll`(全部替换,**整体单次撤销**)。支持区分大小写 / 全字匹配;跳过只读格。三壳查找栏都加替换行(Vue3 `FindBar.vue` + React/Vue2 内联)。
+
+### 新增 — 数字格式编辑器
+
+- 框架无关对话框 `viewer/number-format-dialog-host.ts`(工具栏 `number-format` 入口):分类(常规/数值/货币/百分比/日期/时间/文本/自定义)+ 选项(小数位数 / 千分位 / 负数红色 / 货币符号 / 日期时间预设)→ **实时预览**(复用 number-format 引擎)+ 可直接编辑「格式代码」→ 确定即 `setStyle({ numFmt })`(单次撤销)。控制器 `setSelectionNumberFormat(code)` / `openNumberFormatDialog()`。
+
+### 新增 — 批注编辑
+
+- 批注此前只读显示,现可**新建/编辑/删除**:新 `set-comment` 命令(逆 = restore-cells 精确还原,单次撤销)+ `model/mutations.ts` 的 `setCellComment`(空批注清除、空格挂批注/清空);右键菜单单格加「插入/编辑/删除批注」;框架无关对话框 `viewer/comment-dialog-host.ts`(多行文本 + 确定/删除/取消)。控制器 `getCellComment` / `setCellComment` / `openCommentEditor`。**导出回写**:`xlsx-writer` rebuild + overlay 都把批注写成 ExcelJS note(此前 rebuild 丢批注)。
+
+- 三壳句柄 + 插件 `ViewerApi` 都暴露上述 API;三 demo 工具栏加 `number-format` 入口。测试:`find-replace` / `number-format` / `comment` e2e(各 Vue/React/Vue2)+ `autofill`/`comment` 等单测。基线:**389 单测 + 183 e2e**。
+
 ## [1.10.0] - 2026-06-15
 
 > 新增 **自动填充柄**(Excel/WPS 拖拽填充)。纯框架无关 core canvas 交互(渲染层画柄 + 控制器拖拽),三壳零改动自动获得;需 `editable`。

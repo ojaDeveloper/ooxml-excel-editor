@@ -216,6 +216,11 @@ export interface ExcelViewerHandle {
   removeConditionalRule: ViewerApi['removeConditionalRule']
   setConditionalRules: ViewerApi['setConditionalRules']
   openConditionalFormatDialog: ViewerApi['openConditionalFormatDialog']
+  setSelectionNumberFormat: ViewerApi['setSelectionNumberFormat']
+  openNumberFormatDialog: ViewerApi['openNumberFormatDialog']
+  getCellComment: ViewerApi['getCellComment']
+  setCellComment: ViewerApi['setCellComment']
+  openCommentEditor: ViewerApi['openCommentEditor']
   editCell: (row: number, col: number, value: CellValue) => boolean
   editRange: (range: MergeRange, values: CellValue[][]) => boolean
   clearRange: (range: MergeRange) => boolean
@@ -737,6 +742,11 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       removeConditionalRule: (ruleId) => controllerRef.current?.removeConditionalRule(ruleId) ?? false,
       setConditionalRules: (rules) => controllerRef.current?.setConditionalRules(rules) ?? false,
       openConditionalFormatDialog: () => controllerRef.current?.openConditionalFormatDialog() ?? false,
+      setSelectionNumberFormat: (code) => controllerRef.current?.setSelectionNumberFormat(code) ?? false,
+      openNumberFormatDialog: () => controllerRef.current?.openNumberFormatDialog() ?? false,
+      getCellComment: (row, col) => controllerRef.current?.getCellComment(row, col) ?? '',
+      setCellComment: (row, col, comment) => controllerRef.current?.setCellComment(row, col, comment) ?? false,
+      openCommentEditor: (row, col) => controllerRef.current?.openCommentEditor(row, col) ?? false,
       editCell: (row, col, value) => controllerRef.current?.editCell(row, col, value) ?? false,
       editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
       clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
@@ -864,6 +874,11 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     removeConditionalRule: (ruleId) => controllerRef.current?.removeConditionalRule(ruleId) ?? false,
     setConditionalRules: (rules) => controllerRef.current?.setConditionalRules(rules) ?? false,
     openConditionalFormatDialog: () => controllerRef.current?.openConditionalFormatDialog() ?? false,
+    setSelectionNumberFormat: (code) => controllerRef.current?.setSelectionNumberFormat(code) ?? false,
+    openNumberFormatDialog: () => controllerRef.current?.openNumberFormatDialog() ?? false,
+    getCellComment: (row, col) => controllerRef.current?.getCellComment(row, col) ?? '',
+    setCellComment: (row, col, comment) => controllerRef.current?.setCellComment(row, col, comment) ?? false,
+    openCommentEditor: (row, col) => controllerRef.current?.openCommentEditor(row, col) ?? false,
     editCell: (row, col, value) => controllerRef.current?.editCell(row, col, value) ?? false,
     editRange: (range, values) => controllerRef.current?.editRange(range, values) ?? false,
     clearRange: (range) => controllerRef.current?.clearRange(range) ?? false,
@@ -1047,7 +1062,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       ? `${colIndexToLetters(selection.left)}${selection.top + 1}:${colIndexToLetters(selection.right)}${selection.bottom + 1}`
       : ''
   const stats = renderer && selection ? renderer.selectionStats(selection) : null
-  const findState = controller?.getFindState() ?? { query: '', matchCase: false, wholeCell: false, count: 0, index: -1 }
+  const findState = controller?.getFindState() ?? { query: '', matchCase: false, wholeCell: false, count: 0, index: -1, replace: '' }
 
   // ---- 工具栏配置 (1:1 跟 Vue 3 SFC builtinTool / resolveItem / resolvedToolbar) ----
   const I = (name: string) => TOOLBAR_ICONS[name]
@@ -1088,6 +1103,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       case 'copy': return bi({ id, iconSvg: I('copy'), label: '复制', title: '复制选区 (Ctrl+C)', disabled: !selection, onClick: () => void ctrl?.copySelection() })
       case 'pivot-table': return props.pivotTable ? bi({ id, iconSvg: I('pivot-table'), label: '透视表', title: '选择字段并基于当前选区创建静态透视汇总表', disabled: !selection || !props.editable, onClick: () => ctrl?.openPivotTableDialog() }) : null // 功能未开启(默认):不渲染入口
       case 'conditional-format': return props.conditionalFormat ? bi({ id, iconSvg: I('conditional-format'), label: '条件格式', title: '管理条件格式规则(新建/编辑/删除;新建套到当前选区)', disabled: !props.editable, onClick: () => ctrl?.openConditionalFormatDialog() }) : null // 功能未开启(默认):不渲染入口
+      case 'number-format': return bi({ id, iconSvg: I('number-format'), label: '数字格式', title: '设置单元格数字格式(数值/货币/百分比/日期/自定义)', disabled: !selection || !props.editable, onClick: () => ctrl?.openNumberFormatDialog() })
       case 'wrap-text': {
         const wrapState = ctrl?.getSelectionWrapState() ?? 'none'
         return bi({ id, iconSvg: I('wrap-text'), label: '自动换行', title: '自动换行(选区,WPS 风格 toggle)', active: wrapState === 'all', disabled: !selection || !props.editable, onClick: () => void ctrl?.toggleWrapTextOnSelection() })
@@ -1341,20 +1357,34 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
 
         {findOpen && workbook && (
           <div className="rxl-findbar">
-            <input
-              autoFocus
-              placeholder="查找…"
-              value={findState.query}
-              onChange={(e) => controllerRef.current?.setFindQuery(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') (e.shiftKey ? controllerRef.current?.findPrev() : controllerRef.current?.findNext())
-                else if (e.key === 'Escape') closeFind()
-              }}
-            />
-            <span className="count">{findState.count ? `${findState.index + 1}/${findState.count}` : '无结果'}</span>
-            <button onClick={() => controllerRef.current?.findPrev()}>↑</button>
-            <button onClick={() => controllerRef.current?.findNext()}>↓</button>
-            <button onClick={closeFind}>✕</button>
+            <div className="rxl-find-row">
+              <input
+                autoFocus
+                placeholder="查找…"
+                value={findState.query}
+                onChange={(e) => controllerRef.current?.setFindQuery(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') (e.shiftKey ? controllerRef.current?.findPrev() : controllerRef.current?.findNext())
+                  else if (e.key === 'Escape') closeFind()
+                }}
+              />
+              <span className="count">{findState.count ? `${findState.index + 1}/${findState.count}` : '无结果'}</span>
+              <button onClick={() => controllerRef.current?.findPrev()}>↑</button>
+              <button onClick={() => controllerRef.current?.findNext()}>↓</button>
+              <button onClick={closeFind}>✕</button>
+            </div>
+            {props.editable && (
+              <div className="rxl-find-row">
+                <input
+                  placeholder="替换为…"
+                  value={findState.replace}
+                  onChange={(e) => controllerRef.current?.setFindReplace(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') controllerRef.current?.replaceCurrent(); else if (e.key === 'Escape') closeFind() }}
+                />
+                <button className="rxl-rep" disabled={!findState.count} onClick={() => controllerRef.current?.replaceCurrent()}>替换</button>
+                <button className="rxl-rep" disabled={!findState.count} onClick={() => controllerRef.current?.replaceAll()}>全部替换</button>
+              </div>
+            )}
           </div>
         )}
 

@@ -48,7 +48,7 @@ const src = ref<File>() // 绑个 <input type="file" @change> 给它即可
 - 📋 **从 Excel/WPS 富粘贴**:`Ctrl+V` 解析剪贴板 HTML → 还原字体/颜色/填充/边框/对齐/合并单元格,整块单次撤销。**Excel/WPS 把格式放在 `<style>` 块的 CSS 类里(`<td class="xl65">`),解析时会把类规则合并进每格** —— 不只读内联 `style=`。**`Ctrl+V` 走 `paste` 事件拿原始 HTML**;`navigator.clipboard.read()`(右键菜单粘贴用)会**净化**删掉 `<style>`/注释,所以右键粘贴从 WPS 拿的格式不如 `Ctrl+V` 全。图片走多通道:data-uri `<img>` / **WPS VML `o:gfxdata`**(区域复制的内嵌图藏在 VML 里,是个 zip,解出来落格)/ 单图 blob / 拖文件;**数字格式**(日期/货币)也从 `mso-number-format` 解析还原,不再变成裸序列号。**注**:Excel 某些版本只给 `file:///` 本地路径的 `<img>`(浏览器读不到)而不带 `o:gfxdata`,那种区域图仍救不回。
 - 📋 **应用内 1:1 复制粘贴**:本组件自己 `Ctrl+C` 的内容会把**完整模型快照**嵌进剪贴板(`<table data-ooxml-clip>`),`Ctrl+V` 时识别并 1:1 还原 —— 数字不会退化成文本、边框/数字格式/合并/DISPIMG 图片/**行高**全保留;因为快照随剪贴板走,**Vue3/Vue2/React 三壳之间、跨标签页互相复制结果都一致**。粘到外部应用(Excel/WPS/Word)则读可见 `<table>`(近似)。**列宽以目标现有表头为准、不被源覆盖**(列宽整列共享,改了会动表头;同 Excel 默认粘贴)。
 - 📝 **文本溢出**到相邻空格、**自动行高**
-- 🖱 **交互**:单元格选区(合并感知)、拖选、公式栏、状态栏(计数/求和/均值/最值)、超链接可点、裁切文本悬停看全文、Ctrl+C 复制(**同应用内 1:1 保真**:含数字原始值/数字格式/边框/合并/图片/行高,跨 Vue3/Vue2/React 实例互相复制都一致;**列宽以目标表头为准不覆盖**;另带 TSV/HTML 供贴进 Excel/WPS)、**Ctrl+F 查找**(高亮 + 上/下定位 + 计数 + 区分大小写/全字匹配)、**自动筛选**(点下拉真能筛:去重值多选 + 搜值 + 清除)、**自动填充柄**(编辑模式拖选区右下角填序列:等差/日期/星期月份/文本递增,见 [编辑](#编辑可选默认只读))
+- 🖱 **交互**:单元格选区(合并感知)、拖选、公式栏、状态栏(计数/求和/均值/最值)、超链接可点、裁切文本悬停看全文、Ctrl+C 复制(**同应用内 1:1 保真**:含数字原始值/数字格式/边框/合并/图片/行高,跨 Vue3/Vue2/React 实例互相复制都一致;**列宽以目标表头为准不覆盖**;另带 TSV/HTML 供贴进 Excel/WPS)、**Ctrl+F 查找替换**(高亮 + 上/下定位 + 计数 + 区分大小写/全字匹配;编辑模式带替换 / 全部替换)、**自动筛选**(点下拉真能筛:去重值多选 + 搜值 + 清除)、**自动填充柄**(编辑模式拖选区右下角填序列:等差/日期/星期月份/文本递增,见 [编辑](#编辑可选默认只读))
 - 🖨 **导出 / 打印**:整表/选区/多表导出 **PNG/JPEG**、**PDF**(位图 + **矢量·文字可选可搜**两种)、**系统打印**(可另存 PDF);默认还原原生 `pageSetup`(纸张/方向/页边距/缩放/打印区域/**打印标题行列每页重复**);宽表**横向跨页**(页矩阵);`beforeRenderPage` 注入页眉/页脚/水印、`configureDoc` 注册字体;内置「导出设置」对话框
 - ⚡ **按需加载**(无图表文件不下载 echarts、不导出 PDF 不下载 jspdf)、**友好错误兜底**(损坏/加密/旧 .xls)、解析失败自动给出可读提示
 
@@ -407,6 +407,12 @@ const myEditor: EditorResolver = (cell, pos) => {
   - 全部入撤销栈、发 `cell-change`/`image-change`、翻脏标记。(`convertImageToCell(imgIdx,row,col)` 仍保留,用于显式指定目标格。)
 - **导出往返**:`downloadXlsx()` / `exportXlsx()` 导出时,在 ExcelJS 写出后**于 zip 层回注** WPS 私有件(`cellimages.xml` + rels + media + `[Content_Types].xml`/`workbook.xml.rels` 补丁,从模型重建),原有的 + App 内新转的内嵌图导出后用 WPS 打开都正常显示。rebuild / overlay 两种保真模式均覆盖;无字节的 blob-only 图除外。
 
+### 数字格式 / 批注 / 查找替换(1.11.0)
+
+- **查找替换**:`Ctrl+F` 打开查找栏,编辑模式下多出替换行 —— 替换输入 + 「替换」(替换当前并跳下一个)/「全部替换」(整体单次撤销),支持区分大小写 / 全字匹配,跳过只读格。
+- **数字格式编辑器**:工具栏 `number-format` 入口打开对话框(框架无关 DOM,三壳共用)—— 分类(常规/数值/货币/百分比/日期/时间/文本/自定义)+ 选项(小数位数 / 千分位 / 负数红色 / 货币符号 / 日期时间预设)+ 实时预览 + 可直接编辑格式代码 → 确定即套到选区(单次撤销)。也可 `setSelectionNumberFormat(code)` / `openNumberFormatDialog()` 直调。
+- **批注编辑**:右键单格「插入/编辑/删除批注」打开对话框(多行文本 + 确定/删除/取消);`getCellComment` / `setCellComment(row,col,text)`(空串删除)/ `openCommentEditor()` 直调,单次撤销;**导出 .xlsx 回写批注**(rebuild + overlay)。
+
 ### 自动填充柄(拖拽填充序列)
 
 开 `:editable` 后,选区右下角出现**填充柄**小方块(像 Excel/WPS)。拖它向下/上/左/右,松手即把源选区的模式**接续填充**进新增格(整体单次撤销):
@@ -465,7 +471,7 @@ const myEditor: EditorResolver = (cell, pos) => {
 | `rendered` / `error` / `progress` | 见上 |
 
 ### 命令式 API(模板 ref)
-`load(src)` / `getWorkbook()` / `getActiveSheet()` / `setActiveSheet(i)` / `getSelection()` / `setSelection(range)` / `scrollToCell(row,col,{select?})` / `rectOf(row,col)` / `rectOfRange(range)` / `redraw()`,以及下面的导出方法;**编辑命令式 API**(`editCell`/`setStyle`/`createPivotTable`/`openPivotTableDialog`/`createPivotTableFromSelection`/`getConditionalRules`/`addConditionalRule`/`updateConditionalRule`/`removeConditionalRule`/`openConditionalFormatDialog`/`insertRows`/`undo`/`exportXlsx`…)见 [编辑](#编辑可选默认只读)。
+`load(src)` / `getWorkbook()` / `getActiveSheet()` / `setActiveSheet(i)` / `getSelection()` / `setSelection(range)` / `scrollToCell(row,col,{select?})` / `rectOf(row,col)` / `rectOfRange(range)` / `redraw()`,以及下面的导出方法;**编辑命令式 API**(`editCell`/`setStyle`/`createPivotTable`/`openPivotTableDialog`/`createPivotTableFromSelection`/`getConditionalRules`/`addConditionalRule`/`openConditionalFormatDialog`/`setSelectionNumberFormat`/`openNumberFormatDialog`/`getCellComment`/`setCellComment`/`openCommentEditor`/`replaceCurrent`/`replaceAll`/`insertRows`/`undo`/`exportXlsx`…)见 [编辑](#编辑可选默认只读)。
 
 ```ts
 // 需组件开启 :pivot-table="true"(默认关闭)+ :editable="true"
@@ -499,7 +505,7 @@ viewer.value?.createPivotTable({
 
 **.xlsx 两种保真模式**:
 
-- **`rebuild`(默认)** —— **从编辑后模型完整重建**:遍历 cells/公式/样式(字体/填充/边框/对齐/数字格式)/合并/行高列宽/冻结/图片/**条件格式**(1.9.0 起回写) 重组成 ExcelJS 工作簿。干净、所见即所得,但**丢失**原件里我们不建模的部分(数据验证、VBA 宏、工作表保护、复杂 DrawingML/图表 等)。图片导出区分 oneCell/twoCell 锚点 + 子格 EMU 偏移。
+- **`rebuild`(默认)** —— **从编辑后模型完整重建**:遍历 cells/公式/样式(字体/填充/边框/对齐/数字格式)/合并/行高列宽/冻结/图片/**条件格式**(1.9.0 起)/**批注**(1.11.0 起) 重组成 ExcelJS 工作簿。干净、所见即所得,但**丢失**原件里我们不建模的部分(数据验证、VBA 宏、工作表保护、复杂 DrawingML/图表 等)。图片导出区分 oneCell/twoCell 锚点 + 子格 EMU 偏移。
 - **`overlay`(`exportXlsx({ fidelity: 'overlay' })`)** —— **重载原始 .xlsx,只把编辑后的 值/样式/合并/行高列宽/冻结 叠加上去**,**保留** ExcelJS 能往返的其余部分(条件格式 / 数据验证 / 打印设置 / 定义名 / 图表 等)。组件加载时自动留存原件字节供其使用;缺原件时自动回退 `rebuild`。注:overlay 不反映**增删行列 / 图片**编辑(那类用 `rebuild`)。
 
 公共选项:`target`(`'active'`(默认)/`'all'`/索引/索引数组)、`range`(限定单元格区域)、`scale`(清晰度,默认 2)、`includeHeaders`、`gridlines`、`background`;PDF/打印另有 `format`(a4/a3/letter/`[宽,高]mm`)、`orientation`、`margin`(mm)、`fitToWidth`。
@@ -626,7 +632,7 @@ viewer.closeContextMenu()
 <ExcelViewer :toolbar="['find','filter','separator','zoom','export']" /> <!-- 控制项/顺序/分隔 -->
 <ExcelViewer :toolbar="false" />                                      <!-- 隐藏整条 -->
 ```
-- **内置 id**:`find`(查找)、`filter`(切换自动筛选 —— 文件没设也能点出下拉)、`sort`(按活动单元格所在列升序/降序;未开启自动筛选时会先按选区/已用区建立范围)、`clear-filter`(清除筛选,无筛选时禁用)、`copy`(复制选区)、`pivot-table`(透视表入口:选中带表头数据区后选择生成位置,可输出到现有工作表单元格或新建工作表;创建后打开 WPS 风格右侧字段面板,需 `pivotTable` + `editable`,功能未开启时不渲染)、`conditional-format`(条件格式管理入口:列出当前表规则可删/可编辑 + 新建全 6 类规则,需 `conditionalFormat` + `editable`,功能未开启时不渲染)、`wrap-text`(自动换行 toggle,WPS 风格,需 `editable`)、`image-tools`(图片工具 ▾:选区/整表/整列 浮动 ⇄ 嵌入互转,需 `editable`)、`template`(模板 ▾:仅 JSON / 模型数据源下生效;导入 .xlsx 当样式捐赠者;xlsx 数据源下禁用)、`freeze`(冻结/取消)、`zoom`(缩放下拉)、`export`(导出/打印下拉)、`'separator'`/`'|'`(分隔线)。
+- **内置 id**:`find`(查找)、`filter`(切换自动筛选 —— 文件没设也能点出下拉)、`sort`(按活动单元格所在列升序/降序;未开启自动筛选时会先按选区/已用区建立范围)、`clear-filter`(清除筛选,无筛选时禁用)、`copy`(复制选区)、`pivot-table`(透视表入口:选中带表头数据区后选择生成位置,可输出到现有工作表单元格或新建工作表;创建后打开 WPS 风格右侧字段面板,需 `pivotTable` + `editable`,功能未开启时不渲染)、`conditional-format`(条件格式管理入口:列出当前表规则可删/可编辑 + 新建全 6 类规则,需 `conditionalFormat` + `editable`,功能未开启时不渲染)、`number-format`(数字格式编辑入口:分类 + 预览 + 自定义格式代码,需 `editable`)、`wrap-text`(自动换行 toggle,WPS 风格,需 `editable`)、`image-tools`(图片工具 ▾:选区/整表/整列 浮动 ⇄ 嵌入互转,需 `editable`)、`template`(模板 ▾:仅 JSON / 模型数据源下生效;导入 .xlsx 当样式捐赠者;xlsx 数据源下禁用)、`freeze`(冻结/取消)、`zoom`(缩放下拉)、`export`(导出/打印下拉)、`'separator'`/`'|'`(分隔线)。
 - **富项类型**(`ToolbarItem`):`type:'separator'` 分隔线;`items: ToolbarItem[]` 变下拉子菜单;`disabled?(viewer)` 禁用态;`iconSvg`(内联 SVG,优先于 `icon` emoji)/ `icon` / `label` / `title` / `onClick(viewer)` / `active?(viewer)`。
 - **响应式溢出**:宽度不足时,放不下的项自动折叠进「⋯ 更多」下拉。
 - **插件贡献**:`ExcelPlugin.toolbar: ToolbarItem[]`,插件加载即追加(opt-in)。
