@@ -20,7 +20,7 @@ import type { EditConfig } from '../edit/types'
 import { resolveEditable, canEditDimension, normalizeDimTarget } from '../edit/permissions'
 import { cloneWorkbook } from '../model/clone'
 import { EditController, type EditControllerHost, type EditEventName } from '../edit/edit-controller'
-import { defaultFormulaEngineFactory } from '../formula/hyperformula-adapter'
+import { builtinFormulaEngineFactory } from '../formula/builtin'
 import type { CellValue, SheetToJSONOptions } from '../model/data-access'
 import { getCellValue } from '../model/data-access'
 import { computeFillSeries } from '../edit/autofill'
@@ -285,7 +285,7 @@ export class ViewerController {
       isRecalcEnabled: () => !!this.editCfg.editable && !!this.editCfg.recalc,
       getEngineFactory: () =>
         this.editCfg.editable && this.editCfg.recalc
-          ? (this.editCfg.formulaEngine ?? defaultFormulaEngineFactory)
+          ? (this.editCfg.formulaEngine ?? builtinFormulaEngineFactory)
           : null,
       onModelChange: () => {
         this.refreshPivotsAfterEdit() // 源数据改动 → 透视表"活刷新"(在重算 metrics 之前改完模型)

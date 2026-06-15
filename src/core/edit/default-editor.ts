@@ -10,6 +10,7 @@
  */
 import type { CellEditorContext, CellEditorFactory } from './editor-context'
 import { CELL_PADDING, LINE_HEIGHT_FACTOR, fontToCss, wrapLines } from '../render/text'
+import { FormulaAutocomplete } from './formula-autocomplete'
 
 const CSS_PT_TO_PX = 96 / 72
 
@@ -52,6 +53,8 @@ export const defaultCellEditor: CellEditorFactory = (ctx: CellEditorContext) => 
   if (st?.font?.color) ta.style.color = st.font.color
   ta.style.textAlign = st?.hAlign === 'center' ? 'center' : st?.hAlign === 'right' ? 'right' : 'left'
 
+  // 公式自动补全(1.14.0):输 =SU 弹函数列表。列表打开时拦 ↑↓/Enter/Tab/Esc。
+  const ac = new FormulaAutocomplete(ta)
   let done = false
   // 上一次被拒的值:blur(点提示弹窗)会再触发 commit,同一被拒值不重复提交 → 避免弹窗叠弹
   let lastRejected: string | null = null
@@ -59,16 +62,19 @@ export const defaultCellEditor: CellEditorFactory = (ctx: CellEditorContext) => 
     if (done) return
     if (ta.value === lastRejected) return // 同一被拒值不重复提交(Enter/blur 二次触发)
     done = true
+    ac.dispose()
     // commit 返 false = 被拒(数据验证拦截等)→ 解除锁,记住被拒值,编辑器留开让用户改正
     if (ctx.commit(ta.value, move) === false) { done = false; lastRejected = ta.value }
   }
   const cancel = () => {
     if (done) return
     done = true
+    ac.dispose()
     ctx.cancel()
   }
 
   ta.addEventListener('keydown', (e) => {
+    if (ac.onKeyDown(e)) { e.preventDefault(); e.stopPropagation(); return } // 补全列表优先吃导航键
     if (e.key === 'Enter' && !e.shiftKey) {
       // 普通 Enter 提交(跟 input 行为一致). Shift+Enter 插入换行 (textarea 原生)
       e.preventDefault()
@@ -84,9 +90,10 @@ export const defaultCellEditor: CellEditorFactory = (ctx: CellEditorContext) => 
   })
   ta.addEventListener('blur', () => commit())
 
-  // 内容变化 → 清除"被拒值"记忆(改了内容就能再次提交) + 通知 host 重撑高 (Phase 1 撑高核心入口)
+  // 内容变化 → 清除"被拒值"记忆(改了内容就能再次提交) + 公式补全重算 + 通知 host 重撑高 (Phase 1 撑高核心入口)
   ta.addEventListener('input', () => {
     lastRejected = null
+    ac.update()
     ctx.reposition?.()
   })
 

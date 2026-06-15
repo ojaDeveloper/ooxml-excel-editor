@@ -118,7 +118,12 @@ export { cloneWorkbook, restoreWorkbookInto } from './model/clone'
 // ---- 公式重算(E4;可换引擎,HyperFormula 默认 + 可选 peer) ----
 export { cellContentForEngine } from './formula/engine'
 export type { FormulaEngine, FormulaEngineFactory, DirtyCell } from './formula/engine'
-export { defaultFormulaEngineFactory } from './formula/hyperformula-adapter'
+// 公式引擎工厂:`builtinFormulaEngineFactory` 是 1.14.0 起的默认(MIT,零依赖,~60 常用函数)。
+// `hyperFormulaEngineFactory` = HyperFormula(GPL-3.0/商业;函数更全)。`:formula-engine` 可注入任一或自研。
+// `defaultFormulaEngineFactory` 保留为 HyperFormula 别名(向后兼容显式注入它的旧代码)。
+export { builtinFormulaEngineFactory, BuiltinFormulaEngine } from './formula/builtin'
+export { FUNCTION_NAMES } from './formula/builtin/functions'
+export { defaultFormulaEngineFactory, defaultFormulaEngineFactory as hyperFormulaEngineFactory } from './formula/hyperformula-adapter'
 export { shiftFormulaRefs, rewriteWorkbookFormulas } from './formula/refs'
 export type { ShiftSpec, ShiftAxis } from './formula/refs'
 export { CellEditorHost } from './edit/editor-host'

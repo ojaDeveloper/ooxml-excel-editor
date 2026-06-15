@@ -2,6 +2,22 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.14.0] - 2026-06-15
+
+> 新增**内置公式引擎**(MIT,零依赖)设为 recalc 默认引擎(取代 GPL 的 HyperFormula),+ **公式自动补全**。覆盖日常 ~60 个常用函数;需更全覆盖可注入 HyperFormula 或自研引擎。
+
+### 新增 — 内置 MIT 公式引擎(默认)
+
+- **从零实现**(`formula/builtin/`):词法 + 表达式解析(运算符优先级 / `A1` 绝对相对 / 区域 `A1:B2` / 跨表 `Sheet1!A1` / 函数 / 一元 ± / `%`)→ AST;求值器(错误就近传播 `#DIV/0! #N/A #NAME? #NUM! #REF! #VALUE!`);**依赖图 + 拓扑级联重算 + 循环引用检测**(环上格 → `#REF!`)。
+- **函数 ~60**:聚合(SUM/AVERAGE/MAX/MIN/COUNT/COUNTA/PRODUCT/SUMPRODUCT)、数学(ROUND/ROUNDUP/ROUNDDOWN/ABS/INT/MOD/SQRT/POWER/CEILING/FLOOR…)、逻辑(IF/IFERROR/IFNA/AND/OR/NOT/XOR/IFS)、文本(LEFT/RIGHT/MID/LEN/CONCAT/UPPER/LOWER/TRIM/SUBSTITUTE/FIND/SEARCH…)、查找(VLOOKUP/HLOOKUP/INDEX/MATCH/CHOOSE)、条件聚合(SUMIF/COUNTIF/AVERAGEIF)、信息(ISNUMBER/ISBLANK/ISERROR…)、日期(TODAY/NOW/DATE/YEAR/MONTH/DAY/WEEKDAY/DAYS)。
+- **★ 默认引擎变更**:recalc(`:recalc`,opt-in)的默认引擎由 **HyperFormula → 内置引擎**。好处:**MIT 无 GPL 顾虑、零额外依赖、不再懒加载 ~400KB**。代价:函数集比 HyperFormula 的 ~395 小(日常足够)。
+- **HyperFormula 仍可用**:注入 `:formula-engine="hyperFormulaEngineFactory"`(或自研)获得更全覆盖。`core` 新导出 `builtinFormulaEngineFactory` / `BuiltinFormulaEngine` / `FUNCTION_NAMES` / `hyperFormulaEngineFactory`;`defaultFormulaEngineFactory` 保留为 HyperFormula 别名(向后兼容显式注入它的旧代码)。
+- **解析/显示不受影响**:打开文件仍显示原件缓存的计算结果(与引擎无关);引擎只在编辑后重算时介入。
+### 新增 — 公式自动补全
+
+- 在框架无关默认单元格编辑器(`edit/formula-autocomplete.ts`,三壳自动都有)里:输 `=SU` 时下方弹**函数名列表 + 参数提示**(`FUNCTION_SIGNATURES`);↑↓ 选、Enter/Tab 接受(插入 `NAME(` 并把光标移进括号)、Esc 关、点选即填。只在公式(`=` 开头)且光标处于函数名 token 时弹,不影响普通文本编辑。列表来源 = 引擎实际支持的函数(`FUNCTION_NAMES`),所见即所得。
+- 测试:`formula/builtin/__tests__`(parse 12 + eval 11 + engine 7 = 30 例:运算符/函数/级联/循环/跨表);`e2e/formula-autocomplete.e2e.ts`(=SU→弹 SUM→点选插入,三壳);现有 `edit-formula.e2e.ts` 重算 e2e 改由内置引擎驱动仍全过。基线:**419 单测 + 192 e2e**。
+
 ## [1.13.0] - 2026-06-15
 
 > 新增 **不连续多区域选择**(Ctrl/⌘ + 点击)。选区模型从单矩形扩成多矩形;纯框架无关 core 交互,壳只转发鼠标。

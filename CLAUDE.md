@@ -47,7 +47,7 @@ src/demo-shared(三 demo 共享 CSS / 工具)→ demo-bar.css (绿色头) + demo
 
 ## 不可破坏的硬约束
 
-- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **389 单测 + 189 e2e(Vue 3 / React / Vue 2 三壳覆盖;Vue 2 e2e 跑独立 5302 dev server,见 `e2e/vue2-smoke.e2e.ts`)**。
+- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **419 单测 + 192 e2e(Vue 3 / React / Vue 2 三壳覆盖;Vue 2 e2e 跑独立 5302 dev server,见 `e2e/vue2-smoke.e2e.ts`)**。
 - **core 不依赖框架**:`src/core/**` 不得出现 `from 'vue'` / `'react'`(构建后 `dist/core.js` 也不得 import vue/react/hyperformula/exceljs —— 重依赖全动态懒加载)。
 - **三壳同构**:给 `ViewerController` 加能力后,Vue 3 壳(components/ExcelViewer.vue)、React 壳(react/ExcelViewer.tsx)、Vue 2 壳(vue2/ExcelViewer.ts)都要接上,各自 e2e 覆盖。**任何 UI 变更先 Vue 3 落地, 再 1:1 复刻到 Vue 2 + React**(详见第 7 中心原则)。
 - **默认只读、零回归**:`editable` 关闭时行为与历史完全一致;编辑能力(单元格/样式/列宽行高/图片/增删行列/公式重算/导出回写)是 **opt-in**,全建在框架无关 core 的命令栈 + 前后快照事件上(见 README「编辑」章节)。
@@ -68,7 +68,7 @@ npm run dev          # Vue 3 demo (port 5300, 默认)
 npm run dev:vue3     # Vue 3 demo (alias)
 npm run dev:react    # React demo (port 5301)
 npm run dev:vue2     # Vue 2 demo (port 5302, root=vue2-demo/)
-npm test             # 单元测试(node, 389 个)
+npm test             # 单元测试(node, 419 个)
 npm run test:e2e     # 真浏览器 e2e(Playwright;先 npx playwright install chromium)
 npm run typecheck    # vue-tsc --noEmit
 npm run build        # 构建库(dist/ 四入口 core.js+index.js+react.js+vue2.js + style.css/vue2.css + .d.ts;不打包 vue/react/exceljs/echarts/jspdf)
@@ -124,7 +124,7 @@ node scripts/gen-sample.mjs   # 重新生成 public/sample.xlsx
 - **查找替换 + 数字格式编辑器 + 批注编辑 ✅(1.11.0)** 三个编辑小件合并。① 查找替换:控制器 setFindReplace/replaceCurrent/replaceAll(全部替换单次撤销),三壳查找栏加替换行(editable 才显示);② 数字格式编辑器:框架无关 `viewer/number-format-dialog-host.ts`(分类 + 预览复用 number-format 引擎 + 自定义代码)+ 工具栏 `number-format` 入口 + setSelectionNumberFormat;③ 批注编辑:`set-comment` 命令 + `model/mutations.ts` setCellComment + 框架无关 `viewer/comment-dialog-host.ts` + 右键菜单 + 导出回写 ExcelJS note(rebuild + overlay)。
 - **格式刷 ✅(1.12.0)** Format Painter。纯框架无关 core 交互:控制器 `startFormatPainter`(采样活动格完整样式)/ `isFormatPainterArmed` / `cancelFormatPainter`,刷动作在 `onMouseUp` 选区完成后 setStyle(单次撤销);工具栏 `format-painter` 入口(active 态反映待刷)+ copy 光标 + Esc 退出。三壳 + 插件 ViewerApi 暴露。
 - **Ctrl 多区域选择 ✅(1.13.0)** 不连续多选:选区模型加 selRanges[] + getSelectionRanges/hasMultiSelection,onMouseDown Ctrl 加选/非 Ctrl 清,renderer setExtraSelection 画所有区(多选不画填充柄),copyMultiSelection 逐行堆叠 TSV+HTML,getSelectionStats 跨区聚合(三壳状态栏改用)。纯 core,三壳零改动(壳只转发鼠标 + 状态栏改调 getSelectionStats)。
-- 下一批(用户已挑):**公式自动补全**(=SU 弹函数列表 + 参数提示 → 1.14.0)。
+- **内置 MIT 公式引擎 ✅(1.14.0)** 从零实现 formula/builtin(parse 词法+优先级解析 → AST;eval 求值器+错误传播;functions ~60 函数;index 依赖图+拓扑级联+循环检测)。设为 recalc 默认引擎(替代 GPL HyperFormula,零依赖);HyperFormula 仍可经 :formula-engine 注入(hyperFormulaEngineFactory)。30 单测;现有 recalc e2e 改由内置引擎驱动仍过。同版**公式自动补全**(edit/formula-autocomplete.ts,框架无关默认编辑器内置,三壳自动有):输 =SU 弹函数名 + 参数提示(FUNCTION_SIGNATURES),Enter/Tab/点选 插入 NAME(。
 - 仍未做(用户已挑但暂缓):大文件编辑性能(需用户给真实大文件 profiling)。其它:真正 workspace 多包拆分;Vue 2 子入口体积优化 (现 423 KB);rebuild 导出不搬运原文件只读透视表(仅 overlay)。
 
 每阶段测试 green + 提交,不破坏现有三壳、不破坏「默认只读零回归」、**不破坏 UI 1:1 复刻**。
