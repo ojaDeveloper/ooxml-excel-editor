@@ -189,6 +189,9 @@ export class ViewerController {
   private bubbleSig = ''
   /** 用户新建条件格式规则的自增序号(派 id `cf-u<n>`,只增不减,session 内唯一) */
   private cfSeq = 0
+  /** 格式刷(1.12.0):采样到的样式(armed 时非空)+ 是否连续刷 */
+  private painterStyle: CellStyleOverride | null = null
+  private painterSticky = false
   /** 透视表"活刷新"重入兜底:recompute 内部 setCellValue 不再触发 onModelChange,此旗保险。 */
   private pivotRefreshing = false
   private lightboxEnabled = true
@@ -1022,6 +1025,10 @@ export class ViewerController {
       this.fillRange = null
       this.render()
     }
+    // 格式刷:选区(点/拖)完成后刷上采样样式(1.12.0)
+    if (this.painterStyle && (this.dragMode === 'cell' || this.dragMode === 'row' || this.dragMode === 'col')) {
+      this.applyFormatPainterIfArmed()
+    }
     this.dragMode = 'none'
   }
 
@@ -1345,6 +1352,12 @@ export class ViewerController {
       this.hooks.onTooltip(null)
       return
     }
+    // 格式刷待刷 → copy 光标(1.12.0,优先于填充柄/选区)
+    if (this.painterStyle) {
+      sc.style.cursor = 'copy'
+      this.hooks.onTooltip(null)
+      return
+    }
     // 自动填充柄 → 十字光标(1.10.0)
     if (this.editCfg.editable && this.selActive && r.fillHandleAt(this.view, p.x, p.y)) {
       sc.style.cursor = 'crosshair'
@@ -1413,6 +1426,12 @@ export class ViewerController {
   }
 
   onKeyDown(e: KeyboardEvent): void {
+    // Esc 退出格式刷(1.12.0)
+    if (e.key === 'Escape' && this.painterStyle) {
+      this.cancelFormatPainter()
+      e.preventDefault()
+      return
+    }
     // 编辑模式下的 撤销/重做(Ctrl+Z / Ctrl+Shift+Z / Ctrl+Y)
     if (this.editCfg.editable && (e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
       if (e.shiftKey) this.edit.redo()
@@ -2674,6 +2693,52 @@ export class ViewerController {
     if (!sel) return false
     return this.setStyle(sel, { font: { color } })
   }
+  // ===== 格式刷(1.12.0,需 editable)=====
+  /** 启动格式刷:采样活动格的样式 → 进入"刷"状态;下次选区完成即刷上。sticky=连续刷。 */
+  startFormatPainter(sticky = false): boolean {
+    const a = this.selActive
+    if (!this.editCfg.editable || !a) return false
+    const st = this.edit.getCellSnapshot(a.row, a.col)?.style
+    if (!st) return false
+    this.painterStyle = {
+      font: { ...st.font },
+      fill: { ...st.fill },
+      borders: { ...st.borders },
+      hAlign: st.hAlign,
+      vAlign: st.vAlign,
+      wrapText: st.wrapText,
+      shrinkToFit: st.shrinkToFit,
+      textRotation: st.textRotation,
+      indent: st.indent,
+      numFmt: st.numFmt,
+    }
+    this.painterSticky = sticky
+    this.hooks.onSelectionChange() // 工具栏 active 态刷新
+    return true
+  }
+  /** 格式刷是否处于待刷状态(工具栏 active / 光标用)。 */
+  isFormatPainterArmed(): boolean {
+    return !!this.painterStyle
+  }
+  /** 退出格式刷。 */
+  cancelFormatPainter(): void {
+    if (!this.painterStyle) return
+    this.painterStyle = null
+    this.painterSticky = false
+    this.els.scroller.style.cursor = ''
+    this.hooks.onSelectionChange()
+  }
+  /** 选区完成后(onMouseUp)若 armed → 把采样样式刷到当前选区;非连续则退出。 */
+  private applyFormatPainterIfArmed(): void {
+    if (!this.painterStyle) return
+    const sel = this.getSelection()
+    if (sel) this.setStyle(sel, this.painterStyle)
+    if (!this.painterSticky) {
+      this.painterStyle = null
+      this.hooks.onSelectionChange()
+    }
+  }
+
   /** 给当前选区设数字格式代码(numFmt);editable 时入命令栈。1.11.0 */
   setSelectionNumberFormat(code: string): boolean {
     const sel = this.getSelection()

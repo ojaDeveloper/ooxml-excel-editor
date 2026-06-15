@@ -362,7 +362,7 @@ function Demo() {
           editableTargets={editableTargetsApplied}
           readOnlyCellStyle={highlightReadOnly}
           editor={demoSelectEditor}
-          toolbar={['find', 'filter', 'sort', 'clear-filter', 'separator', 'copy', 'pivot-table', 'conditional-format', 'number-format', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export']}
+          toolbar={['find', 'filter', 'sort', 'clear-filter', 'separator', 'copy', 'format-painter', 'pivot-table', 'conditional-format', 'number-format', 'wrap-text', 'image-tools', 'freeze', 'separator', 'template', 'separator', 'zoom', 'export']}
           onSelectionChange={() => bumpSel()}
           onCellChange={(p) => {
             bumpSel() // 颜色回显随内容/样式变更刷新

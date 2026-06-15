@@ -407,6 +407,10 @@ const myEditor: EditorResolver = (cell, pos) => {
   - 全部入撤销栈、发 `cell-change`/`image-change`、翻脏标记。(`convertImageToCell(imgIdx,row,col)` 仍保留,用于显式指定目标格。)
 - **导出往返**:`downloadXlsx()` / `exportXlsx()` 导出时,在 ExcelJS 写出后**于 zip 层回注** WPS 私有件(`cellimages.xml` + rels + media + `[Content_Types].xml`/`workbook.xml.rels` 补丁,从模型重建),原有的 + App 内新转的内嵌图导出后用 WPS 打开都正常显示。rebuild / overlay 两种保真模式均覆盖;无字节的 blob-only 图除外。
 
+### 格式刷(1.12.0)
+
+工具栏 `format-painter` 入口:先选**源格**点按钮采样其完整样式(字体/填充/边框/对齐/换行/数字格式),再**点或拖**目标格/区域即把格式刷上(单次撤销);`Esc` 或再点按钮退出,待刷时光标变 `copy`。也可 `startFormatPainter()` / `isFormatPainterArmed()` / `cancelFormatPainter()` 直调。纯框架无关 core 交互,三壳一致。
+
 ### 数字格式 / 批注 / 查找替换(1.11.0)
 
 - **查找替换**:`Ctrl+F` 打开查找栏,编辑模式下多出替换行 —— 替换输入 + 「替换」(替换当前并跳下一个)/「全部替换」(整体单次撤销),支持区分大小写 / 全字匹配,跳过只读格。
@@ -632,7 +636,7 @@ viewer.closeContextMenu()
 <ExcelViewer :toolbar="['find','filter','separator','zoom','export']" /> <!-- 控制项/顺序/分隔 -->
 <ExcelViewer :toolbar="false" />                                      <!-- 隐藏整条 -->
 ```
-- **内置 id**:`find`(查找)、`filter`(切换自动筛选 —— 文件没设也能点出下拉)、`sort`(按活动单元格所在列升序/降序;未开启自动筛选时会先按选区/已用区建立范围)、`clear-filter`(清除筛选,无筛选时禁用)、`copy`(复制选区)、`pivot-table`(透视表入口:选中带表头数据区后选择生成位置,可输出到现有工作表单元格或新建工作表;创建后打开 WPS 风格右侧字段面板,需 `pivotTable` + `editable`,功能未开启时不渲染)、`conditional-format`(条件格式管理入口:列出当前表规则可删/可编辑 + 新建全 6 类规则,需 `conditionalFormat` + `editable`,功能未开启时不渲染)、`number-format`(数字格式编辑入口:分类 + 预览 + 自定义格式代码,需 `editable`)、`wrap-text`(自动换行 toggle,WPS 风格,需 `editable`)、`image-tools`(图片工具 ▾:选区/整表/整列 浮动 ⇄ 嵌入互转,需 `editable`)、`template`(模板 ▾:仅 JSON / 模型数据源下生效;导入 .xlsx 当样式捐赠者;xlsx 数据源下禁用)、`freeze`(冻结/取消)、`zoom`(缩放下拉)、`export`(导出/打印下拉)、`'separator'`/`'|'`(分隔线)。
+- **内置 id**:`find`(查找)、`filter`(切换自动筛选 —— 文件没设也能点出下拉)、`sort`(按活动单元格所在列升序/降序;未开启自动筛选时会先按选区/已用区建立范围)、`clear-filter`(清除筛选,无筛选时禁用)、`copy`(复制选区)、`pivot-table`(透视表入口:选中带表头数据区后选择生成位置,可输出到现有工作表单元格或新建工作表;创建后打开 WPS 风格右侧字段面板,需 `pivotTable` + `editable`,功能未开启时不渲染)、`conditional-format`(条件格式管理入口:列出当前表规则可删/可编辑 + 新建全 6 类规则,需 `conditionalFormat` + `editable`,功能未开启时不渲染)、`number-format`(数字格式编辑入口:分类 + 预览 + 自定义格式代码,需 `editable`)、`format-painter`(格式刷:采样源格样式刷到目标,需 `editable`)、`wrap-text`(自动换行 toggle,WPS 风格,需 `editable`)、`image-tools`(图片工具 ▾:选区/整表/整列 浮动 ⇄ 嵌入互转,需 `editable`)、`template`(模板 ▾:仅 JSON / 模型数据源下生效;导入 .xlsx 当样式捐赠者;xlsx 数据源下禁用)、`freeze`(冻结/取消)、`zoom`(缩放下拉)、`export`(导出/打印下拉)、`'separator'`/`'|'`(分隔线)。
 - **富项类型**(`ToolbarItem`):`type:'separator'` 分隔线;`items: ToolbarItem[]` 变下拉子菜单;`disabled?(viewer)` 禁用态;`iconSvg`(内联 SVG,优先于 `icon` emoji)/ `icon` / `label` / `title` / `onClick(viewer)` / `active?(viewer)`。
 - **响应式溢出**:宽度不足时,放不下的项自动折叠进「⋯ 更多」下拉。
 - **插件贡献**:`ExcelPlugin.toolbar: ToolbarItem[]`,插件加载即追加(opt-in)。

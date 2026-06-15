@@ -853,6 +853,9 @@ const viewerApi: ViewerApi = {
   openConditionalFormatDialog: () => controller?.openConditionalFormatDialog() ?? false,
   setSelectionNumberFormat: (code) => controller?.setSelectionNumberFormat(code) ?? false,
   openNumberFormatDialog: () => controller?.openNumberFormatDialog() ?? false,
+  startFormatPainter: (sticky) => controller?.startFormatPainter(sticky) ?? false,
+  isFormatPainterArmed: () => controller?.isFormatPainterArmed() ?? false,
+  cancelFormatPainter: () => controller?.cancelFormatPainter(),
   getCellComment: (row, col) => controller?.getCellComment(row, col) ?? '',
   setCellComment: (row, col, comment) => controller?.setCellComment(row, col, comment) ?? false,
   openCommentEditor: (row, col) => controller?.openCommentEditor(row, col) ?? false,
@@ -1070,6 +1073,16 @@ function builtinTool(id: string): ResolvedToolbarItem | null {
         title: '设置单元格数字格式(数值/货币/百分比/日期/自定义)',
         disabled: !selection.value || !props.editable,
         onClick: () => controller?.openNumberFormatDialog(),
+      })
+    case 'format-painter':
+      return bi({
+        id,
+        iconSvg: I('format-painter'),
+        label: '格式刷',
+        title: '格式刷:先选源格点此采样,再点/拖目标刷上格式(Esc 取消)',
+        active: !!controller?.isFormatPainterArmed(),
+        disabled: !selection.value || !props.editable,
+        onClick: () => (controller?.isFormatPainterArmed() ? controller?.cancelFormatPainter() : controller?.startFormatPainter()),
       })
     case 'wrap-text': {
       const wrapState = controller?.getSelectionWrapState() ?? 'none'

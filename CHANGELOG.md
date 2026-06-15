@@ -2,6 +2,17 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.12.0] - 2026-06-15
+
+> 新增 **格式刷**(Format Painter)。纯框架无关 core 交互(控制器采样 + onMouseUp 刷),壳只加工具栏按钮;需 `editable`。
+
+### 新增 — 格式刷
+
+- 工具栏 `format-painter` 入口:先选**源格**点按钮采样其完整样式(字体/填充/边框/对齐/换行/数字格式),再**点或拖**目标格/区域即刷上(单次撤销);`Esc` 或再点按钮退出,待刷时光标变 `copy`。
+- 控制器 `startFormatPainter(sticky?)` / `isFormatPainterArmed()` / `cancelFormatPainter()`;刷动作在 `onMouseUp` 选区完成后应用(复用 setStyle)。三壳句柄 + 插件 `ViewerApi` 暴露;三 demo 工具栏加 `format-painter` 入口(工具栏按钮 active 态反映待刷)。
+- 测试:`e2e/format-painter.e2e.ts`(采样红底 → 刷到目标格 + undo,Vue/React/Vue2 三壳)。
+- 顺手:`toolbar` 溢出相关 e2e 宽屏断言 1280→1680(工具栏又加了按钮,宽屏才全部容纳)。基线:**389 单测 + 186 e2e**。
+
 ## [1.11.0] - 2026-06-15
 
 > 三个编辑小件合并:**查找替换补全 + 数字格式编辑器 + 批注编辑**。都复用已有引擎/对话框套路;对话框均为框架无关 DOM(三壳共用一份,UI 天然 1:1)。

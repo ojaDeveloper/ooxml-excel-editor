@@ -133,6 +133,12 @@ export interface ViewerApi {
   setSelectionNumberFormat(code: string): boolean
   /** 打开数字格式编辑对话框(框架无关 DOM,三壳共用)。需 editable + 选区。1.11.0 */
   openNumberFormatDialog(): boolean
+  /** 启动格式刷:采样活动格样式,下次选区完成即刷上。sticky=连续刷。需 editable。1.12.0 */
+  startFormatPainter(sticky?: boolean): boolean
+  /** 格式刷是否待刷(工具栏 active 态)。1.12.0 */
+  isFormatPainterArmed(): boolean
+  /** 退出格式刷。1.12.0 */
+  cancelFormatPainter(): void
   /** 读某格批注(无则 '')。1.11.0 */
   getCellComment(row: number, col: number): string
   /** 设/清某格批注(空串 = 删除)。需 editable。1.11.0 */

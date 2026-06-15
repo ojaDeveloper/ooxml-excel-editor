@@ -218,6 +218,9 @@ export interface ExcelViewerHandle {
   openConditionalFormatDialog: ViewerApi['openConditionalFormatDialog']
   setSelectionNumberFormat: ViewerApi['setSelectionNumberFormat']
   openNumberFormatDialog: ViewerApi['openNumberFormatDialog']
+  startFormatPainter: ViewerApi['startFormatPainter']
+  isFormatPainterArmed: ViewerApi['isFormatPainterArmed']
+  cancelFormatPainter: ViewerApi['cancelFormatPainter']
   getCellComment: ViewerApi['getCellComment']
   setCellComment: ViewerApi['setCellComment']
   openCommentEditor: ViewerApi['openCommentEditor']
@@ -744,6 +747,9 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       openConditionalFormatDialog: () => controllerRef.current?.openConditionalFormatDialog() ?? false,
       setSelectionNumberFormat: (code) => controllerRef.current?.setSelectionNumberFormat(code) ?? false,
       openNumberFormatDialog: () => controllerRef.current?.openNumberFormatDialog() ?? false,
+      startFormatPainter: (sticky) => controllerRef.current?.startFormatPainter(sticky) ?? false,
+      isFormatPainterArmed: () => controllerRef.current?.isFormatPainterArmed() ?? false,
+      cancelFormatPainter: () => controllerRef.current?.cancelFormatPainter(),
       getCellComment: (row, col) => controllerRef.current?.getCellComment(row, col) ?? '',
       setCellComment: (row, col, comment) => controllerRef.current?.setCellComment(row, col, comment) ?? false,
       openCommentEditor: (row, col) => controllerRef.current?.openCommentEditor(row, col) ?? false,
@@ -876,6 +882,9 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     openConditionalFormatDialog: () => controllerRef.current?.openConditionalFormatDialog() ?? false,
     setSelectionNumberFormat: (code) => controllerRef.current?.setSelectionNumberFormat(code) ?? false,
     openNumberFormatDialog: () => controllerRef.current?.openNumberFormatDialog() ?? false,
+    startFormatPainter: (sticky) => controllerRef.current?.startFormatPainter(sticky) ?? false,
+    isFormatPainterArmed: () => controllerRef.current?.isFormatPainterArmed() ?? false,
+    cancelFormatPainter: () => controllerRef.current?.cancelFormatPainter(),
     getCellComment: (row, col) => controllerRef.current?.getCellComment(row, col) ?? '',
     setCellComment: (row, col, comment) => controllerRef.current?.setCellComment(row, col, comment) ?? false,
     openCommentEditor: (row, col) => controllerRef.current?.openCommentEditor(row, col) ?? false,
@@ -1104,6 +1113,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       case 'pivot-table': return props.pivotTable ? bi({ id, iconSvg: I('pivot-table'), label: '透视表', title: '选择字段并基于当前选区创建静态透视汇总表', disabled: !selection || !props.editable, onClick: () => ctrl?.openPivotTableDialog() }) : null // 功能未开启(默认):不渲染入口
       case 'conditional-format': return props.conditionalFormat ? bi({ id, iconSvg: I('conditional-format'), label: '条件格式', title: '管理条件格式规则(新建/编辑/删除;新建套到当前选区)', disabled: !props.editable, onClick: () => ctrl?.openConditionalFormatDialog() }) : null // 功能未开启(默认):不渲染入口
       case 'number-format': return bi({ id, iconSvg: I('number-format'), label: '数字格式', title: '设置单元格数字格式(数值/货币/百分比/日期/自定义)', disabled: !selection || !props.editable, onClick: () => ctrl?.openNumberFormatDialog() })
+      case 'format-painter': return bi({ id, iconSvg: I('format-painter'), label: '格式刷', title: '格式刷:先选源格点此采样,再点/拖目标刷上格式(Esc 取消)', active: !!ctrl?.isFormatPainterArmed(), disabled: !selection || !props.editable, onClick: () => (ctrl?.isFormatPainterArmed() ? ctrl?.cancelFormatPainter() : ctrl?.startFormatPainter()) })
       case 'wrap-text': {
         const wrapState = ctrl?.getSelectionWrapState() ?? 'none'
         return bi({ id, iconSvg: I('wrap-text'), label: '自动换行', title: '自动换行(选区,WPS 风格 toggle)', active: wrapState === 'all', disabled: !selection || !props.editable, onClick: () => void ctrl?.toggleWrapTextOnSelection() })

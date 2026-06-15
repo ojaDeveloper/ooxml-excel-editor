@@ -37,7 +37,7 @@ test.describe('操作工具栏(可配置/可插件/响应式)', () => {
   })
 
   test('导出下拉(工具栏)→ 触发 PNG 下载', async ({ page }) => {
-    await page.setViewportSize({ width: 1280, height: 800 })
+    await page.setViewportSize({ width: 1680, height: 800 }) // 工具栏变长,宽屏避免「导出」溢出进「更多」
     await loadSample(page)
     const bar = page.locator('.action-toolbar')
     await bar.getByRole('button', { name: /导出/ }).first().click()
