@@ -392,8 +392,13 @@ function applyModelOntoSheet(ws: any, sheet: SheetModel): void {
   writeConditionalFormatting(ws, sheet)
 }
 
-/** WorkbookModel → .xlsx Blob(懒加载 exceljs)。overlay 模式重载原件叠加编辑,否则从模型重建。 */
-export async function workbookToXlsxBlob(workbook: WorkbookModel, opts: XlsxExportOptions = {}): Promise<Blob> {
+/**
+ * WorkbookModel → .xlsx 原始字节(`Uint8Array`,懒加载 exceljs)。overlay 模式重载原件叠加编辑,
+ * 否则从模型重建。**框架无关、纯 Node 可用**(无 DOM/Blob 依赖)——
+ * Node 侧:`fs.writeFileSync(out, await workbookToXlsxBytes(wb, { fidelity: 'overlay', sourceBuffer }))`。
+ * 浏览器侧若要触发下载,用 `workbookToXlsxBlob`(它就是本函数 + Blob 包装)。
+ */
+export async function workbookToXlsxBytes(workbook: WorkbookModel, opts: XlsxExportOptions = {}): Promise<Uint8Array> {
   checkAborted(opts.signal)
   const mod = await import('exceljs')
   const ExcelJS = ((mod as { default?: unknown }).default ?? mod) as { Workbook: new () => any }
@@ -414,7 +419,7 @@ export async function workbookToXlsxBlob(workbook: WorkbookModel, opts: XlsxExpo
     const buf = await wb.xlsx.writeBuffer()
     checkAborted(opts.signal)
     opts.onProgress?.({ stage: 'zip', ratio: 1 })
-    return finalizeBlob(buf, workbook, opts)
+    return finalizeBytes(buf, workbook, opts)
   }
 
   // 默认:从模型完整重建
@@ -433,15 +438,21 @@ export async function workbookToXlsxBlob(workbook: WorkbookModel, opts: XlsxExpo
   const buf = await wb.xlsx.writeBuffer()
   checkAborted(opts.signal)
   opts.onProgress?.({ stage: 'zip', ratio: 1 })
-  return finalizeBlob(buf, workbook, opts)
+  return finalizeBytes(buf, workbook, opts)
+}
+
+/** WorkbookModel → .xlsx Blob(浏览器下载用)。= `workbookToXlsxBytes` + Blob 包装,签名/行为不变。 */
+export async function workbookToXlsxBlob(workbook: WorkbookModel, opts: XlsxExportOptions = {}): Promise<Blob> {
+  const bytes = await workbookToXlsxBytes(workbook, opts)
+  return new Blob([bytes as BlobPart], { type: XLSX_MIME })
 }
 
 /**
- * ExcelJS 写出后:回注 WPS 单元格内嵌图(DISPIMG)私有件 + 真实 OOXML 透视表零件,再封 Blob。
+ * ExcelJS 写出后:回注 WPS 单元格内嵌图(DISPIMG)私有件 + 真实 OOXML 透视表零件,返回最终字节。
  * 透视表回注受 `opts.pivotTables` 开关控制(默认关):先搬运原文件零件(overlay 有原件时),
- * 再注 App 内创建的(编号自动避开已搬运的)。都没有时零开销。
+ * 再注 App 内创建的(编号自动避开已搬运的)。都没有时零开销。**纯字节运算,无浏览器依赖。**
  */
-function finalizeBlob(buf: ArrayBuffer, workbook: WorkbookModel, opts: XlsxExportOptions): Blob {
+function finalizeBytes(buf: ArrayBuffer, workbook: WorkbookModel, opts: XlsxExportOptions): Uint8Array {
   let bytes: Uint8Array = new Uint8Array(buf)
   if (workbook.cellImages && workbook.cellImages.size) {
     bytes = injectCellImagesIntoZip(bytes, workbook)
@@ -456,5 +467,5 @@ function finalizeBlob(buf: ArrayBuffer, workbook: WorkbookModel, opts: XlsxExpor
       /* 透视表回注失败不影响主体导出(静态结果仍在单元格里) */
     }
   }
-  return new Blob([bytes as BlobPart], { type: XLSX_MIME })
+  return bytes
 }

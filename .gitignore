@@ -32,3 +32,9 @@ docs/wps粘贴.txt
 
 # 调试用真实 .xlsx 样本(用户提供、含真实业务数据、体积大,勿提交)
 docs/*.xlsx
+
+# Node 示例脚本的产物(node examples/node-roundtrip.mjs 生成)
+examples/out.xlsx
+
+# Excel/WPS 打开文件时生成的临时锁文件(~$ 前缀)
+~$*

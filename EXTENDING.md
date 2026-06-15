@@ -248,3 +248,19 @@ const highlightNegatives = definePlugin({
 
 > **跨框架**:插件全字段框架无关,**同一份 `definePlugin` 在 Vue 和 React 壳通用**(`overlay` 返回 DOM 而非 VNode)。React 用法:`<ExcelViewer plugins={[myPlugin]} />`。
 
+
+## Headless / Node 安全 API 面
+
+`ooxml-excel-editor/core` 的下列出口**零浏览器依赖,可在纯 Node(无 DOM/canvas)直接用**。用法与可跑示例见 [README → Node 用法](./README.md#node--服务端-headless-用法) 与 [`examples/`](./examples)。
+
+**可用(纯 Node)**:
+- 打开 / 解析:`openWorkbook(src)`(一行门面)、`parseWorkbook(buffer)`(收 `ArrayBuffer | Uint8Array`,Node `Buffer` 直接传)、`loadArrayBuffer(src)`、`jsonToWorkbook(data, opts)` / `makeDefaultStyle()`(数据直建模型)。
+- 取数:`getCellText` / `getCellValue` / `getSheetData` / `getRangeData` / `sheetToJSON` / `getWorkbookJSON` / `cellDisplayText` / `formatValue`。
+- 编辑模型(框架无关,不经 viewer):`setCellValue` / `clearCell` / `setRangeValues` / `applyStyleOverride` / `mergeStyleOverride` / `setColumnWidth` / `setRowHeight` / `insertRows` / `deleteRows` / `insertCols` / `deleteCols` / `addImage` / `removeImage`,以及 `cloneWorkbook` / 命令栈 `applyCommand`。
+- 公式重算:内置 `builtinFormulaEngineFactory`(MIT、零依赖,默认)或注入 `hyperFormulaEngineFactory`(需装 `hyperformula`)。
+- 导出:`workbookToXlsxBytes(wb, opts)` → `Uint8Array`(`fs.writeFileSync` 直接落盘;`fidelity: 'overlay' + sourceBuffer` 保真往返)、`toCsv` / `toWorkbookJson`。
+
+**不可用(硬依赖浏览器 canvas / DOM,Node 调用即抛错)**:
+- `workbookToXlsxBlob`(返回 `Blob` —— Node 改用 `workbookToXlsxBytes`)、`canvasToBlob` / `canvasToDataURL` / `downloadBlob`。
+- 图片 / PNG / JPEG / **PDF 导出**、`print()`、`CanvasRenderer` / `ViewerController` 渲染、内置 `DefaultEditor`。
+- 注:`finalizeImages` 在 Node 安全跳过(图片保留 `bytes`/`mime`,不生成 blob URL);`loadArrayBuffer` 的 URL 字符串分支走 `fetch`(不支持本地路径 / `file://`)—— Node 用 `fs` 读 Buffer 传入。

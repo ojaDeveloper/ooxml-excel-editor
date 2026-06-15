@@ -47,7 +47,7 @@ src/demo-shared(三 demo 共享 CSS / 工具)→ demo-bar.css (绿色头) + demo
 
 ## 不可破坏的硬约束
 
-- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **419 单测 + 192 e2e(Vue 3 / React / Vue 2 三壳覆盖;Vue 2 e2e 跑独立 5302 dev server,见 `e2e/vue2-smoke.e2e.ts`)**。
+- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **424 单测 + 192 e2e(Vue 3 / React / Vue 2 三壳覆盖;Vue 2 e2e 跑独立 5302 dev server,见 `e2e/vue2-smoke.e2e.ts`)**。
 - **core 不依赖框架**:`src/core/**` 不得出现 `from 'vue'` / `'react'`(构建后 `dist/core.js` 也不得 import vue/react/hyperformula/exceljs —— 重依赖全动态懒加载)。
 - **三壳同构**:给 `ViewerController` 加能力后,Vue 3 壳(components/ExcelViewer.vue)、React 壳(react/ExcelViewer.tsx)、Vue 2 壳(vue2/ExcelViewer.ts)都要接上,各自 e2e 覆盖。**任何 UI 变更先 Vue 3 落地, 再 1:1 复刻到 Vue 2 + React**(详见第 7 中心原则)。
 - **默认只读、零回归**:`editable` 关闭时行为与历史完全一致;编辑能力(单元格/样式/列宽行高/图片/增删行列/公式重算/导出回写)是 **opt-in**,全建在框架无关 core 的命令栈 + 前后快照事件上(见 README「编辑」章节)。
@@ -125,6 +125,7 @@ node scripts/gen-sample.mjs   # 重新生成 public/sample.xlsx
 - **格式刷 ✅(1.12.0)** Format Painter。纯框架无关 core 交互:控制器 `startFormatPainter`(采样活动格完整样式)/ `isFormatPainterArmed` / `cancelFormatPainter`,刷动作在 `onMouseUp` 选区完成后 setStyle(单次撤销);工具栏 `format-painter` 入口(active 态反映待刷)+ copy 光标 + Esc 退出。三壳 + 插件 ViewerApi 暴露。
 - **Ctrl 多区域选择 ✅(1.13.0)** 不连续多选:选区模型加 selRanges[] + getSelectionRanges/hasMultiSelection,onMouseDown Ctrl 加选/非 Ctrl 清,renderer setExtraSelection 画所有区(多选不画填充柄),copyMultiSelection 逐行堆叠 TSV+HTML,getSelectionStats 跨区聚合(三壳状态栏改用)。纯 core,三壳零改动(壳只转发鼠标 + 状态栏改调 getSelectionStats)。
 - **内置 MIT 公式引擎 ✅(1.14.0)** 从零实现 formula/builtin(parse 词法+优先级解析 → AST;eval 求值器+错误传播;functions ~60 函数;index 依赖图+拓扑级联+循环检测)。设为 recalc 默认引擎(替代 GPL HyperFormula,零依赖);HyperFormula 仍可经 :formula-engine 注入(hyperFormulaEngineFactory)。30 单测;现有 recalc e2e 改由内置引擎驱动仍过。同版**公式自动补全**(edit/formula-autocomplete.ts,框架无关默认编辑器内置,三壳自动有):输 =SU 弹函数名 + 参数提示(FUNCTION_SIGNATURES),Enter/Tab/点选 插入 NAME(。
-- 仍未做(用户已挑但暂缓):大文件编辑性能(需用户给真实大文件 profiling)。其它:真正 workspace 多包拆分;Vue 2 子入口体积优化 (现 423 KB);rebuild 导出不搬运原文件只读透视表(仅 overlay)。
+- **纯 Node(headless)用法闭环 ✅(1.15.0)** 让"解析取数"+"高保真往返编辑"在无浏览器/无 canvas 的 Node 里好用,纯增量零回归。① 框架无关 core 加 Node 友好入口/出口:`openWorkbook(src)`(loadArrayBuffer+parseWorkbook 一行门面,直接吃 Node Buffer);`parseWorkbook` 入参放宽 `ArrayBuffer|Uint8Array` 内部归一化;`workbookToXlsxBytes` 返回 `Uint8Array`(fs 直接落盘,`workbookToXlsxBlob` 改为它+Blob 包装、签名不变);`jsonToWorkbook`/`makeDefaultStyle` 补进 core 出口(数据直建模型)。② 文档:README 加「Node/headless 用法」节 + 英文段,EXTENDING 加「Headless/Node 安全 API 面」,**修正过时安装文档**(exceljs/fflate/jspdf/hyperformula 1.3.2+ 已内联,去掉各处 `npm i ... exceljs`)。③ `examples/node-*.mjs` 可跑示例 + `src/core/__tests__/node-headless.test.ts` 回归网(5 测)。**不做**服务端 canvas 渲染(PNG/PDF/print 仍需浏览器)。
+- 仍未做(用户已挑但暂缓):大文件编辑性能(需用户给真实大文件 profiling)。其它:真正 workspace 多包拆分;Vue 2 子入口体积优化 (现 423 KB);rebuild 导出不搬运原文件只读透视表(仅 overlay);服务端渲染(node-canvas 垫片)。
 
 每阶段测试 green + 提交,不破坏现有三壳、不破坏「默认只读零回归」、**不破坏 UI 1:1 复刻**。

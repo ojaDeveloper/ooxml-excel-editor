@@ -11,16 +11,26 @@ import { attachSparklines } from './sparkline-parser'
 import { attachPageBreaks } from './page-break-parser'
 import { attachPivotTables } from './pivot-parser'
 
-export async function parseWorkbook(buffer: ArrayBuffer, onProgress?: ProgressFn): Promise<WorkbookModel> {
+export async function parseWorkbook(
+  buffer: ArrayBuffer | Uint8Array,
+  onProgress?: ProgressFn,
+): Promise<WorkbookModel> {
+  // 归一化输入: 接受 ArrayBuffer 或 Uint8Array(含 Node Buffer —— 它是 Uint8Array 子类),
+  // 便于纯 Node 直接传 fs.readFileSync() 的结果。ArrayBuffer 老调用 100% 兼容。
+  const buf: ArrayBuffer =
+    buffer instanceof Uint8Array
+      ? (buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer)
+      : buffer
+
   // 1. 原始包(用于 theme / drawings / charts) —— 复用一份 buffer
-  const pkg = openPackage(buffer.slice(0))
+  const pkg = openPackage(buf.slice(0))
   const themeColors = parseTheme(pkg)
 
   // 2. ExcelJS 主解析(黑盒,无法报进度 → 进入不确定态)
   onProgress?.({ stage: 'parse' })
   const ExcelJS = (await import('exceljs')).default
   const wb = new ExcelJS.Workbook()
-  await wb.xlsx.load(buffer)
+  await wb.xlsx.load(buf)
 
   // 3. 构建中间模型(我们自己的遍历,可报真实进度)
   const sheets = buildSheets(wb, themeColors, onProgress)

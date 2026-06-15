@@ -5,10 +5,14 @@
 
 // ---- 解析 / 加载 / 收尾 ----
 export { parseWorkbook } from './parser'
+export { openWorkbook } from './open' // 一行门面: loadArrayBuffer + parseWorkbook(Node/浏览器通用)
 export { loadArrayBuffer } from './loader'
 export type { ExcelSource } from './loader'
 export { detectFormat, finalizeImages, friendlyError, revokeImages } from './finalize'
 export type { ParseProgress } from './progress'
+// 从数据(2D 数组 / 对象数组)直建模型 —— 配合 workbookToXlsxBytes 可在纯 Node 从零生成 .xlsx
+export { jsonToWorkbook, isWorkbookModel } from './loader-json'
+export type { JsonInput, JsonLoadOptions } from './loader-json'
 
 // ---- 中间数据模型 + 读数据 API ----
 export {
@@ -23,7 +27,7 @@ export {
   getWorkbookJSON,
 } from './model/data-access'
 export type { CellValue, ReadOptions, SheetToJSONOptions } from './model/data-access'
-export { cellKey } from './model/types'
+export { cellKey, makeDefaultStyle } from './model/types'
 export type {
   WorkbookModel,
   SheetModel,
@@ -96,7 +100,7 @@ export {
 export type { StructOp, StructSnapshot } from './model/structure'
 // ---- 数据导出(E8;一份数据层 → xlsx/json/csv) ----
 export { toCsv, toWorkbookJson } from './export/data-export'
-export { workbookToXlsxBlob } from './export/xlsx-writer'
+export { workbookToXlsxBlob, workbookToXlsxBytes } from './export/xlsx-writer'
 export type { XlsxExportOptions } from './export/xlsx-writer'
 export { buildCellSnapshot, cloneCell } from './model/snapshot'
 export type { CellSnapshot } from './model/snapshot'

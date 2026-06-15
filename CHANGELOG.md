@@ -2,6 +2,23 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.15.0] - 2026-06-15
+
+> 纯 Node(headless)用法闭环 —— 让"解析取数"与"高保真往返编辑"在无浏览器/无 canvas 的 Node 里好用。纯增量,默认行为不变、零回归。
+
+### 新增 — Node 友好的入口 / 出口(框架无关 core)
+
+- **`openWorkbook(src)`**:一行门面 = `loadArrayBuffer` 归一化 + `parseWorkbook`,Node 可直接吃 `fs.readFileSync()` 的 **Buffer**(Buffer 是 Uint8Array 子类),浏览器侧仍接受 File/Blob/ArrayBuffer/URL。
+- **`parseWorkbook` 放宽入参** 为 `ArrayBuffer | Uint8Array` 并在内部归一化 —— 老 ArrayBuffer 调用 100% 兼容,Node 传 Buffer/Uint8Array 不再 TS 报错或踩坑。
+- **`workbookToXlsxBytes(wb, opts)`**:返回 `Uint8Array`(不是浏览器 `Blob`),纯 Node `fs.writeFileSync` 直接落盘;`fidelity: 'overlay' + sourceBuffer` 保真往返。`workbookToXlsxBlob` 改为它 + Blob 包装,签名/行为不变。
+- **导出建表 API**:`jsonToWorkbook` / `isWorkbookModel` / `makeDefaultStyle`(及 `JsonInput`/`JsonLoadOptions` 类型)补进 core 出口 —— 可在 Node 从数据(2D 数组 / 对象数组)直建模型再 `workbookToXlsxBytes` 生成 .xlsx。四入口同源,各壳自动可见。
+
+### 文档 / 示例 / 测试
+
+- README 新增 **「Node / 服务端 (headless) 用法」** 节(取数 / 高保真往返 / 数据建表三段可跑代码 + headless 不可用清单);英文区加对应段。EXTENDING.md 加 **「Headless / Node 安全 API 面」**(纯 Node 可用 vs 需浏览器的导出清单)。
+- **修正过时安装文档**:`exceljs` / `fflate` / `jspdf` / `hyperformula` 1.3.2+ 已**内联进 dist**,README 各处 `npm i ... exceljs` → 去掉(只需装 framework;纯 Node 仅 `npm i ooxml-excel-editor`)。入口表 peer 列 + "exceljs 为 peer" 旧述一并更正。
+- 新增 [`examples/node-extract.mjs`](./examples/node-extract.mjs) / [`examples/node-roundtrip.mjs`](./examples/node-roundtrip.mjs) 可跑示例;新增 `src/core/__tests__/node-headless.test.ts` 回归网(openWorkbook 吃 Buffer / 取数 / 往返 bytes / 数据建表,5 测)。
+
 ## [1.14.1] - 2026-06-15
 
 > 文档审计 + 入口出口修正(无运行时行为变更)。一次"保证接入/二开都没问题"的体检。
