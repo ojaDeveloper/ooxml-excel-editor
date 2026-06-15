@@ -2,6 +2,18 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.13.0] - 2026-06-15
+
+> 新增 **不连续多区域选择**(Ctrl/⌘ + 点击)。选区模型从单矩形扩成多矩形;纯框架无关 core 交互,壳只转发鼠标。
+
+### 新增 — Ctrl 多区域选择
+
+- **Ctrl/⌘ + 点击** 行头 / 列头 / 单元格 → 把当前选区收进多选集再起新区,**加选不相邻**区域(Shift 仍是连续区间,已有);普通点击 / 键盘导航 / `selectCell` / 全选回到单选。
+- 选区模型加 `selRanges[]` + `getSelectionRanges()`(全部矩形,末个为活动区)/ `hasMultiSelection()`;`canvas-renderer` 加 `setExtraSelection` 画所有附加区(填充 + 边框;多选时不画自动填充柄,对齐 Excel)。
+- **复制**:多选时各区按出现顺序**逐行堆叠**成块 → TSV + HTML 表写剪贴板(覆盖最常见的"Ctrl 点多个行头复制非相邻行",粘到 Excel/WPS / app 内都成堆叠块)。
+- **状态栏统计**跨所有选区聚合(count/sum/avg/min/max);新增控制器 `getSelectionStats()`,三壳状态栏改用它。
+- 三壳句柄 + 插件 `ViewerApi` 暴露 `getSelectionRanges` / `hasMultiSelection`。测试:`e2e/multi-select.e2e.ts`(Ctrl+点击两不邻行头 → 2 区域 + 回单选,Vue/React/Vue2)。基线:**389 单测 + 189 e2e**。
+
 ## [1.12.0] - 2026-06-15
 
 > 新增 **格式刷**(Format Painter)。纯框架无关 core 交互(控制器采样 + onMouseUp 刷),壳只加工具栏按钮;需 `editable`。

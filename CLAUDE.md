@@ -47,7 +47,7 @@ src/demo-shared(三 demo 共享 CSS / 工具)→ demo-bar.css (绿色头) + demo
 
 ## 不可破坏的硬约束
 
-- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **389 单测 + 186 e2e(Vue 3 / React / Vue 2 三壳覆盖;Vue 2 e2e 跑独立 5302 dev server,见 `e2e/vue2-smoke.e2e.ts`)**。
+- **测试是回归网**:改动后 `npm run typecheck` + `npm test`(单测)+ `npm run test:e2e`(Playwright 真浏览器)+ `npm run build` 必须全绿。当前基线 **389 单测 + 189 e2e(Vue 3 / React / Vue 2 三壳覆盖;Vue 2 e2e 跑独立 5302 dev server,见 `e2e/vue2-smoke.e2e.ts`)**。
 - **core 不依赖框架**:`src/core/**` 不得出现 `from 'vue'` / `'react'`(构建后 `dist/core.js` 也不得 import vue/react/hyperformula/exceljs —— 重依赖全动态懒加载)。
 - **三壳同构**:给 `ViewerController` 加能力后,Vue 3 壳(components/ExcelViewer.vue)、React 壳(react/ExcelViewer.tsx)、Vue 2 壳(vue2/ExcelViewer.ts)都要接上,各自 e2e 覆盖。**任何 UI 变更先 Vue 3 落地, 再 1:1 复刻到 Vue 2 + React**(详见第 7 中心原则)。
 - **默认只读、零回归**:`editable` 关闭时行为与历史完全一致;编辑能力(单元格/样式/列宽行高/图片/增删行列/公式重算/导出回写)是 **opt-in**,全建在框架无关 core 的命令栈 + 前后快照事件上(见 README「编辑」章节)。
@@ -123,7 +123,8 @@ node scripts/gen-sample.mjs   # 重新生成 public/sample.xlsx
 - **自动填充柄 ✅(1.10.0)** Excel/WPS 拖拽填充。纯框架无关 core canvas 交互(`edit/autofill.ts` 序列引擎 + `canvas-renderer` 画柄/命中/虚线预览 + 控制器 `fill` 拖拽模式 `setCellsBatch` 单次撤销),三壳零改动自动获得;需 `editable`。序列:数值等差/日期/前缀+末尾整数文本/星期月份循环/兜底复制 + Ctrl 翻转复制↔序列。v1 填值不复制格式。
 - **查找替换 + 数字格式编辑器 + 批注编辑 ✅(1.11.0)** 三个编辑小件合并。① 查找替换:控制器 setFindReplace/replaceCurrent/replaceAll(全部替换单次撤销),三壳查找栏加替换行(editable 才显示);② 数字格式编辑器:框架无关 `viewer/number-format-dialog-host.ts`(分类 + 预览复用 number-format 引擎 + 自定义代码)+ 工具栏 `number-format` 入口 + setSelectionNumberFormat;③ 批注编辑:`set-comment` 命令 + `model/mutations.ts` setCellComment + 框架无关 `viewer/comment-dialog-host.ts` + 右键菜单 + 导出回写 ExcelJS note(rebuild + overlay)。
 - **格式刷 ✅(1.12.0)** Format Painter。纯框架无关 core 交互:控制器 `startFormatPainter`(采样活动格完整样式)/ `isFormatPainterArmed` / `cancelFormatPainter`,刷动作在 `onMouseUp` 选区完成后 setStyle(单次撤销);工具栏 `format-painter` 入口(active 态反映待刷)+ copy 光标 + Esc 退出。三壳 + 插件 ViewerApi 暴露。
-- 下一批(用户已挑):**Ctrl 多区域选择**(不连续选区,选区模型单矩形→多矩形,牵动渲染/复制/统计/键鼠,大改 → 1.13.0)、**公式自动补全**(=SU 弹函数列表 + 参数提示 → 1.14.0)。
+- **Ctrl 多区域选择 ✅(1.13.0)** 不连续多选:选区模型加 selRanges[] + getSelectionRanges/hasMultiSelection,onMouseDown Ctrl 加选/非 Ctrl 清,renderer setExtraSelection 画所有区(多选不画填充柄),copyMultiSelection 逐行堆叠 TSV+HTML,getSelectionStats 跨区聚合(三壳状态栏改用)。纯 core,三壳零改动(壳只转发鼠标 + 状态栏改调 getSelectionStats)。
+- 下一批(用户已挑):**公式自动补全**(=SU 弹函数列表 + 参数提示 → 1.14.0)。
 - 仍未做(用户已挑但暂缓):大文件编辑性能(需用户给真实大文件 profiling)。其它:真正 workspace 多包拆分;Vue 2 子入口体积优化 (现 423 KB);rebuild 导出不搬运原文件只读透视表(仅 overlay)。
 
 每阶段测试 green + 提交,不破坏现有三壳、不破坏「默认只读零回归」、**不破坏 UI 1:1 复刻**。

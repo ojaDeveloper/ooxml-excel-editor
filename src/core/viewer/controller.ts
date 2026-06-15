@@ -209,6 +209,8 @@ export class ViewerController {
   private selAnchor: Cell | null = null // 固定角(扩选时不动)
   private selActive: Cell | null = null // 活动角(移动/扩选时变)
   private selMode: 'range' | 'rows' | 'cols' = 'range'
+  /** 不连续多区域(1.13.0):Ctrl+点击已提交的"附加选区";当前(anchor/active)是活动区,总选区 = 这些 + 当前。 */
+  private selRanges: MergeRange[] = []
 
   // ---- 拖拽态 ----
   private dragMode: 'none' | 'cell' | 'row' | 'col' | 'resize-col' | 'resize-row' | 'image' | 'fill' = 'none'
@@ -357,6 +359,7 @@ export class ViewerController {
     const r = this.renderer
     if (!r) return
     r.setSelection(this.getSelection())
+    r.setExtraSelection(this.selRanges) // 不连续多选附加区(1.13.0)
     r.render(this.view)
     if (this.sheet) this.overlays.position(this.sheet, r, this.view)
     this.editorHost.position() // 活动编辑器随滚动/缩放跟随(无则 no-op)
@@ -650,6 +653,33 @@ export class ViewerController {
     return this.selActive
   }
 
+  /** 全部选区(不连续多选时含多个矩形;末个为当前活动区)。空选返 []。1.13.0 */
+  getSelectionRanges(): MergeRange[] {
+    const cur = this.getSelection()
+    return cur ? [...this.selRanges, cur] : [...this.selRanges]
+  }
+  /** 是否处于不连续多区域选择(>1 个矩形)。 */
+  hasMultiSelection(): boolean {
+    return this.selRanges.length > 0
+  }
+
+  /** 选区统计(状态栏用):多选时跨所有区域聚合(count/sum/min/max/avg)。空返 null。1.13.0 */
+  getSelectionStats(): { count: number; numCount: number; sum: number; avg: number; min: number; max: number } | null {
+    const r = this.renderer
+    const ranges = this.getSelectionRanges()
+    if (!r || !ranges.length) return null
+    if (ranges.length === 1) return r.selectionStats(ranges[0])
+    let count = 0, numCount = 0, sum = 0, min = Infinity, max = -Infinity
+    for (const rg of ranges) {
+      const s = r.selectionStats(rg)
+      count += s.count
+      numCount += s.numCount
+      sum += s.sum
+      if (s.numCount) { min = Math.min(min, s.min); max = Math.max(max, s.max) }
+    }
+    return { count, numCount, sum, avg: numCount ? sum / numCount : 0, min: numCount ? min : 0, max: numCount ? max : 0 }
+  }
+
   /**
    * 活动格(或指定格)在公式栏里**可编辑的字符串**:
    * 公式 → `=...`;数值 → 原始数字串(非格式化,避免编辑货币/千分位被当文本);布尔 → TRUE/FALSE;
@@ -699,6 +729,7 @@ export class ViewerController {
     this.selAnchor = null
     this.selActive = null
     this.selMode = 'range'
+    this.selRanges = []
     this.hooks.onSelectionChange()
   }
 
@@ -707,6 +738,7 @@ export class ViewerController {
     const r = this.renderer
     if (!r) return
     this.selMode = 'range'
+    this.selRanges = []
     this.selAnchor = { row: 0, col: 0 }
     this.selActive = { row: r.metrics.rows - 1, col: r.metrics.cols - 1 }
     this.hooks.onSelectionChange()
@@ -715,6 +747,7 @@ export class ViewerController {
   /** 选中单个单元格并滚动到视图(查找定位用);range 模式,anchor=active */
   selectCell(row: number, col: number): void {
     this.selMode = 'range'
+    this.selRanges = []
     this.selAnchor = { row, col }
     this.selActive = { row, col }
     this.scrollActiveIntoView()
@@ -747,6 +780,7 @@ export class ViewerController {
   /** 命令式设选区(anchor=左上, active=右下) */
   setSelectionRange(range: MergeRange): void {
     this.selMode = 'range'
+    this.selRanges = []
     this.selAnchor = { row: range.top, col: range.left }
     this.selActive = { row: range.bottom, col: range.right }
     this.hooks.onSelectionChange()
@@ -902,6 +936,18 @@ export class ViewerController {
     const hit = this.hitRegion(e)
     this.dragMoved = false
     this.dragStartXY = this.localXY(e)
+    // 不连续多选(1.13.0):Ctrl/⌘ + 点击 行头/列头/格 → 把当前选区收进多选集,再起新区;非 Ctrl → 清多选
+    const ctrlAdd = (e.ctrlKey || e.metaKey) && !e.shiftKey
+    if (hit.region === 'row' || hit.region === 'col' || hit.region === 'cell') {
+      if (ctrlAdd) {
+        const cur = this.getSelection()
+        if (cur) this.selRanges.push(cur)
+      } else {
+        this.selRanges = []
+      }
+    } else {
+      this.selRanges = []
+    }
     if (hit.region === 'corner') {
       this.selectAll()
       this.dragMode = 'none'
@@ -1505,6 +1551,7 @@ export class ViewerController {
       col = m.left
     }
     this.selMode = 'range'
+    this.selRanges = [] // 键盘导航 → 回到单选
     this.selActive = { row, col }
     const extend = e.shiftKey && e.key !== 'Tab'
     if (!extend) this.selAnchor = { row, col }
@@ -1553,6 +1600,7 @@ export class ViewerController {
   // ====================== 复制 ======================
 
   async copySelection(): Promise<void> {
+    if (this.selRanges.length > 0) return this.copyMultiSelection() // 不连续多选 → 堆叠复制(1.13.0)
     const r = this.renderer
     const s = this.getSelection()
     const sheet = this.sheet
@@ -1660,6 +1708,47 @@ export class ViewerController {
       }
     } catch {
       /* 某些环境无剪贴板权限，静默忽略 */
+    }
+  }
+
+  /**
+   * 不连续多选复制(1.13.0):把各区域按出现顺序**逐行堆叠**成一个块 → TSV + HTML 表写剪贴板。
+   * 覆盖最常见场景(Ctrl 点多个行头复制非相邻行);列对齐以各区自身宽度。粘到 Excel/WPS / app 内都成堆叠块。
+   * 注:不带 ooxml-clip 快照(多区无单一矩形快照),app 内粘贴走 HTML 解析(值 + 基本样式)。
+   */
+  private async copyMultiSelection(): Promise<void> {
+    const r = this.renderer
+    const sheet = this.sheet
+    if (!r || !sheet) return
+    const lines: string[] = []
+    const htmlRows: string[] = []
+    for (const rg of this.getSelectionRanges()) {
+      const rowEnd = Math.min(rg.bottom, rg.top + 4999)
+      const colEnd = Math.min(rg.right, rg.left + 255)
+      for (let row = rg.top; row <= rowEnd; row++) {
+        const cells: string[] = []
+        const htmlCells: string[] = []
+        for (let col = rg.left; col <= colEnd; col++) {
+          const text = r.cellText(row, col) ?? ''
+          cells.push(text.replace(/[\t\n]/g, ' '))
+          const css = r.cellInlineStyle(row, col)
+          htmlCells.push(`<td${css ? ` style="${css}"` : ''}>${escapeHtml(text)}</td>`)
+        }
+        lines.push(cells.join('\t'))
+        htmlRows.push(`<tr>${htmlCells.join('')}</tr>`)
+      }
+    }
+    const tsv = lines.join('\n')
+    const html = `<table border="1" style="border-collapse:collapse">${htmlRows.join('')}</table>`
+    try {
+      const ClipItem = (window as unknown as { ClipboardItem?: typeof ClipboardItem }).ClipboardItem
+      if (ClipItem && navigator.clipboard?.write) {
+        await navigator.clipboard.write([new ClipItem({ 'text/plain': new Blob([tsv], { type: 'text/plain' }), 'text/html': new Blob([html], { type: 'text/html' }) })])
+      } else {
+        await navigator.clipboard.writeText(tsv)
+      }
+    } catch {
+      /* 无剪贴板权限静默忽略 */
     }
   }
 

@@ -631,9 +631,7 @@ function fbKeydown(e: KeyboardEvent) {
 }
 const stats = computed(() => {
   void selVersion.value
-  const r = renderer.value
-  const s = controller?.getSelection() ?? null
-  return r && s ? r.selectionStats(s) : null
+  return controller?.getSelectionStats() ?? null // 多选时跨区聚合(1.13.0)
 })
 
 function fmtNum(n: number): string {
@@ -833,6 +831,8 @@ const viewerApi: ViewerApi = {
     if (workbook.value?.sheets[i]) activeSheet.value = i
   },
   getSelection: () => selection.value,
+  getSelectionRanges: () => controller?.getSelectionRanges() ?? [],
+  hasMultiSelection: () => controller?.hasMultiSelection() ?? false,
   setSelection: programmaticSetSelection,
   scrollToCell: (row, col, opts) => controller?.scrollToCell(row, col, opts) ?? false,
   rectOf,

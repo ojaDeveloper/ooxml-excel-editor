@@ -88,6 +88,10 @@ export interface ViewerApi {
   setActiveSheet(index: number): void
   getSelection(): MergeRange | null
   setSelection(range: MergeRange): void
+  /** 全部选区(不连续多选含多个矩形;末个为活动区)。1.13.0 */
+  getSelectionRanges(): MergeRange[]
+  /** 是否处于不连续多区域选择(Ctrl+点击得到 >1 个矩形)。1.13.0 */
+  hasMultiSelection(): boolean
   /** 滚动到指定单元格;select=true 时同步选中目标格。 */
   scrollToCell(row: number, col: number, opts?: { select?: boolean }): boolean
   rectOf(row: number, col: number): Rect | null

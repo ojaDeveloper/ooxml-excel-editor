@@ -199,6 +199,8 @@ export interface ExcelViewerHandle {
   setActiveSheet: (i: number) => void
   getSelection: () => MergeRange | null
   setSelection: (range: MergeRange) => void
+  getSelectionRanges: ViewerApi['getSelectionRanges']
+  hasMultiSelection: ViewerApi['hasMultiSelection']
   scrollToCell: (row: number, col: number, opts?: { select?: boolean }) => boolean
   rectOf: (row: number, col: number) => { x: number; y: number; w: number; h: number } | null
   rectOfRange: (range: MergeRange) => { x: number; y: number; w: number; h: number } | null
@@ -727,6 +729,8 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       getActiveSheet: () => activeSheet,
       setActiveSheet: (i) => workbook?.sheets[i] && setActiveSheet(i),
       getSelection: () => controllerRef.current?.getSelection() ?? null,
+      getSelectionRanges: () => controllerRef.current?.getSelectionRanges() ?? [],
+      hasMultiSelection: () => controllerRef.current?.hasMultiSelection() ?? false,
       setSelection: (range) => controllerRef.current?.setSelectionRange(range),
       scrollToCell: (row, col, opts) => controllerRef.current?.scrollToCell(row, col, opts) ?? false,
       rectOf: (row, col) => controllerRef.current?.rectOf(row, col) ?? null,
@@ -862,6 +866,8 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
       if (workbookRef.current?.sheets[i]) setActiveSheet(i)
     },
     getSelection: () => controllerRef.current?.getSelection() ?? null,
+    getSelectionRanges: () => controllerRef.current?.getSelectionRanges() ?? [],
+    hasMultiSelection: () => controllerRef.current?.hasMultiSelection() ?? false,
     setSelection: (range) => controllerRef.current?.setSelectionRange(range),
     scrollToCell: (row, col, opts) => controllerRef.current?.scrollToCell(row, col, opts) ?? false,
     rectOf: (row, col) => controllerRef.current?.rectOf(row, col) ?? null,
@@ -1070,7 +1076,7 @@ export const ExcelViewer = forwardRef<ExcelViewerHandle, ExcelViewerProps>(funct
     selection && !(selection.top === selection.bottom && selection.left === selection.right)
       ? `${colIndexToLetters(selection.left)}${selection.top + 1}:${colIndexToLetters(selection.right)}${selection.bottom + 1}`
       : ''
-  const stats = renderer && selection ? renderer.selectionStats(selection) : null
+  const stats = controller?.getSelectionStats() ?? null // 多选时跨区聚合(1.13.0)
   const findState = controller?.getFindState() ?? { query: '', matchCase: false, wholeCell: false, count: 0, index: -1, replace: '' }
 
   // ---- 工具栏配置 (1:1 跟 Vue 3 SFC builtinTool / resolveItem / resolvedToolbar) ----

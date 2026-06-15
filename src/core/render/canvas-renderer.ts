@@ -226,6 +226,11 @@ export class CanvasRenderer {
   setFillPreview(range: MergeRange | null): void {
     this.fillPreview = range
   }
+  /** 不连续多选的附加区域(1.13.0;不含 active 区,active 区仍走 setSelection)。 */
+  private extraSelection: MergeRange[] = []
+  setExtraSelection(ranges: MergeRange[]): void {
+    this.extraSelection = ranges
+  }
 
   // ---------------- 查找 ----------------
   private findHits: { row: number; col: number }[] = []
@@ -788,8 +793,18 @@ export class CanvasRenderer {
     ctx.beginPath()
     ctx.rect(hw, hh, view.width - hw, view.height - hh)
     ctx.clip()
-    // 单格选区不填充(像 Excel 的活动单元格),多格才铺淡蓝
-    const single = sel.top === sel.bottom && sel.left === sel.right
+    // 不连续多选的附加区域:先画(填充 + 边框,无填充柄;1.13.0)
+    for (const er of this.extraSelection) {
+      const etl = this.screenRectOfCell(view, er.top, er.left)
+      const ebr = this.screenRectOfCell(view, er.bottom, er.right)
+      ctx.fillStyle = this.theme.selFill
+      ctx.fillRect(etl.x, etl.y, ebr.x + ebr.w - etl.x, ebr.y + ebr.h - etl.y)
+      ctx.strokeStyle = this.theme.selBorder
+      ctx.lineWidth = 2
+      ctx.strokeRect(Math.round(etl.x) + 1, Math.round(etl.y) + 1, Math.round(ebr.x + ebr.w - etl.x) - 2, Math.round(ebr.y + ebr.h - etl.y) - 2)
+    }
+    // 单格选区不填充(像 Excel 的活动单元格),多格才铺淡蓝;多选时活动区也铺底好区分
+    const single = sel.top === sel.bottom && sel.left === sel.right && this.extraSelection.length === 0
     if (!single) {
       ctx.fillStyle = this.theme.selFill
       ctx.fillRect(x, y, w, h)
@@ -797,8 +812,8 @@ export class CanvasRenderer {
     ctx.strokeStyle = this.theme.selBorder
     ctx.lineWidth = 2
     ctx.strokeRect(Math.round(x) + 1, Math.round(y) + 1, Math.round(w) - 2, Math.round(h) - 2)
-    // 自动填充柄:选区右下角的小方块(editable 才画;1.10.0)
-    if (this.showFillHandle) {
+    // 自动填充柄:选区右下角的小方块(editable 才画;1.10.0)。不连续多选时不画(对齐 Excel)
+    if (this.showFillHandle && this.extraSelection.length === 0) {
       const hr = this.fillHandleRect(view)
       if (hr) {
         ctx.fillStyle = this.theme.selBorder

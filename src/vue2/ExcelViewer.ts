@@ -512,9 +512,7 @@ export default defineComponent({
     })
     const stats = computed(() => {
       void selVersion.value
-      const r = controllerRef.value?.renderer
-      const s = controllerRef.value?.getSelection() ?? null
-      return r && s ? r.selectionStats(s) : null
+      return controllerRef.value?.getSelectionStats() ?? null // 多选时跨区聚合(1.13.0)
     })
     function fmtNum(n: number): string {
       if (!isFinite(n)) return '—'
@@ -649,6 +647,8 @@ export default defineComponent({
       getActiveSheet: () => activeSheet.value,
       setActiveSheet: (i: number) => { if (workbook.value?.sheets[i]) activeSheet.value = i },
       getSelection: () => selection.value,
+      getSelectionRanges: () => controllerRef.value?.getSelectionRanges() ?? [],
+      hasMultiSelection: () => controllerRef.value?.hasMultiSelection() ?? false,
       setSelection: (range: MergeRange) => controllerRef.value?.setSelectionRange(range),
       scrollToCell: (row: number, col: number, opts?: { select?: boolean }) => controllerRef.value?.scrollToCell(row, col, opts) ?? false,
       rectOf: (row: number, col: number) => controllerRef.value?.rectOf(row, col) ?? null,
