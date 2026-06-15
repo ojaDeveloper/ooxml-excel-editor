@@ -1,8 +1,13 @@
 # ooxml-excel-editor
 
+[![npm version](https://img.shields.io/npm/v/ooxml-excel-editor.svg)](https://www.npmjs.com/package/ooxml-excel-editor)
+[![npm downloads](https://img.shields.io/npm/dm/ooxml-excel-editor.svg)](https://www.npmjs.com/package/ooxml-excel-editor)
+[![CI](https://github.com/ojaDeveloper/ooxml-excel-editor/actions/workflows/ci.yml/badge.svg)](https://github.com/ojaDeveloper/ooxml-excel-editor/actions/workflows/ci.yml)
+[![license](https://img.shields.io/npm/l/ooxml-excel-editor.svg)](./LICENSE)
+
 > Vue 3 + **Vue 2** + React 高保真 **.xlsx 预览 / 编辑组件** —— Canvas 渲染,**默认只读预览,可选开启编辑**。从零实现解析与渲染,尽量还原微软 Excel 打开工作簿的观感。**三个壳 UI 1:1 对齐**(Vue 3 SFC 是标准,Vue 2 / React 复刻)。
 
-[English](#english) · 中文
+**🔗 在线 demo(直接试用):https://ojadeveloper.github.io/ooxml-excel-editor/** · [English](#english) · 中文
 
 ## ⚡ 快速开始
 
@@ -523,7 +528,9 @@ MIT
 <a name="english"></a>
 ## English
 
-A **Vue 3 + React high-fidelity `.xlsx` preview & edit component** with a from-scratch parser and canvas renderer. Renders cells, number formats, merges, conditional formatting, images, charts (via ECharts), sparklines, comments, data validation, frozen panes, and supports selection / copy / hyperlinks. **Read-only by default**; set `editable` to enable editing — cell values / styles / column-row sizes / floating images / insert-delete rows-cols, with undo-redo, before/after full-snapshot events, dirty tracking + reset-to-original, swappable formula recalc engine, custom cell editors, and **export back to .xlsx / JSON / CSV**. Parsing runs in a Web Worker (with main-thread fallback). `vue` / `react` / `exceljs` are peer dependencies; `echarts` / `jspdf` / `hyperformula` are optional peers (charts / PDF / formula recalc).
+**🔗 Live demo: https://ojadeveloper.github.io/ooxml-excel-editor/**
+
+A **Vue 3 + Vue 2 + React high-fidelity `.xlsx` preview & edit component** with a from-scratch parser and canvas renderer. Renders cells, number formats, merges, conditional formatting, images, charts (via ECharts), sparklines, comments, data validation, frozen panes, and supports selection / copy / hyperlinks. **Read-only by default**; set `editable` to enable editing — cell values / styles / column-row sizes / floating images / insert-delete rows-cols, with undo-redo, before/after full-snapshot events, dirty tracking + reset-to-original, swappable formula recalc engine, custom cell editors, and **export back to .xlsx / JSON / CSV**. Parsing runs in a Web Worker (with main-thread fallback). `vue` / `react` / `exceljs` are peer dependencies; `echarts` / `jspdf` / `hyperformula` are optional peers (charts / PDF / formula recalc).
 
 ```bash
 npm i ooxml-excel-editor vue exceljs
