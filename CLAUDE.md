@@ -4,7 +4,7 @@
 
 ## ★ 七条中心原则(任何后续开发都要围绕,不得破坏)
 
-1. **好文档** —— 同时服务**调用方**(怎么用)和**二开者**(怎么改/扩展)。改公开 API/扩展点/导出,必须同步更新 README + 相关文档(ARCHITECTURE/CONTRIBUTING/各包 README + CHANGELOG)。README 的 props 表 / 导出表 / 选项表要与代码一致。
+1. **好文档** —— 同时服务**调用方**(怎么用 → README)和**二开者**(怎么改/扩展 → EXTENDING.md 扩展点 API + ARCHITECTURE.md 内部结构)。改公开 API/扩展点/导出,必须同步更新 README + 相关文档(EXTENDING/ARCHITECTURE/CONTRIBUTING/各包 README + CHANGELOG)。README 的 props 表 / 导出表 / 选项表要与代码一致。**四入口(`ooxml-excel-editor` / `/react` / `/vue2` / `/core`)统一 `export * from core` 同源** —— 加 core 公共出口自动各入口可见,别再各入口手维护清单(会漂移,1.14.1 因此修过)。
 2. **可发布** —— 始终保持能 `npm publish` 的状态:exports/main/module/types 对、`.d.ts` 完整、peer 依赖(vue/react/exceljs 必需,echarts/jspdf 可选)**绝不打包进产物**、占位元数据要清。
 3. **三壳共存** —— `core` 框架无关,Vue3/Vue2/React 各是薄壳共享同一 `core`。**禁止在 `core` 里 import vue/react**。新功能优先做进 `core`(框架无关),壳只做桥接。
 4. **包名清晰** —— 现状: **单包四子入口**(`ooxml-excel-editor` = Vue 3 壳 / `/react` = React 壳 / `/vue2` = Vue 2 壳 / `/core` = 框架无关引擎)。Vue 3 / React / core 共享同一 `dist/core.js`;Vue 2 因 SFC 编译器冲突独立打包(内嵌 core)。后续生态大了可平滑拆成真正的 workspace 多包,现阶段单包多入口已满足"按框架各取所需",不过度拆包。

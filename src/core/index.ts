@@ -46,6 +46,8 @@ export type {
   TransformModelFn,
   CellStyleFn,
   CellStyleOverride,
+  CellStyleCtx,
+  DataValidationRule,
 } from './model/types'
 
 // ---- 渲染引擎 / 控制器 / 叠加层 ----

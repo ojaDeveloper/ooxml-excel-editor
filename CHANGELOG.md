@@ -2,6 +2,20 @@
 
 本项目遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与 [语义化版本](https://semver.org/lang/zh-CN/)。
 
+## [1.14.1] - 2026-06-15
+
+> 文档审计 + 入口出口修正(无运行时行为变更)。一次"保证接入/二开都没问题"的体检。
+
+### 修复 — 四入口出口同源(接入)
+
+- **入口出口不一致 bug**:公式引擎工厂(`builtinFormulaEngineFactory` / `hyperFormulaEngineFactory` / `FUNCTION_NAMES` / `FormulaEngine` 类型)此前只在 `/core` 出口,**主入口 / `/react` / `/vue2` 都拿不到** —— 但 `:formula-engine` 是主组件上的 prop,文档让注入 `hyperFormulaEngineFactory`,实际 `import { hyperFormulaEngineFactory } from 'ooxml-excel-editor'` 会失败。`/react` 入口更是只导出组件 + hook,`parseWorkbook`/类型/`definePlugin` 全够不着。
+- **修法**:主 / `/react` / `/vue2` 入口统一 `export * from core`(各自再加自己的组件)→ **四入口同源**,任一入口都拿到完整 core 公共 API(解析/读数据/类型/插件/导出/公式引擎工厂…),不再各维护清单致漂移。`CellStyleCtx` / `DataValidationRule` 补进 core 出口。typecheck + build + 419 单测验证。
+
+### 文档 — 使用 vs 二开 分离 + 准确性
+
+- 抽出 **`EXTENDING.md`(二开 / 扩展 API 手册)**:主题 `:theme` / 数据·渲染钩子 / 自定义编辑器 / 右键菜单 transform / 工具栏自定义 / 分层 UI slots / 命令式 API / 导出·打印高级选项 / 插件 `definePlugin`。README 瘦身成**调用方**文档(装/用/props/编辑/导出),顶部留指路;深度二开看 ARCHITECTURE.md。
+- README **具名导出表**重写(原列 5 项、实际 ~40 项 → 按 解析/读数据/格式/插件/公式引擎/导出/类型 分类 + 标注"四入口同源");**props 表**补 `toolbar` / `plugins` / `openLinks` + 数据验证说明;修跨章节断锚点。
+
 ## [1.14.0] - 2026-06-15
 
 > 新增**内置公式引擎**(MIT,零依赖)设为 recalc 默认引擎(取代 GPL 的 HyperFormula),+ **公式自动补全**。覆盖日常 ~60 个常用函数;需更全覆盖可注入 HyperFormula 或自研引擎。

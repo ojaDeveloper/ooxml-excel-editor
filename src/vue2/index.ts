@@ -11,15 +11,6 @@
 export { default as ExcelViewer } from './ExcelViewer'
 export { default } from './ExcelViewer'
 
-// 公共类型 / 工具 全部复用 core 已有出口
-export * from '@/core/plugin'
-export type {
-  WorkbookModel,
-  SheetModel,
-  CellModel,
-  CellStyle,
-  CellStyleFn,
-  CellStyleOverride,
-  CellStyleCtx,
-  MergeRange,
-} from '@/core/model/types'
+// 框架无关 core 全部公共出口(parseWorkbook / 数据读取 / 模型类型 / definePlugin / 公式引擎工厂 / 导出类型…)
+// 跟主入口、`/core`、`/react` 同源 —— 不再各自维护清单致漂移。
+export * from '@/core'
